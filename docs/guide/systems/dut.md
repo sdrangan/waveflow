@@ -10,7 +10,7 @@ summary: "The first step of the flow, on the running example: designing the DUT.
 # Designing the DUT
 
 The DUT is the hardware being built. What it is made of -- kernels, the adaptors around them, devices,
-memories -- is [Waveflow Architecture](index.md) and [Kernels](kernels.md); this page is how to design
+memories -- is [Kernels](kernels.md) and [Devices and the DUT](devices.md); this page is how to design
 one, on the running example.
 
 ## The recipe
@@ -32,8 +32,8 @@ answers, in brief:
 1. **What it does:** for each command, evaluate $y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$ on its float32
    samples, in Horner order, and report how the command ended.
 2. **Its kernels:** one, `PolyKernel`, a leaf. The work is one stage, so there is nothing to split.
-3. **What it talks to:** only streams -- no bus, no memory -- so it needs **no adaptor**, and the DUT is
-   the kernel itself. Three streams: `s_in` brings a command and its samples, `m_out` takes the results,
+3. **What it talks to:** only streams -- no bus, no memory -- so it needs **no adaptor**: the DUT is one
+   device, and the device is the kernel itself. Three streams: `s_in` brings a command and its samples, `m_out` takes the results,
    `m_status` takes one status per command.
 4. **The messages:** `CmdHdr(tx_id, nsamp, c0..c3)` then the samples on `s_in`; `Resp(tx_id, nsamp)`
    then the results on `m_out`; `Status(tx_id, status)` on `m_status`, with `status` `OK` or
@@ -89,10 +89,10 @@ The polynomial is one stage: read, evaluate, write. So the DUT is one leaf kerne
 ## What each kernel talks to
 
 For each kernel, list everything it talks to, and give each one its stream from the table in
-[Kernels](kernels.md#the-stream-types): another kernel is a framed stream; a host on the bus is a queue
-or a register bank, behind a **slave adaptor**; memory is a command to a memory reader or writer. A
-kernel with a slave adaptor is a **device**, built from the views its class declares (`mm_views`,
-[`build_mm_device`](../interface/axi_mm/slave.md)).
+[Kernels](kernels.md#the-stream-for-each-thing-a-kernel-talks-to): another kernel is a framed stream; a host on the bus is a queue
+or a register bank, behind a **slave adaptor**; memory is a command to a memory reader or writer. The
+kernels and the adaptors they need are a **device** ([Devices and the DUT](devices.md)); the views a bus
+needs are declared on the kernel's class (`mm_views`).
 
 The polynomial talks only to streams, so it needs no adaptor:
 
@@ -104,7 +104,7 @@ The polynomial talks only to streams, so it needs no adaptor:
 
 All three are framed: TLAST closes each message. What sits at their other ends is not part of the
 design: the testbench at RTL (a stream driver and two sinks), anything at all in pysim. Put the same
-kernel on a bus and it gains a slave adaptor and becomes a device, its `run_iter` unchanged
+kernel on a bus and its device gains a slave adaptor, its `run_iter` unchanged
 ([The polynomial on a bus](../../examples/stream_kernel_mm/index.md)).
 
 ## The messages
@@ -149,7 +149,7 @@ The firing is written in Python, and again, to read the same way, as the kernel'
 
 **A pipeline: [block_eq](../../examples/block_eq/index.md).** A block equalizer computes a gain per row
 from a channel estimate, then applies it to that row's samples -- two computations at different rates.
-The DUT is one composite kernel of three children: a framework
+The DUT is one device, a composite kernel of three children: a framework
 [`StreamBroadcast`](../streams/broadcast.md) giving each stage its own copy of the input, a `gain`
 stage, and an `apply` stage, joined by internal framed streams whose depths are sized against what can
 pile up in them. Still only streams: no adaptor.

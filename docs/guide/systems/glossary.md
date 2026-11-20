@@ -37,18 +37,21 @@ tree -- is [Waveflow Architecture](index.md).
 | **host-activated module** | launched by a host over a register map (`ap_start`), runs `on_start` once per launch. Only when the design asks for a launch | `HostActivated` | [Sequential flow](../flows/sequential.md) |
 | **leaf** | a kernel with its own body, `run_iter`: one firing, the work on one message; one `hls::task` | `FreeRunMod` | [Kernels](kernels.md#what-a-kernel-is) |
 | **composite** | a kernel with child kernels (`add_comp`) wired by streams (`add_if`) and no body; a task per child. A body or children, never both | `FreeRunMod` | [Kernels](kernels.md#what-a-kernel-is) |
-| **kernel** | a component of the hardware, described by its operation: a free-running module, a leaf or a composite of kernels. Either can be one Vitis top | `FreeRunMod` | [Kernels](kernels.md) |
+| **kernel** | a `FreeRunMod` whose interfaces are all streams: a component of the hardware, described by its operation; a leaf or a composite of kernels; yours or the library's | `FreeRunMod` | [Kernels](kernels.md) |
 | **HLS body** | a kernel's C++, the second copy of its behavior, named by `kernel_task()` | `KernelTask` | [Defining the kernel](hwmodule.md#the-hls-body) |
 | **plain module** | a behavioral model Waveflow does not generate (a converter, a channel, a memory model) | `HwModule` | [Hardware modules](../flows/modules.md#the-kinds--and-the-flow-each-maps-to) |
-| **adaptor** | what turns a bus, a memory or an interrupt into the streams a module's logic reads and writes | -- | [Stream patterns](streams.md) |
+| **adaptor** | a module with streams on one side and something that is not a stream on the other: memory through `m_axi`, a bus slave, an RF converter | -- | [Devices and the DUT](devices.md#adaptors) |
 | **slave adaptor** | the adaptor a bus master reaches a kernel through: a front and its views. Framework Verilog at RTL, because Vitis HLS cannot generate an AXI4-full slave | `MemSlaveAdaptor` | [AXI-MM slave](../interface/axi_mm/slave.md) |
 | **view** | one way a kernel is reached over the bus, one window of addresses: a queue in or out, a register bank, a BRAM window, a credit queue. Declared on the kernel's class in `mm_views` | `QueueIn`, `QueueOut`, `RegBank`, `BramWindow`, `CreditIn` | [Slave adaptor views](../interface/axi_mm/slave_views.md) |
 | **front** | the one part of a slave adaptor that speaks AXI; it passes each beat to the view its address falls in | `axi_slave_front.v` | [AXI-MM slave](../interface/axi_mm/slave.md#the-structure) |
-| **device** | a kernel (leaf or composite) with everything that belongs to it on the bus: its views and front, and the bus writers that act for it. Its own sub-top in the Verilog, one IP when packaged | `MmSlaveDevice`, from `build_mm_device(kernel)` | [Simulating at RTL](rtl.md#what-becomes-what) |
+| **device** | one or more kernels and the adaptors that join them to the world that is not streams; with no adaptor, just its kernels. One sub-top in the Verilog, one IP when packaged | `MmSlaveDevice` (the bus case), from `build_mm_device(kernel)` | [Devices and the DUT](devices.md#devices) |
 | **bus writer** | a module that writes onto the bus for a kernel, brought by a credit stream routed across the bus | -- | [Credit stream](../interface/derived/credit_stream.md) |
-| **memory reader / writer** | the master-side adaptors: the logic issues a command on a stream, and they move the data between memory and a stream through `m_axi` | `MemRStream`, `MemWStream` | [AXI-MM master](../interface/axi_mm/master.md) |
+| **memory reader / writer** | adaptors on the master side: a command in on a stream, the data moved between memory and a stream through `m_axi`. HLS, provided by Waveflow | `MemRStream`, `MemWStream` | [AXI-MM master](../interface/axi_mm/master.md) |
 | **memory** | DDR or on-chip memory in a system, with its own front and window when a bus reaches it | `MemoryMod` | [Memory Modeling](../memory/index.md) |
 | **crossbar** | the AXI bus joining hosts, devices and memories by an address map. An interface in Python; AMD's `axi_crossbar` at RTL | `AXIMMCrossBarIF` | [Simulating at RTL](rtl.md#what-becomes-what) |
+| **HLS top** | the part of a device Vitis synthesizes: its kernels and its HLS adaptors (memory readers and writers, bus writers), a task per leaf | -- | [Devices and the DUT](devices.md#how-a-device-becomes-hardware) |
+| **sub-top** | a device's Verilog module: its HLS top and its RTL parts (fronts, views) wired together; one IP. Derived, never written | `SystemTopSpec` | [Devices and the DUT](devices.md#how-a-device-becomes-hardware) |
+| **DUT tree** | the DUT as devices, memories and the interconnect between them; the same in pysim and at RTL | `DutTop` | [Devices and the DUT](devices.md#the-dut) |
 
 ## What joins them, and what travels
 
@@ -65,12 +68,13 @@ tree -- is [Waveflow Architecture](index.md).
 
 ## Words used loosely
 
-- **Module and kernel.** Every kernel is a module; not every module is a kernel. A memory model, a
-  channel and a host are modules, not kernels. A composite is a kernel, and so are the memory readers and
-  writers Waveflow provides.
-- **Device and composite.** A device is about the bus: it exists only when a bus master reaches the
-  kernel. A composite is about structure: a kernel made of kernels. A pipeline of kernels on streams,
-  or a kernel with memory readers and writers, is a composite; it becomes a device only if a bus
-  reaches it too.
+- **Module and kernel.** Every kernel is a module; not every module is a kernel. A kernel's interfaces
+  are all streams. An adaptor (a memory reader, a slave adaptor), a memory model, a channel and a host are
+  modules, not kernels.
+- **Device and composite.** A composite kernel contains only kernels. Add an adaptor -- a memory reader,
+  a slave adaptor -- and the whole is a device, not a kernel. Every DUT is made of devices, even when a
+  device is one kernel and nothing else.
 - **Adaptor and view.** A slave adaptor holds one or more views behind one front. A memory reader or
   writer is an adaptor too, on the master side.
+- **HLS top and sub-top.** The HLS top is what Vitis synthesizes; the sub-top is the device's whole
+  Verilog, the HLS top plus RTL. With no RTL adaptor, they are the same.

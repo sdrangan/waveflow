@@ -5,7 +5,7 @@ nav_order: 1.2
 has_children: true
 audience: python
 api: [Simulation, SimObj, HwSystem, DutTop, harness, HwModule, FreeRunMod, HostActivated, MmSlaveDevice, build_mm_device, MemSlaveAdaptor, MemRStream, MemWStream, MemoryMod, AXIMMCrossBarIF, StreamIF, CreditStreamIF, BramIF, IrqIF, SwHost, DataSchema]
-summary: "What Waveflow builds and simulates, before how -- where the guide starts. Waveflow designs hardware (the DUT) and simulates it in its environment, to answer three questions -- accuracy, timing, cost -- and explore their trade-off. Three levels: the golden (untimed, bit-exact pure functions, for accuracy and design-space search), pysim (a Simulation of SimObjs, one of them the DUT, with timing), and RTL simulation (an HwSystem: the DUT as Verilog, its testbench as C++ twins); two descriptions, not three: run_iter calls the golden, and each kernel's HLS body is the second, checked against it. The DUT is the same tree at both simulated levels -- kernels (FreeRunMods, a leaf with its own run_iter or a composite of child kernels), devices (a kernel with its slave adaptor: a front and views), memory readers and writers, the crossbar -- and only the layer around it changes. What you write (schemas, the golden, run_iter, the HLS body, a composite's wiring, mm_views, workloads, a host) and what Waveflow provides. Any module can be the DUT of its own harness. The terms are on the Glossary page. Then the Flow Overview: how it is built, step by step."
+summary: "What Waveflow builds and simulates, before how -- where the guide starts. Waveflow designs hardware (the DUT) and simulates it in its environment, to answer three questions -- accuracy, timing, cost -- and explore their trade-off. Three levels: the golden (untimed, bit-exact pure functions, for accuracy and design-space search), pysim (a Simulation of SimObjs, one of them the DUT, with timing), and RTL simulation (an HwSystem: the DUT as Verilog, its testbench as C++ twins); two descriptions, not three: run_iter calls the golden, and each kernel's HLS body is the second, checked against it. The DUT is the same tree at both simulated levels -- kernels (FreeRunMods on streams only), adaptors (streams to memory, a bus), devices (kernels plus adaptors: an HLS top and RTL in one sub-top), memories and the interconnect -- described on the Kernels and Devices pages; only the layer around it changes. The terms are on the Glossary page. Then the Flow Overview: how it is built, step by step."
 ---
 
 # Waveflow Architecture
@@ -89,49 +89,17 @@ flowchart LR
   pysim study, and its RTL simulation draws the testbench where everything has a twin
   ([Simulating at RTL](rtl.md)).
 
-## Inside the DUT: the same tree at both levels {#the-dut-tree}
+## Inside the DUT {#the-dut-tree}
 
-![The DUT alone, in a solid box, with a crossbar (purple, vendor IP) on its left reached by the host from outside. A device, in a dashed box, holds a front with views (green, Waveflow provides it) and kernel A (blue, you write it: run_iter and its HLS body), joined by streams; an interrupt runs from the views out of the DUT to the host. Kernel A sends commands on a stream to kernel C, a composite kernel (dash-dot box) whose children are a memory reader, MemRStream, kernel C1 (blue), and a memory writer, MemWStream (both green, kernels Waveflow provides), the reader and writer on the crossbar through m_axi. A memory, in a dashed box, holds a front with a window and the RAM (green), on the crossbar. A legend: blue, you write it, the Python model and the HLS body; green, Waveflow provides it; purple, vendor IP generated from the address map; dashed, a device or memory, one sub-top and one IP; dash-dot, a composite kernel, a task per child.](../flows/figures/dut_tree.svg)
+The DUT is the same tree at both simulated levels. Two pages describe it:
 
-The DUT is one module, or a `DutTop` grouping several with the interfaces between them. Its parts:
-
-- **A kernel** is a `FreeRunMod`: a component of the hardware, free-running on its streams. A **leaf**
-  kernel has its own `run_iter` in Python and HLS body, one `hls::task`; a **composite** kernel has child
-  kernels wired by streams and no body of its own, the children running concurrently, a task each.
-  Either can be one Vitis top ([Kernels](kernels.md)).
-- **A device** is a kernel with its **slave adaptor**: a **front**, the one part that
-  speaks AXI, and **views** behind it (queues, a register bank, a BRAM window) that turn bus accesses
-  into streams. A device is one sub-top in the Verilog and one IP when packaged.
-- **Memory readers and writers** (`MemRStream`, `MemWStream`), kernels Waveflow provides, move data between memory and streams
-  through `m_axi`.
-- **The crossbar** joins devices and memories by an address map, and **memories** hold the data.
-
-Under every part sits one rule: **a module's own logic reads and writes only streams.** A bus, a memory
-and an interrupt reach it through **adaptors** -- a slave adaptor's views on the bus side, memory readers
-and writers on the master side -- outside its logic ([Stream patterns](streams.md)). The **interfaces**
-between modules are typed connections (streams, credit streams, BRAM, interrupts), and the **messages**
-on them are [schemas](../schema/index.md).
-
-The DUT is a choice made per run, not a property of a class: **any module can be the DUT of its own
-harness**, `harness(Module, workload=...)`, with a generated stand-in at each port. Each module is
-simulated alone, at both levels, before the whole ([The cut](pysim.md#the-cut)).
-
-## What you write, and what Waveflow provides {#what-you-write}
-
-| the piece | you write | Waveflow provides |
-|---|---|---|
-| the messages | the schema classes | the C++ structs, every word packed and unpacked, the array utilities |
-| the golden | pure, bit-exact functions | -- |
-| a leaf kernel | its **Python model**, `run_iter` (one firing, calling the golden), **and its HLS body**, the same behavior in C++. The two must agree; the RTL comparison checks it | the HLS top around the body, its csynth script |
-| a composite kernel | its child kernels and their wiring (`add_comp`, `add_if`) | a task per child, a FIFO per internal interface |
-| a device | the views on the kernel's class (`mm_views`) | the views and the front (framework RTL), the address map, the crossbar |
-| memory access | the commands the logic issues | `MemRStream` / `MemWStream`, the memory models |
-| the testbench | each module's `workload(kind)` and `golden(kind)`; a host's threads, twice: in Python, and in C++ for RTL ([Software threads](../build/sw_threads.md)) | the stand-ins and their C++ twins, the host's generated endpoints, the Verilog top, the build steps |
-
-**The HLS body is needed only for the hardware levels**: RTL simulation, and the timing and resources
-measured from synthesis ([Timing and resources](calibration.md)). A study that stays in the golden and
-pysim needs only Python. A kernel's two copies are written to read the same way
-([Defining the kernel in Python and HLS](hwmodule.md)).
+- **[Kernels](kernels.md)** do the work. A kernel is a `FreeRunMod` whose interfaces are all streams --
+  a leaf with its own `run_iter`, or a composite of child kernels -- yours or the library's.
+- **[Devices and the DUT](devices.md)** is everything else. An **adaptor** joins streams to something
+  that is not a stream: memory through `m_axi`, a bus through a slave adaptor's front and views. A
+  **device** is kernels plus their adaptors, built as an HLS top and RTL in one sub-top, one IP. The DUT
+  is devices, memories and the interconnect. That page also lists what you write and what Waveflow
+  provides.
 
 Next: [Flow Overview](flow.md) -- how a design is built and checked, step by step. Every term
 on this page, with its class and the page that defines it, is in the [Glossary](glossary.md).

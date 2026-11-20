@@ -16,7 +16,7 @@ hand-exported image does.
 |---|---|---|
 | `design_cut.tex` | `design_cut.svg` (`../modules.md`) | the same three modules under two cuts — the cut is a build choice, not a class fact |
 | `system_cut.tex` | `system_cut.svg` (`../concurrent_system.md`) | a generic system (kernels A and B, a memory, a crossbar, a host): the System, DUT and device scopes, each block coloured by the build step that realizes it |
-| `dut_tree.tex` | `dut_tree.svg` (`../../systems/index.md`) | the DUT alone, the same tree in pysim and at RTL: a device, a composite kernel (memory reader, leaf kernel, memory writer), a memory, the crossbar; each block coloured by who writes it (you, Waveflow, vendor IP) |
+| `dut_tree.tex` | `dut_tree.svg` (`../../systems/devices.md`) | the DUT alone, the same tree in pysim and at RTL: device A (a slave adaptor and kernel A), device C (a memory reader, kernel C, a memory writer), a memory, the crossbar; a dotted HLS top in each device; each block coloured by who writes it (you, Waveflow, vendor IP) |
 | `kernel_cut.tex` | `kernel_cut.svg` (`../concurrent_layers.md`) | the kernel-scale twin: mem_copy as a system with no crossbar -- the kernel alone as the DUT, its ports answered by testbench models; same palette |
 
 Render, then commit both files:
