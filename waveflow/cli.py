@@ -18,6 +18,7 @@ starting a server.
     waveflow blind-test --prompt examples/mcp_test/tiny_test.md
     waveflow skills list
     waveflow skills install              # into ./.claude/skills and ./.agents/skills
+    waveflow init                        # set this project up for AI agents (skills, AGENTS.md, MCP)
 
 Output is JSON by default, so the CLI and the MCP tools return the same thing;
 ``--text`` prints the human-readable rendering instead.
@@ -140,6 +141,13 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
         out += [f"installed {p}" for p in data["installed"]]
         if data["note"]:
             out.append(data["note"])
+    elif cmd == "init":
+        out.append(f"Set up {data['directory']} for AI coding agents")
+        out += [f"  {state:<10} {path}" for path, state in data["files"].items()]
+        if data["python"]:
+            out.append(f"  MCP server runs with {data['python']}")
+        out += [f"note: {n}" for n in data["notes"]]
+        out.append(f"next: {data['next']}")
     return "\n".join(out)
 
 
@@ -256,6 +264,18 @@ def build_parser() -> argparse.ArgumentParser:
                    "default: both")
     p.add_argument("--force", action="store_true", help="replace skills already installed")
 
+    init = sub.add_parser(
+        "init",
+        help="set a project up for AI coding agents: skills, AGENTS.md / CLAUDE.md, MCP server",
+    )
+    init.add_argument("--dir", dest="directory", default=".", help="the project (default: .)")
+    init.add_argument("--python", help="interpreter for the MCP server (default: this one)")
+    init.add_argument("--no-mcp", action="store_true",
+                      help="skip .mcp.json and .vscode/mcp.json")
+    init.add_argument("--force-skills", action="store_true",
+                      help="replace skills already installed (after upgrading Waveflow)")
+    init.add_argument("--text", action="store_true")
+
     return parser
 
 
@@ -288,6 +308,11 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             skills=args.skills,
             files=args.files,
         )
+    if args.group == "init":
+        from waveflow.mcp.init_project import init_project
+
+        return init_project(args.directory, python=args.python, mcp=not args.no_mcp,
+                            force_skills=args.force_skills)
     if args.group == "skills":
         from waveflow.mcp.skills import install_skills, list_skills
 
