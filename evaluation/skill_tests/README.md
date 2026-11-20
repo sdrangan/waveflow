@@ -57,6 +57,15 @@ skill_tests/
     answers/
       01_peak_picker.review.md
       ref_01/                     the reference: stages, composite, tests (one strict xfail: a pysim gap)
+  system/                         the waveflow-system skill
+    01_two_devices.md             two given devices, a memory and a host: the HwSystem, its DAG, tests
+    given_01/                     the two devices (--files); devices.py swaps in a broken one by WF_VARIANT
+    _variants.py                  the broken devices (a deadlock, a dropped word): never given
+    check_variants.py             runs a trial's tests as given, then under each variant: PASS FAIL FAIL
+    trigger_prompts.md
+    answers/
+      01_two_devices.review.md
+      ref_01/                     the reference: system, DAG (through the no-toolchain steps), tests, DESIGN.md
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)

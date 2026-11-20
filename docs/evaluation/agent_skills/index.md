@@ -43,11 +43,11 @@ Each skill has its own page: what it contains, its test, and its results.
 | [`waveflow-kernel`](kernel.md) | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | one run per arm on Opus and Sonnet; all at 49-52 of 52; turns -13..44% |
 | `waveflow-device` | adaptors and devices: memory readers and writers, the host's queues, register bank and interrupts, credit across a bus, BRAM, the HLS top and sub-top | written; its test (`evaluation/skill_tests/device/`) and reference are ready, not yet run blind |
 | `waveflow-pipeline` | composite kernels: stages, internal streams and their depths, broadcast (drain your own copy), a token per job, the last stage answers | written; its test (`evaluation/skill_tests/pipeline/`) and reference are ready, not yet run blind |
-| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG, tests that count so a deadlock cannot pass | planned |
+| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG, tests that count so a deadlock cannot pass | written; its test (`evaluation/skill_tests/system/`: two given devices, a hidden deadlock and a dropped word the tests must catch) and reference are ready, not yet run blind |
 
 The skills are grouped by step in the design flow, about six in all rather than one per guide page:
 sub-tasks that happen together share a skill, and fewer descriptions are easier for an agent to tell
-apart. The plan for the remaining four is
+apart. The plan they were built from is
 [`plans/agent_skills.md`](https://github.com/sdrangan/waveflow/tree/main/plans/agent_skills.md).
 
 Each `SKILL.md` points to the guide and does not repeat it, so it stays correct as the guide changes.

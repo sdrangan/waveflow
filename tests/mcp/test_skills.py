@@ -243,3 +243,22 @@ def test_the_pipeline_tests_reference_passes(tmp_path):
                        timeout=1800)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "11 passed, 1 xfailed" in r.stdout, r.stdout
+
+
+SYSTEM = REPO / "evaluation" / "skill_tests" / "system"
+
+
+def test_the_system_tests_reference_passes_and_catches_both_broken_devices(tmp_path):
+    """The system test's reference -- two given devices, a memory and a host on one bus, its DAG --
+    passes its own tests (pysim, and the DAG through the steps that need no toolchain), and those
+    tests fail against each broken variant the reviewer runs (a scaler that stops, one that drops a
+    word): ``check_variants.py`` prints PASS, FAIL, FAIL."""
+    work = tmp_path / "trial"
+    shutil.copytree(SYSTEM / "given_01", work, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(SYSTEM / "answers" / "ref_01", work, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.md"))
+    r = subprocess.run([sys.executable, str(SYSTEM / "check_variants.py"), str(work)],
+                       capture_output=True, text=True, timeout=1800)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "variants caught: 2 of 2; given run passes" in r.stdout, r.stdout
+    assert not (work / "_variants.py").exists()
