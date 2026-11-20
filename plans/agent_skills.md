@@ -39,7 +39,10 @@ Each is the same recipe (below). Scope is a starting point; adjust after reading
 
 **Status (2026-11-19, branch `feat/skill-module`):** skill written (`waveflow/skills/waveflow-module`),
 test `evaluation/skill_tests/module/01_three_blocks.md` with review sheet (52 points), reference
-(`answers/ref_01`, passes in pysim) and checker (`check_blocks.py`). **Next: the four blind runs.**
+(`answers/ref_01`, passes in pysim) and checker (`check_blocks.py`). **Four runs done 2026-11-20**
+(`evaluation/skill_tests/results/module01_2026-11-20.md`, `docs/evaluation/agent_skills/module.md`):
+49-52 of 52 in both arms; the skill cut turns 13-44%. Open: trigger prompts; document pysim's
+first-word check (`begin_read`) or add `empty()` -- the gap B5 found.
 Decisions taken: the skill maps the user's interfaces to streams + adaptors and declares `mm_views`;
 building the bus is `waveflow-system`, memory-adaptor detail `waveflow-memory`. When the user does not
 say how control and data travel: one input stream (command header, then data), two outputs; the agent

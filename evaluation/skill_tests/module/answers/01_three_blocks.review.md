@@ -31,7 +31,7 @@ The reference is `ref_01/` (its `DESIGN.md` states every choice below).
 | B2 | the logic reads and writes only streams: samples, settings, reports, status each a stream port | an `MMIFMaster` / register / address in the module is 0 | |
 | B3 | samples and settings on **two** streams (different sources) | | |
 | B4 | settings from a **register bank** view (`RegBank`, `cfg_port`), declared in `mm_views` (or named in `DESIGN.md` as the adaptor) | | |
-| B5 | settings checked at a **stated point**, before a frame, without blocking (`get_schema_nb`); the first frame waits for the first setting | a blocking read every frame is 0 (the monitor stalls until the host writes again); a check inside the frame is 0 (a mix) | |
+| B5 | settings checked at a **stated point**, without blocking (`get_schema_nb`); the first frame waits for the first setting; "from the next frame that starts after" honoured exactly (checked until the frame's first word, e.g. a loop over both streams) **or** the remaining window stated (a commit while the monitor already waits for the next frame applies one frame late: pysim documents no first-word check) | 1: exact only through pysim internals (`data_buffer`, `burst_stamps`), or the window not stated. 0: a blocking read every frame (stalls until the host writes again), or a check inside the frame (a mix) | |
 | B6 | reports through a **queue out**, the host woken by its `IrqIF`, no polling anywhere | | |
 | B7 | frames processed and last fault: a status stream to the register bank's status side | | |
 | B8 | the interrupt-enable / clear-on-write registers: **said not built**, the level interrupt used instead | imitating them with a hand-made register map, or silently dropping the request, is 0 | |

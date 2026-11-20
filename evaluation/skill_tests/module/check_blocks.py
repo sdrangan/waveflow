@@ -98,8 +98,11 @@ def main(argv=None) -> int:
             if "error" in r:
                 print(f"    could not build: {r['error']}")
                 continue
+            hw = r["kind"] in ("FreeRunMod", "HostActivated")   # a plain HwModule: a model (a host)
+            if not hw:
+                print("    (a plain HwModule: a model, e.g. test equipment; its ports are not flagged)")
             for p in r["ports"]:
-                flag = "" if p["stream"] else "   <-- NOT A STREAM"
+                flag = "" if p["stream"] or not hw else "   <-- NOT A STREAM"
                 print(f"    {p['name']:<14} {p['type']:<24} tlast={p['tlast']}{flag}")
             if r["mm_views"]:
                 print(f"    mm_views: {', '.join(r['mm_views'])}")

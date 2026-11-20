@@ -41,6 +41,10 @@ what reaches a block over the bus is declared in its `mm_views` and built by the
 - **When a setting is taken:** before each frame's first sample, a non-blocking check of `s_cfg`
   (`get_schema_nb`), taking the latest committed. A frame never sees a mix. Before the first frame a
   blocking read: nothing is processed until the host has set it once (the ADC is back-pressured).
+  **The window that remains:** a commit that lands while the monitor already waits for the next
+  frame's samples applies one frame late. With frames back to back the window is empty; closing it
+  exactly needs a check at the frame's first word, which pysim does not document (`begin_read` exists
+  but is not in the guide). An HLS body closes it with `read_nb` on both streams in one loop.
 - `energy` is 64-bit in the report: with a small `shift` the sum exceeds 32 bits.
 - A short frame is fatal: `MonStatus(nframes, SHORT_FRAME)` and the monitor stops.
 - **Not built:** Waveflow's queue interrupt is a level line, high while a threshold of words waits, the

@@ -31,10 +31,15 @@ reference example and the order of work. This skill is the module step inside it
 4. **An error is fatal.** Close the results short (TLAST), write the error status, then stop taking
    input until a reset (in pysim: `yield self.event()`, never triggered).
 5. **Every message by its schema** (`get_schema`, `get_array`, `write(msg)`, `write_array`), never
-   words by hand. (The `waveflow-schema` skill has the details.)
+   words by hand. A complex sample is one element, a `ComplexField` of its integer or fixed type
+   (`schema/python/complex.md`), not two integers split by hand. (The `waveflow-schema` skill has the
+   details.)
 6. **Read in the order the writer writes.** A blocking read on the wrong stream deadlocks. Where the
    module must not wait (a setting that may or may not have changed), check with `get_schema_nb` --
-   and the order of those checks is the module's priority: state it.
+   and the order of those checks is the module's priority: state it. A check made once before a
+   blocking wait for the next data leaves a window: a setting written during the wait applies one
+   block late. If that matters, check both streams in one loop until the data arrives, or state the
+   window.
 7. **Order between two streams is never free.** Two input streams have no order between them; if a
    command needs a particular configuration from another stream, the configuration carries an id and
    the command names it (`mm_fir`'s `cfg_id`), never a count kept at both ends.
