@@ -41,7 +41,7 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 | `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | done; blind-tested 2026-11-21 (MCP 49 / 44, skill 50 / 50 of 50 after two fixes) |
 | `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | done; blind-tested 2026-11-21 (MCP 44 / 44, skill 46 / 46 of 46 after one fix) |
 | `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | done; blind-tested 2026-11-21 (all four 48 of 48, both hidden faults caught by every run; redundant for this task) |
-| `waveflow-architecture` | the step before all the others: from an algorithm in a paper to requirements, a HW / SW split, blocks and interfaces, a static latency / II / utilization budget, and a spec per block | **planned** -- see [The architecture skill](#the-architecture-skill-planned-2026-11-21) |
+| `waveflow-architecture` | the step before all the others: from an algorithm in a paper to `spec.md` (I/O, the operation, requirements, workload), `arch.md` (alternatives, existing Waveflow blocks, interfaces), `eval.md` (static II / latency / resources) and a spec per block | **planned** -- see [The architecture skill](#the-architecture-skill-planned-2026-11-21) |
 
 **Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
 unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
@@ -81,52 +81,85 @@ arms of device and pipeline stop at the frame's Stage 1 review and need one `--r
 
 ## The architecture skill (planned, 2026-11-21)
 
-**The gap.** Students take an algorithm from a communications-theory paper and ask an agent to "make it
-hardware". Unprompted, a frontier model goes straight to code: one kernel that mirrors the paper's
+**Who it is for.** A communications / wireless engineer with no hardware experience who takes an
+algorithm from a paper and asks an agent to "make it hardware". The skill's job is to give them a solid
+plan -- the agent does the work, the user confirms the decisions.
+
+**The gap.** Unprompted, a frontier model goes straight to code: one kernel that mirrors the paper's
 equations, float or arbitrary fixed-point widths, and no question about the rate, the deadline or the
 part. It can do each piece of architectural reasoning when asked; it does not start there. Nothing in
 Waveflow starts there either: every skill above begins from a decided architecture (`waveflow-kernel`
 "from the interfaces a user describes"), and the frames' Stage 1 assumes the frame -- the architecture --
 is already chosen. This skill comes first, and its output is what Stage 1 takes.
 
-It is not a licence to vibe-code: it makes the agent show the rate and resource arithmetic that a design
-review asks for, and stop for the student to check it before any code exists.
+**The output: four documents, in order** (under `plans/` in the user's design folder; content
+prescribed, prose free; a small design may put the sections in one file, but not reorder them). The
+hwdesign course's project-outline rubric (function precise, why hardware, sub-modules, interfaces with
+their kind and contents, no monolith, existing IP, next steps) is the **floor** of `spec.md` + `arch.md`;
+the skill does more than the course asks of students.
 
-**The steps** (the skill's body; each names the guide page it leans on, never restates it):
+1. **`spec.md` -- what.** Defined before anything is sized.
+   - Inputs and outputs: each one's type, shape and precision.
+   - The operation, precisely enough that two engineers would build the same function: equations, edge
+     cases (n = 0, a singular matrix, overflow), and the **golden model** as its executable definition
+     (the golden Stage 1 wants anyway).
+   - Why it suits hardware, **as numbers**: op count, arithmetic intensity, and the CPU baseline priced by
+     the A53 platform's `SwFunction` models (`docs/guide/cpu/`) against the requirement.
+   - Requirements: rate, block size, latency budget, antennas / users / layers, part and clock (for NR,
+     from the numerology). Each a number with its assumption.
+   - **Workload**: what actually arrives -- the sizes, the mix of commands, the range of `n`, how often
+     the expensive path runs. Papers rarely state it; the agent proposes it. Requirements say what must
+     be met; the workload makes `eval.md` honest (a detector sized for the worst-case antenna count that
+     mostly runs 2x2 has a different utilization).
+   - **Checkpoint**: the user confirms the operation, the requirements and the workload.
+2. **`arch.md` -- how.** Two or three **alternatives**, each:
+   - the HW / SW split with a reason (rate-critical inner loops to kernels; control and rare paths to
+     `SwFunction` threads on `Processor`);
+   - blocks as kernels, adaptors and devices in the concept pages' words (`systems/kernels.md`,
+     `devices.md`), none monolithic;
+   - an interface table: each connection's kind, what it carries (a schema sketch), its width and the rate
+     it must sustain; command-response by default (`command_response.md`);
+   - **existing Waveflow blocks first**: for each block, search the library before designing one --
+     `docs/guide/dsp/` (`SsrFft`, `SystolicEngine`, `SystolicEngineMem`, `VecUnit`), `docs/guide/vitis_l1/`
+     (AMD's blocks wrapped), the memory adaptors (`MemRStream`, `MemWStream`), the RF edge (`Rfdc`), the
+     CPU (`Processor`); `waveflow kb search` in the user's words. Name the block, the guide page, and
+     whether it has a calibrated timing / resource model. A block built by hand is a stated choice
+     ("no library block does X").
+   - **Checkpoint**: the user picks among the alternatives -- after `eval.md` has priced them.
+3. **`eval.md` -- does it fit.** For each alternative, no simulation: op counts weighted by the workload;
+   per block II, latency and resources; the bottleneck; the pipelining or replication that meets the
+   rate; utilization. A library block's numbers come from its model; for now the skill reads them from
+   the block's guide page and cost module, and **later the timing and resource skills** (not yet written)
+   do that lookup -- the skill names them as the place to go once they exist. Not fitting sends the
+   design back to `arch.md`; this loop is the design work.
+4. **`blocks/<name>.md` -- a spec per block**: ports, messages, rate, II and latency budget, resources,
+   and the library block it uses if any; handed to the matching frame's Stage 1.
 
-1. **Requirements.** Derive them from the application: sample rate, block size, throughput, latency
-   budget, antennas / users / layers, target part and clock (for NR, from the numerology). State each as
-   a number with its assumption, and ask the user to confirm before going on.
-2. **Operation count.** Ops per sample or per block for each step of the algorithm, the memory each
-   holds, the precision each needs (where fixed point is safe, where it is not). This is where "the matrix
-   inverse is 90% of the work" shows.
-3. **HW / SW split.** Rate-critical inner loops to kernels; control, configuration and rare paths to
-   software threads (`SwFunction` on `Processor`, priced by the A53 platform's models -- `docs/guide/cpu/`).
-4. **Blocks and interfaces.** Kernels, adaptors and devices in the concept pages' words
-   (`systems/kernels.md`, `devices.md`); command-response by default (`command_response.md`); a schema
-   sketch per stream with its width set by the rate (`waveflow-schema` does the detail later).
-5. **Static timing, no simulation.** Per block: II and latency, then the bottleneck, then the pipelining or
-   replication that meets the rate and the utilization that results. Per-block resources likewise.
-6. **A spec per block** -- its ports, messages, rate, II and latency budget, resources -- handed to the
-   matching frame's Stage 1. Then **stop for review**.
-
-The output is one architecture document with tables: requirements, op counts, the per-block budget.
+Each document ends with **open questions** -- what the user still has to decide, most important first.
 
 **The rule that makes it Waveflow's: every number names its source** -- a calibrated model
 (`waveflow/linalg/cost.py` for the systolic engine, `waveflow/vecunit/calib.py`, the CPU platform's
 `SwFunction` models, the platform bus calibration, the resource model `docs/guide/resource_model/`), a
 formula from `docs/guide/vectorization/hls/loop_optimization.md` (the lane loop: words per iteration,
 II=1), or a stated assumption. A block no model covers is **"unknown -- needs a csynth probe"**, never a
-guess. Confident made-up numbers are the failure this rule exists for. Step 5 is a point of
+guess. Confident made-up numbers are the failure this rule exists for. `eval.md` prices points of
 `systems/dse.md` ("models price a point without building it"); a sweep is the later step.
 
-**The test** (the recipe below): two or three algorithms from papers -- e.g. MMSE MIMO detection, OFDM
-least-squares channel estimation, an LDPC decoder (no calibrated model: tests the "unknown" rule).
-Each spec gives the paper's algorithm and the application, not the numbers. Review-sheet items: states
-requirements with assumptions and asks; counts the ops and finds the real bottleneck; splits HW / SW with
-a reason; names a source for every number; per-block II within ~2x of csynth (Vitis 2025.1) on the
-reference; marks the uncovered block unknown; stops before code. Run without the skill as well -- the
-point is whether the MCP arm does this unprompted (the expectation: it does not).
+**The test** (the recipe below): two or three algorithms from papers -- e.g. MMSE MIMO detection (the
+systolic engine and VecUnit fit: tests reuse), OFDM least-squares channel estimation (the SSR FFT fits),
+an LDPC decoder (no library block, no calibrated model: tests the "unknown" rule). Each spec gives the
+paper's algorithm and the application, not the numbers. Review-sheet items: the course rubric's items
+for `spec.md` + `arch.md`, plus: requirements and workload stated with assumptions and confirmed; ops
+counted and the real bottleneck found; the CPU baseline priced; alternatives compared in `eval.md`; the
+fitting library blocks found and named with their pages; a source for every number; per-block II within
+~2x of csynth (Vitis 2025.1) on the reference; the uncovered block marked unknown; stops at each
+checkpoint and before code. Run without the skill as well -- the point is whether the MCP arm does this
+unprompted (the expectation: it does not).
+
+**Depends on, later:** the timing and resource skills, which `eval.md` hands its library-block lookups to.
+**A gap to check first:** there is no single catalog of library blocks with their models' state (calibrated
+timing? resources?); `docs/guide/dsp/index.md` lists the DSP blocks but not the rest, nor the models. If
+`waveflow kb search` does not find the right block from a comms engineer's words, add one page that does.
 
 **Open questions.** Whether this is a skill or a frame (`waveflow frames`: an "architecture" frame whose
 process ends where the others begin); whether the requirements step needs a small table of standard
