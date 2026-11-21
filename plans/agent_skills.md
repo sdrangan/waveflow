@@ -41,6 +41,7 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 | `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | done; blind-tested 2026-11-21 (MCP 49 / 44, skill 50 / 50 of 50 after two fixes) |
 | `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | done; blind-tested 2026-11-21 (MCP 44 / 44, skill 46 / 46 of 46 after one fix) |
 | `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | done; blind-tested 2026-11-21 (all four 48 of 48, both hidden faults caught by every run; redundant for this task) |
+| `waveflow-architecture` | the step before all the others: from an algorithm in a paper to requirements, a HW / SW split, blocks and interfaces, a static latency / II / utilization budget, and a spec per block | **planned** -- see [The architecture skill](#the-architecture-skill-planned-2026-11-21) |
 
 **Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
 unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
@@ -76,6 +77,60 @@ arms of device and pipeline stop at the frame's Stage 1 review and need one `--r
    them; 6, `MemStreamStep` copies other examples' bodies into a user's `include/`; 8, the smaller
    points (the generated top's `m_done` has no TLAST with `done_framed=True`; no frame for "one kernel
    plus memory"; `vecmult` misleads by its name).
+4. **The architecture skill** (below): write it, its test and reference, and run it blind.
+
+## The architecture skill (planned, 2026-11-21)
+
+**The gap.** Students take an algorithm from a communications-theory paper and ask an agent to "make it
+hardware". Unprompted, a frontier model goes straight to code: one kernel that mirrors the paper's
+equations, float or arbitrary fixed-point widths, and no question about the rate, the deadline or the
+part. It can do each piece of architectural reasoning when asked; it does not start there. Nothing in
+Waveflow starts there either: every skill above begins from a decided architecture (`waveflow-kernel`
+"from the interfaces a user describes"), and the frames' Stage 1 assumes the frame -- the architecture --
+is already chosen. This skill comes first, and its output is what Stage 1 takes.
+
+It is not a licence to vibe-code: it makes the agent show the rate and resource arithmetic that a design
+review asks for, and stop for the student to check it before any code exists.
+
+**The steps** (the skill's body; each names the guide page it leans on, never restates it):
+
+1. **Requirements.** Derive them from the application: sample rate, block size, throughput, latency
+   budget, antennas / users / layers, target part and clock (for NR, from the numerology). State each as
+   a number with its assumption, and ask the user to confirm before going on.
+2. **Operation count.** Ops per sample or per block for each step of the algorithm, the memory each
+   holds, the precision each needs (where fixed point is safe, where it is not). This is where "the matrix
+   inverse is 90% of the work" shows.
+3. **HW / SW split.** Rate-critical inner loops to kernels; control, configuration and rare paths to
+   software threads (`SwFunction` on `Processor`, priced by the A53 platform's models -- `docs/guide/cpu/`).
+4. **Blocks and interfaces.** Kernels, adaptors and devices in the concept pages' words
+   (`systems/kernels.md`, `devices.md`); command-response by default (`command_response.md`); a schema
+   sketch per stream with its width set by the rate (`waveflow-schema` does the detail later).
+5. **Static timing, no simulation.** Per block: II and latency, then the bottleneck, then the pipelining or
+   replication that meets the rate and the utilization that results. Per-block resources likewise.
+6. **A spec per block** -- its ports, messages, rate, II and latency budget, resources -- handed to the
+   matching frame's Stage 1. Then **stop for review**.
+
+The output is one architecture document with tables: requirements, op counts, the per-block budget.
+
+**The rule that makes it Waveflow's: every number names its source** -- a calibrated model
+(`waveflow/linalg/cost.py` for the systolic engine, `waveflow/vecunit/calib.py`, the CPU platform's
+`SwFunction` models, the platform bus calibration, the resource model `docs/guide/resource_model/`), a
+formula from `docs/guide/vectorization/hls/loop_optimization.md` (the lane loop: words per iteration,
+II=1), or a stated assumption. A block no model covers is **"unknown -- needs a csynth probe"**, never a
+guess. Confident made-up numbers are the failure this rule exists for. Step 5 is a point of
+`systems/dse.md` ("models price a point without building it"); a sweep is the later step.
+
+**The test** (the recipe below): two or three algorithms from papers -- e.g. MMSE MIMO detection, OFDM
+least-squares channel estimation, an LDPC decoder (no calibrated model: tests the "unknown" rule).
+Each spec gives the paper's algorithm and the application, not the numbers. Review-sheet items: states
+requirements with assumptions and asks; counts the ops and finds the real bottleneck; splits HW / SW with
+a reason; names a source for every number; per-block II within ~2x of csynth (Vitis 2025.1) on the
+reference; marks the uncovered block unknown; stops before code. Run without the skill as well -- the
+point is whether the MCP arm does this unprompted (the expectation: it does not).
+
+**Open questions.** Whether this is a skill or a frame (`waveflow frames`: an "architecture" frame whose
+process ends where the others begin); whether the requirements step needs a small table of standard
+numerologies to keep agents from inventing them.
 
 ## The recipe for one skill
 
