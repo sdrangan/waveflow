@@ -31,8 +31,9 @@ measured and on what machine.
   untimed model and against RTL or gem5: per transaction, per frame, per job and per scheduler
   operation.
 - [Agent skills](agent_skills/index.md) -- whether short skill files help an agent new to Waveflow
-  follow its patterns. Just started: one skill (data schemas), one test, one run per arm on three
-  models.
+  follow its patterns. Six design skills, one test each, one run per arm on Opus and Sonnet: most
+  tasks reach the ceiling with the MCP server alone, and the skill's effect shows on the weaker model,
+  on details no worked example shows, and on the cost.
 
 Planned: agentic design end to end (an agent building a block from the docs), and design-space
 exploration (how many design points per hour each fidelity allows).
