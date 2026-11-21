@@ -161,4 +161,14 @@ build it that way inside the repository, and ask the user first in a design of t
 - Tests: `pytest tests/mcp`, 213 passed. Two failures are pre-existing on `main` and unrelated
   (`test_generated_code_is_excluded_by_default`, `test_generated_files_are_excluded_from_usage_by_default`:
   they need generated build output, which a fresh checkout does not have).
+- Check: the held-out prompt rerun once with the new wording (one agent, 2026-11-21). The agent quoted the new
+  rule, and its design needed fewer extensions. It shared the FFT with **no arbiter**: the feeder is the FFT's
+  only writer and takes the loopback frames itself (option 5 in the table), and the inverse pass is the conj
+  trick on a forward FFT. The extensions it named were radix-2 stages (for n not a power of 4) and a longer
+  `SsrFft` for a zero-padded grid. It also scheduled other frames between a forward pass and its inverse, which
+  avoids the A/B run's arbiter-stall flaw. The check is weak evidence for the rule: the architecture changed
+  as well, and one run is one sample.
+- Found and fixed: `dsp/ssr_fft/parameters.md` ended "The inverse transform is not built yet", which
+  contradicts the page's own `inverse=True` section (built and tested: `tests/dsp/ssr_fft/test_hw.py`). The
+  agent read it and concluded the inverse did not exist. The sentence is removed.
 
