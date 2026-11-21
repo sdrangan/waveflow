@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 pysim and codegen DONE, RTL pending a machine with Vitis 2025.1 (records at the end).**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included (records at the end). Next: Stage 2.**
 
 ## Why
 
@@ -240,7 +240,44 @@ python -m examples.ring_stub.ring_stub_build --through post_compare   # Post alo
 pytest tests/examples/test_ring_stub.py -m xsi                        # the four gates
 ```
 
-Record the cycle counts (Vitis 2025.1) here. Stage 2's pysim and HLS work may start before this (decision D5); only its RTL gate waits on it.
+### At RTL (2026-11-21, Vitis HLS / Vivado 2025.1, the developer laptop)
+
+Every top built and every `compare` is clean: the RTL recordings equal pysim's, word for word, TLAST
+included, and they are not empty (the composite: 206 `m_out` words and 10 `m_status` words). The part is
+the generator's default, **xc7z020-clg484-1 at 100 MHz** (`composite_gen.DEFAULT_PART`), not the RFSoC.
+The gates in `tests/examples/test_ring_stub.py -m xsi`: 6 pass, 0 skip.
+
+- **Vitis accepts the cycle.** Its only remark is `HLS 200-657 Generating channel fb (crd) that flows
+  backwards in the dataflow region`, a warning. Every FIFO is synthesized at its declared depth (`k_in`,
+  `k_out` 64; `fb` 260; `tag`, `crd` 5). Vitis adds one internal FIFO itself: `start_for_ring_post_task`,
+  depth 3 (`HLS 200-1020`).
+- **Every loop is II = 1** (achieved = target): `COPY` twice in the mux (the feedback and the input copy),
+  `INC` in K (flushable), `READ`, `OUT` and `FB` in Post.
+- **The `empty()` polls draw no warning, and the loop does not deadlock at RTL.** The `static` credit gives
+  `RTGEN 206-101 Register 'credit' is power-on initialization`; the credit behaves at RTL (40 jobs through a
+  credit of 4), so the warning misleads, as it does for the other write-first tasks.
+  K gives `HLS 200-656` (a flushable pipeline in an `ap_ctrl_none` region); harmless in every run here.
+- **Timing**, the cycle the last `m_status` word leaves:
+
+  | top | scenario | jobs | last `m_status` | run bound |
+  |---|---|---|---|---|
+  | `ring_stub_top` | `test` | 10 | 934 | 20000 |
+  | `ring_stub_top` | `long` | 40 | 6282 | 60000 |
+  | `ring_post_top` | `test` | 10 | 956 | 4000 |
+  | `ring_inc_top` | `test` | (196 `m_out` words) | 199 (last `m_out`) | 4000 |
+
+  The composite's two are pinned in `test_rtl_loop_timing_is_exact`.
+- **Resources** (csynth estimates; BRAM_18K / DSP / FF / LUT):
+
+  | top | BRAM | DSP | FF | LUT |
+  |---|---|---|---|---|
+  | `ring_stub` (composite) | 14 | 0 | 1172 | 1764 |
+  | `ring_post` | 2 | 0 | 367 | 701 |
+  | `ring_inc` | 0 | 0 | 12 | 177 |
+
+  12 of the composite's 14 BRAM are the loop FIFOs (`fb`, `k_in`, `k_out`, 4 each).
+- `tests/conftest.py::WANT_XSI_GATES` 259 -> 265: the four ring-stub gates the pysim commit added, which it
+  did not count, and the two timing gates.
 
 ## Hand-off: continuing on the lab machine (2026-11-21)
 
@@ -259,7 +296,8 @@ test_amd_tools                                                       # Vitis fou
 pytest tests/examples/test_ring_stub.py -m "not xsi"                 # 7 pass: pysim + codegen
 ```
 
-**1. Finish Stage 1: the stub at RTL.** Run, in this order (K and Post alone first, so a failure in the
+**1. Finish Stage 1: the stub at RTL.** *Done 2026-11-21 on the developer laptop (Vitis / Vivado 2025.1);
+see "At RTL" in the Stage 1 record. Kept for reference.* Run, in this order (K and Post alone first, so a failure in the
 composite is known to be the loop's):
 
 ```bash
@@ -293,7 +331,8 @@ If something fails, in order of likelihood:
   error, then fix it in the generator as an extension (AGENTS.md: propose, then build it in this repo with a
   test), not around it.
 
-**2. Start Stage 2 (allowed before step 1 is done, D5).** `StreamArbiter` and `StreamDemux` in
+**2. Start Stage 2 (allowed before step 1 is done, D5).** *Taken up 2026-11-21 on the developer laptop
+(Vitis / Vivado 2025.1 available there); progress goes in a Stage 2 record below.* `StreamArbiter` and `StreamDemux` in
 `waveflow/streams/`, each in the four parts of `StreamBroadcast`: the model, a templated HLS body in `src/`,
 a build step, an RTL gate in `waveflow/streams/rtl.py`; then a page under `docs/guide/streams/` and a row in
 its index. Start from `examples/ring_stub/src/ring_mux_task.h`: its feedback-first frame copy is the

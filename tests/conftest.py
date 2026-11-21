@@ -251,7 +251,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: counts 258.
 #: 258 -> 259 on 2026-11-17 (plans/mem_stream_followups.md, item 1): every mem_copy completion follows
 #: its job's write response, checked on a traced run (tests/build/test_xsi_snapshot_xsi.py).
-WANT_XSI_GATES = 259
+#: 259 + 6 -> 265 on 2026-11-21 (plans/shared_kernel.md, Stage 1): the ring stub at RTL -- K alone, Post
+#: alone, the composite with its cycle on two scenarios, and the loop's exact timing on both
+#: (tests/examples/test_ring_stub.py).
+WANT_XSI_GATES = 265
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
