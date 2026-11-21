@@ -9,10 +9,13 @@ summary: "The catalog to search before designing a block: every reusable Waveflo
 
 # Library blocks and their models
 
-An architecture starts from what exists. This page lists every block a design can reuse, in the words
-of the algorithm it computes, with how well its cost is known. Search it first; a block designed by hand
-is a stated choice ("no library block does X"). Every block below is a kernel or a device in the words
-of [Kernels](kernels.md) and [Devices and the DUT](devices.md).
+This page lists every block a design can reuse, in the words of the algorithm it computes, with how
+well its cost is known. **Reuse what is hard to build well** -- an FFT, a large complex matrix product,
+the memory adaptors, the RF converters. **Write a dedicated kernel for simple work** (an element-wise
+multiply, a magnitude, a peak search, a reduction), fusing neighbouring steps: it is smaller and faster
+than a general unit, and the programmable vector unit is for when programmability itself is the
+requirement. Every block below is a kernel or a device in the words of [Kernels](kernels.md) and
+[Devices and the DUT](devices.md).
 
 All hardware numbers here are for the packaged platform **`xczu48dr_250mhz_vitis2025_1`**
 (`xczu48dr-ffvg1517-2-e`, the RFSoC 4x2's part, 250 MHz, Vitis HLS / Vivado 2025.1); a model filed on

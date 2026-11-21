@@ -173,6 +173,12 @@ every number of its `eval.md` from the models and `tests/mcp/test_skills.py` che
 What the reference found, worth knowing for scoring: the apply `W·Y` is input-bound (2.94 128-bit
 words a cycle), so user count does not change it; CG on the vector unit needs 5 iterations at 8 users
 (-38 dB) and then does not fit at a filter per PRB (12 units); a direct solve is the uncovered block.
+**Revised the same day after the user's PRACH trial** (a run spent 30+ minutes on documents): the
+default is now a tier-1 chat answer in under a minute -- the structure that collapses the work, a block
+diagram, the key trade-offs (parallelize how; store or regenerate), one rate and one memory check, a
+recommendation, open questions -- and the four documents only when asked. "Library first" is dropped:
+reuse only hard blocks (FFT, systolic); simple steps get dedicated fused kernels; `VecUnit` only when
+programmability is the requirement. No A/B test for now.
 Decided: a skill, not a frame (a frame's process starts from a chosen frame; this skill ends by naming
 one per block). Not added: a numerology table -- the skill says to derive from the standard's tables and
 cite them; the blind runs will show whether agents get NR's numbers right without one.

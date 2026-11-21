@@ -48,8 +48,8 @@ agent's assumptions may differ -- but each item's reasoning is.
 | B2 | the HW / SW split with a reason; control on the A53 (`Processor` / `SwFunction`) | | |
 | B3 | blocks as kernels, adaptors and devices in the concept pages' words, **none monolithic** | one kernel for the whole detector is 0 | |
 | B4 | an interface table: kind, contents (a schema sketch), width, **rate** for each connection; command-response | | |
-| B5 | **library blocks found and named with their pages**: `SystolicEngine` for `HᴴH` and `W·Y`; `VecUnit` CG for the solve | neither found is 0 | |
-| B6 | the solve's absence from the library stated ("no library block does a direct solve") | building a solver without saying none exists is 0 | |
+| B5 | **hard blocks reused, simple ones dedicated**: `SystolicEngine` (or an equivalent stated reason) for `HᴴH` and `W·Y`; the solve a dedicated kernel, or `VecUnit` CG only with a reason it needs programmability | a general unit for a simple step is 1 | |
+| B6 | the solve's cost marked unknown until a probe, since no model covers a direct solve | a guessed cost is 0 | |
 
 ## C. `eval.md` -- does it fit
 

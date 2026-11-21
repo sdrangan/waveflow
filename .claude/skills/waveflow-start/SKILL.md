@@ -38,9 +38,9 @@ memory while the lookups are broken: fix them first. Setup details: `ai_tooling/
 
 ## 2. Begin a design
 
-- **From an algorithm with no architecture yet** (an equation in a paper, "make this hardware"), plan
-  it first: the `waveflow-architecture` skill (or `systems/library.md`, the blocks that exist and what
-  each costs). Its plan names the blocks; each block then takes the steps below.
+- **From an algorithm with no architecture yet** (an equation in a paper, "make this hardware"), answer
+  the architecture first: the `waveflow-architecture` skill (or `systems/library.md`, the hard blocks
+  that exist and what each costs). Its answer names the blocks; each then takes the steps below.
 - To build an accelerator, **choose the architecture, then follow its process** before writing
   anything: `waveflow_list_frames` (the menu), then `waveflow_get_process(frame)`. If no frame fits,
   pick the closest reference example and follow the generic process (`waveflow_get_process()`).
@@ -60,7 +60,7 @@ step. If a skill is not installed, read its page instead.
 
 | the piece | skill | or read |
 |---|---|---|
-| the plan, before any code: requirements, alternatives, library blocks, what fits | `waveflow-architecture` | `systems/library.md` |
+| the architecture, before any code: how it parallelizes, what is stored, whether it fits | `waveflow-architecture` | `systems/library.md` |
 | a message: a `DataSchema`, fixed point, serializing it in Python and HLS | `waveflow-schema` | `schema/index.md` |
 | a kernel in Python: its streams, the protocol, `run_iter`, its harness test | `waveflow-kernel` | `systems/kernels.md`, `systems/hwmodule.md` |
 | a leaf kernel's HLS body: loops, the lane loop, pragmas, state and reset | `waveflow-kernel-hls` | `vectorization/hls/loop_optimization.md` |
