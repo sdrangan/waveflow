@@ -299,3 +299,4 @@ def test_the_system_tests_reference_passes_and_catches_both_broken_devices(tmp_p
     assert r.returncode == 0, r.stdout + r.stderr
     assert "variants caught: 2 of 2; given run passes" in r.stdout, r.stdout
     assert not (work / "_variants.py").exists()
+

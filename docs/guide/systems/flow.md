@@ -19,6 +19,7 @@ running example and links down to the reference sections for the details.
 
 | step | the question | page |
 |---|---|---|
+| **Choose the architecture** | which blocks, which of them exist, what each costs: from an algorithm to a plan, before any code | [Library blocks and their models](library.md) |
 | **Design the DUT** | what it does (the golden), its kernels, what each talks to, the messages, one firing | [Designing the DUT](dut.md) |
 | | the detail of the streams: bursts and lanes, the read order, what goes between kernels | [Stream patterns](streams.md) |
 | | the kernel, twice: a Python model and an HLS body that must agree | [Defining the kernel in Python and HLS](hwmodule.md) |
