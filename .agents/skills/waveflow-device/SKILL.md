@@ -1,6 +1,6 @@
 ---
 name: waveflow-device
-description: Build a Waveflow device -- kernels joined to what is not a stream through adaptors -- a kernel that reads or writes buffers in memory (MemRStream / MemWStream, MemRCmd / MemWCmd, the writer's echo as "done"), a kernel a host reaches over the AXI bus (mm_views: QueueIn, QueueOut, RegBank, CreditIn, BramWindow; build_mm_device; interrupts), a credit stream across a bus, BRAM shared by address, a MemoryMod; and what becomes the device's HLS top and sub-top. Use whenever a Waveflow design touches DDR or on-chip memory, a host's registers, queues or interrupts, or a bus between kernels.
+description: Build a Waveflow device -- kernels joined to what is not a stream through adaptors -- a kernel that reads or writes buffers in memory (MemRStream / MemWStream, MemRCmd / MemWCmd, the writer's echo as "done"), a kernel a host reaches over the AXI bus (mm_views with QueueIn, QueueOut, RegBank, CreditIn, BramWindow; build_mm_device; interrupts), a credit stream across a bus, BRAM shared by address, a MemoryMod; and what becomes the device's HLS top and sub-top. Use whenever a Waveflow design touches DDR or on-chip memory, a host's registers, queues or interrupts, or a bus between kernels.
 ---
 
 # Waveflow devices: kernels, adaptors, and the world that is not streams

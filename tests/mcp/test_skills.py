@@ -27,6 +27,34 @@ def test_every_shipped_skill_has_a_name_and_a_description():
         assert (sk.SKILLS_DIR / s["name"] / "SKILL.md").is_file()     # name == folder name
 
 
+def test_every_skills_front_matter_is_valid_yaml():
+    """An agent's loader parses the front matter as YAML; a value it cannot parse loses the skill its
+    description -- the text that decides when the skill is loaded -- while ``_front_matter`` here,
+    which splits lines, would read it fine.  So check YAML's own rule for an unquoted value (no ``: ``
+    and no `` #`` inside, no leading indicator), and parse with PyYAML when it is installed.
+    (waveflow-kernel and waveflow-device shipped with a ``: `` in the description, 2026-11-20.)"""
+    try:
+        import yaml
+    except ImportError:                       # not a Waveflow dependency; the rule below still holds
+        yaml = None
+    for skill_md in sorted(sk.SKILLS_DIR.glob("*/SKILL.md")):
+        m = sk._FRONT.match(skill_md.read_text(encoding="utf-8"))
+        assert m, f"{skill_md}: no front matter"
+        for line in m.group(1).splitlines():
+            key, sep, val = line.partition(":")
+            if not sep or line.startswith((" ", "\t")):
+                continue
+            val = val.strip()
+            if val[:1] in "\"'":
+                continue                      # quoted: YAML's escaping rules, not the plain-scalar ones
+            assert ": " not in val and " #" not in val, f"{skill_md} `{key}`: quote it or reword it"
+            assert val[:1] not in "[]{}&*!|>%@`" and not val.startswith(("- ", "? ")), (skill_md, key)
+        if yaml is not None:
+            front = yaml.safe_load(m.group(1))
+            assert front["name"] == skill_md.parent.name, skill_md
+            assert len(front["description"]) > 80, skill_md
+
+
 def test_every_guide_page_a_skill_names_exists():
     from waveflow.mcp.knowledge import waveflow_get_doc
 

@@ -1,6 +1,7 @@
 # Plan: agent skills -- the remaining skill groups
 
-Hand-off plan. First written 2026-11-19 (PRs #316-#319); **rewritten 2026-11-20** after the guide's
+Hand-off plan. First written 2026-11-19 (PRs #316-#319); **rewritten 2026-11-20** (updated 2026-11-21: migration, link sweep and the three new skills
+done in PRs #326-#327) after the guide's
 systems section was restructured around kernels, adaptors and devices (branch `docs/glossary`). The
 skill list below follows the new guide. Start here; everything below is in the repo.
 
@@ -29,102 +30,44 @@ never restates them.
 Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a composite with a
 `MemRStream` child is a device, not a kernel. The code's `MmSlaveDevice` covers only the bus case.
 
-## The skills
+## The skills (state on 2026-11-21)
 
-| skill | covers | status |
+| skill | covers | state |
 |---|---|---|
-| `waveflow-start` | looking things up (MCP or shell), installing, the concept pages, which skill covers which piece | done (PR #322); concept pages and skill table added (PR #326) |
-| `waveflow-schema` | DataSchema, fields, fixed point, tagged unions, HLS serialize, array utils, header generation | done (PRs #316-#317); 51-54 of 54 both arms |
-| `waveflow-kernel` | a kernel in Python: its streams and the stream for each interface (point at Kernels' table), command-response, `run_iter`, timed phases, the harness test that asserts counts | renamed from `waveflow-module` (PR #326; 49-52 of 52) |
-| `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, pragmas, state and reset, deadlocks | renamed from `waveflow-hls-body` (PR #326; 43-44 of 44) |
-| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors (queues, register bank, interrupts), credit streams, BRAM, `MemoryMod`; building them in pysim (`build_mm_device`) and RTL (`render_adaptor_slot`, the "not built yet" list); the HLS top and sub-top | written, test and reference ready, not run blind (PR #326) |
-| `waveflow-pipeline` | composite kernels: when to split, internal stream depths and widths, `StreamBroadcast` (drain your own copy), a token per job, the command travelling with the data, credit across a bus | written, test and reference ready, not run blind (PR #326) |
-| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG (`add_system_steps`, `run_dag_cli`), csynth / XSI / `compare`, asserting counts so a deadlock cannot pass | written, test and reference ready, not run blind (PR #326) |
+| `waveflow-start` | looking things up (MCP or shell), installing, the concept pages, which skill covers which piece | done (PR #322; concept pages added in #326); onboarding verified in one smoke run |
+| `waveflow-schema` | DataSchema, fields, fixed point, tagged unions, HLS serialize, array utils, header generation | done; blind-tested (51-54 of 54 both arms) |
+| `waveflow-kernel` | a kernel in Python: the stream for each thing it talks to, command-response, `run_iter`, the harness test that asserts counts | done (renamed from `waveflow-module`, #326); blind-tested as the module skill (49-52 of 52) |
+| `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, state and reset, deadlocks | done (renamed from `waveflow-hls-body`, #326); blind-tested (43-44 of 44) |
+| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | **written, test and reference written (#326); no blind runs yet** |
+| `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | **written, test and reference written (#326); no blind runs yet** |
+| `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | **written, test and reference written (#326; the test hides a deadlock and a dropped word); no blind runs yet** |
 
-## Step 1: migrate the old skills (do this first)
+**Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
+unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
+concept pages (`AGENTS.md`, `CLAUDE.md`, the guide index, the frames process text, `docs/overview`) --
+PR #326. A trial building a vector-multiply device from the skills alone, with fixes to five skills --
+PR #327 (`evaluation/skill_tests/results/vmul_2026-11-21/REPORT.md`). The front matter of
+`waveflow-kernel` and `waveflow-device` did not parse as YAML (an unquoted `: ` in the description, so an
+agent's loader dropped the description -- the text that decides when a skill loads); fixed, and
+`test_every_skills_front_matter_is_valid_yaml` now guards every skill -- PR on branch
+`fix/skill-front-matter`. **The module skill's four blind runs used that broken description**: it
+loaded anyway (on its name, at the second call), but its trigger was never tested.
 
-The renames touch the files below. Do them in one PR, with the link sweep (step 2).
+## Next
 
-1. **Rename the source folders** with `git mv`: `waveflow/skills/waveflow-module` ->
-   `waveflow-kernel`, `waveflow/skills/waveflow-hls-body` -> `waveflow-kernel-hls`. Change each
-   `SKILL.md`'s `name:` to the folder name (the format requires it), and its description.
-2. **Trim `waveflow-kernel`** to the new pages: its mapping table duplicates Kernels' stream table --
-   replace it with a pointer to `systems/kernels.md` ("The stream for each thing a kernel talks to")
-   and keep only what a page does not say (choose-and-state for control and data; the B5 window line;
-   the self-check). Its row "the module reads or writes a buffer in memory" now belongs to
-   `waveflow-device`: point there. Use the words kernel / adaptor / device as `glossary.md` defines them.
-3. **The installer leaves stale skills behind.** `waveflow skills install --force`
-   (`waveflow/mcp/skills.py::install_skills`) replaces the skills it ships but never removes one it no
-   longer ships, so a project that installed `waveflow-module` would load it beside `waveflow-kernel`.
-   Add removal of known retired names (a `RETIRED = {"waveflow-module": "waveflow-kernel",
-   "waveflow-hls-body": "waveflow-kernel-hls"}` map; remove only folders whose `SKILL.md` matches a
-   shipped version, so a project's own edits are never deleted silently -- or report them), with a test.
-4. **Refresh the repo's committed copies**: `waveflow skills install --dir . --force`, and `git rm` the
-   old `.claude/skills/waveflow-{module,hls-body}` and `.agents/skills/...` folders
-   (`test_the_repos_committed_skills_match_the_shipped_ones` enforces the sync). Never commit the rest of
-   `.claude/`.
-5. **Rename the tests**: `evaluation/skill_tests/module` -> `kernel`, `hls_body` -> `kernel_hls`
-   (`git mv`), and every path inside (`check_blocks.py`, `check_body.py`, the review sheets,
-   `trigger_prompts.md`, `evaluation/skill_tests/README.md`). **Keep the results files' names**
-   (`results/module01_2026-11-20.md`, `hls_body01_2026-11-19.md`): they record what was run; add one line
-   at the top of each, "the skill was then named `waveflow-module`, now `waveflow-kernel`".
-6. **Docs**: `docs/evaluation/agent_skills/{module,hls_body}.md` -> `kernel.md`, `kernel_hls.md` with the
-   same note; their rows in `agent_skills/index.md`; the table in `docs/guide/ai_tooling/skills.md`.
-7. **Code and tests that name skills**: `tests/mcp/test_skills.py`, `tests/mcp/test_init_project.py`
-   (asserts `waveflow-hls-body` is installed), `waveflow/mcp/init_project.py` (names `waveflow-start`
-   only -- check).
-8. **`waveflow-start`**: add the concept pages (Architecture, Kernels, Devices, Command-response, then
-   the Flow Overview; Glossary for terms) and the skill table above. Skills not yet built are named with
-   the guide page to read instead (`devices.md`, `rtl.md`).
-
-Find every mention with `git ls-files | xargs grep -al "waveflow-hls-body\|waveflow-module\|skill_tests/module\|skill_tests/hls_body"`
-(the list on 2026-11-20 is 23 files, all named above).
-
-## Step 2: the link sweep for the new guide pages
-
-Every place that says the guide starts at the *Flow Overview* (`systems/index.md`) or calls `dut.md`
-*The DUT and two levels of simulation*: `docs/guide/index.md` (its "how this guide is organized"),
-`AGENTS.md`, `CLAUDE.md` ("Designing an accelerator"), `waveflow/mcp/frames/_common/process.md`,
-`docs/overview/{index,flow}.md`, `docs/guide/flows/concurrent.md`, `docs/guide/systems/recipe.md`,
-`tests/mcp/test_retrieval_eval.py` (a retrieval expectation may name a page title),
-`plans/next_docs_examples.md`. `systems/index.md` still resolves -- it is now the architecture page --
-so most links only need their words changed; the ones that mean "the step table" go to `flow.md`.
-About 67 files mention it: check each, do not pattern-replace. Run `pytest tests/docs tests/mcp`.
-
-**A trap**: the user's editor formats Markdown on save and strips `{#...}` heading attributes. Prefer
-links to the anchor a heading generates; `tests/docs` catches a broken one.
-
-## Step 3 onward: build the new skills, in this order
-
-### `waveflow-device`
-- **Guide:** `systems/devices.md`, `systems/command_response.md` (memory section),
-  `interface/axi_mm/{master,slave,slave_views,regmap,credit_streams,credit_streams_hls}.md`,
-  `interface/primitive/{bram,sob}.md`, `memory/{index,memorymod,memmgr,hwstate}.md`,
-  `comp_codegen/rtl_module.md`. Examples: `memcpy`, `stream_kernel_mm`, `mm_fir`, `markov`, `interleaver`.
-- **Test idea:** a host on the bus sends a command through a queue in; the device reads a buffer through
-  `MemRStream`, computes, writes the result through `MemWStream`; the status goes to a register bank and
-  an interrupt tells the host the command is done -- through the system flow as far as the generated
-  sources, no Vitis. Traps: `m_axi` on an `hls::task` needs `offset=off` + `stable` (`stable` alone
-  deadlocks); a credit window (`wait_room` before writing); a request and its reply on two streams (poll
-  with `read_nb`); the register bank raises no interrupt (a Waveflow gap the agent must state, not work
-  around); the RTL adaptor is assembled by hand (`slave.md` "What is not built yet").
-
-### `waveflow-pipeline`
-- **Guide:** `systems/kernels.md` (composite), `systems/streams.md` ("Between kernels"),
-  `systems/command_response.md` ("Through a pipeline"), `streams/broadcast.md`,
-  `flows/concurrent_python.md`, `flows/units_composing.md`. Examples: `block_eq`, `interleaver`,
-  `memcpy`.
-- **Test idea:** a two- or three-stage composite with a broadcast; traps: an un-paced free-running
-  pipeline deadlocks (forward a token per job through every stage); a stage waiting on another must first
-  drain its own broadcast copy; an internal depth too small for a burst.
-
-### `waveflow-system`
-- **Guide:** `systems/rtl.md`, `systems/pysim.md` (the cut), `systems/verification.md`,
-  `systems/calibration.md` (at a glance), `build/xsi_system.md`, `build/bfm.md`, `build/sw_threads.md`,
-  `flows/units_harness.md`, `flows/units_hostile.md`.
-- **Test idea:** given two devices and a host, wire the `HwSystem` and its DAG as far as the generated
-  sources, and write the tests; a given broken variant (a deadlock, a dropped word) must fail them --
-  scored on whether the tests catch both (pysim only, no Vitis).
+1. **Blind runs for device, pipeline and system** -- four each (Opus, Sonnet x MCP, MCP + skill), the
+   recipe below. Their tests, references and review sheets are in `evaluation/skill_tests/{device,
+   pipeline,system}/`; the references pass in `tests/mcp/test_skills.py`.
+2. **Trigger prompts** for every skill (`evaluation/skill_tests/*/trigger_prompts.md`), never run.
+   Now that the descriptions parse, this is the first real test of whether each skill loads when it
+   should. Run on Sonnet.
+3. **The vmul trial's unfixed findings** (REPORT.md, "Where the skills were unclear"): 3, enum headers
+   need their own `DataSchemaStep` and nothing reports a missing one (make `DataSchemaStep` emit nested
+   enum headers, or refuse); 4, `memcpy`, `interleaver` and `interface/axi_mm/master.md` hand-serialize
+   (`write(np.asarray(m.serialize(...)))` where `write(m)` does it) -- fix the references, an agent copies
+   them; 6, `MemStreamStep` copies other examples' bodies into a user's `include/`; 8, the smaller
+   points (the generated top's `m_done` has no TLAST with `done_framed=True`; no frame for "one kernel
+   plus memory"; `vecmult` misleads by its name).
 
 ## The recipe for one skill
 
@@ -161,6 +104,11 @@ links to the anchor a heading generates; `tests/docs` catches a broken one.
   in each task that no worked example shows.
 - **The runs can beat the reference** (module B5: a setting checked before a blocking wait applies a
   frame late). Score against what is right, and fix the reference and the skill.
+- **A skill's own example can contradict another skill.** The device skill's first shape sent a read
+  command and blocked on the reply in one firing, which `waveflow-kernel-hls` forbids; pysim passed it
+  (vmul trial). Read a new skill's examples against the other skills' rules.
+- **Front matter must be valid YAML.** An unquoted `: ` in a description drops it in the agent's
+  loader while Waveflow's own line parser reads it fine; `tests/mcp/test_skills.py` now checks.
 - **Small models may not load the skill at all** (Haiku 4.5 never did).
 - **`--setting-sources project` does not hide built-in or account-plugin skills**; both arms see the
   same set, so the comparison holds.
@@ -168,8 +116,6 @@ links to the anchor a heading generates; `tests/docs` catches a broken one.
 
 ## Open items carried over
 
-- **Trigger prompts** for every skill (`evaluation/skill_tests/*/trigger_prompts.md`), not run yet.
-  Run on Sonnet.
 - **Haiku 5.5**: one run of each test, to see whether it belongs with the models students use.
 - **A second reviewer** for the scores (all scored by one Claude session so far).
 - **Waveflow gaps found, not fixed:**
