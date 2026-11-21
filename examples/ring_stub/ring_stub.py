@@ -27,8 +27,9 @@ The rules it exercises (the shared-kernels page will state them):
 Output order does not depend on timing: pass-1 frames enter K in the order their pass-0 frames left it,
 which is the order the jobs arrived.  So RTL and pysim record the same words.
 
-In pysim ``Mux`` is three processes sharing its output under a priority lock (no polling: a harness runs
-to the end of its events).  Its HLS body is one task that polls with ``empty()``, feedback first.
+``Mux``'s HLS body polls with ``empty()``, feedback first.  Its pysim model is one ``run_iter`` in the same
+order, waiting with ``wait_any`` on the inputs it can act on (a harness runs until no event is left, so a
+model cannot spin as the HLS task does).
 """
 from __future__ import annotations
 
@@ -38,7 +39,6 @@ from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
-import simpy
 
 from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
@@ -209,59 +209,32 @@ class Mux(FreeRunMod):
         self.m_tag = _framed(f"{self.name}_m_tag", self.sim, True)
         for ep in (self.s_in, self.s_fb, self.s_crd, self.m_k, self.m_tag):
             self.add_endpoint(ep)
+        #: Jobs the loop may still admit.  State across firings, as the HLS body's ``static credit``.
+        self.credit = FMAX
 
     def kernel_task(self):
         from waveflow.hw.mem_stream import KernelTask
         ports = ("s_in", "s_fb", "s_crd", "m_k", "m_tag")
         return KernelTask("ring_mux_task", "ring_mux_task.h", ports, template_args=(W, FMAX), framed=ports)
 
-    # -- pysim: three processes, one priority lock on the output (feedback = 0 wins) ----------------
-    def pre_sim(self) -> None:
-        super().pre_sim()
-        self._lock = simpy.PriorityResource(self.env, capacity=1)
-        self._credit = simpy.Container(self.env, init=FMAX, capacity=FMAX)
-
-    def run_proc(self):
-        if self._sim_passive:
-            return None
-        return self._start()
-
-    def _start(self):
-        self.env.process(self._feedback())
-        self.env.process(self._new_jobs())
-        self.env.process(self._credits())
-        yield self.env.timeout(0)
-
-    def _send(self, prio: int, tag: Tag, words):
-        with self._lock.request(priority=prio) as req:
-            yield req
-            yield from self.m_tag.write(tag)
-            yield from self.m_k.write(np.asarray(words, dtype=np.uint64))
-
-    def _feedback(self):
-        while True:
-            tag = yield from self.s_fb.get_schema(Tag)
-            words = yield from self.s_fb.get()
-            yield from self._send(0, tag, words)
-
-    def _new_jobs(self):
-        while True:
-            yield self._credit.get(1)
-            job = yield from self.s_in.get_schema(Job)
-            words = yield from self.s_in.get()
-            yield from self._send(1, Tag(tx_id=job.tx_id, n=job.n, npass=0), words)
-
-    def _credits(self):
-        while True:
-            yield from self.s_crd.get_schema(Crd)
-            yield self._credit.put(1)
-
     def run_iter(self):
-        """Never called in pysim (:meth:`run_proc` runs the three processes); it marks this a leaf.  The
-        HLS body (``src/ring_mux_task.h``) is one firing: absorb a credit, then a feedback frame or a
-        new job."""
-        raise NotImplementedError("Mux runs as three processes in pysim; see run_proc")
-        yield  # pragma: no cover
+        """One firing, in the order the HLS body (``src/ring_mux_task.h``) checks: absorb a credit;
+        then a feedback frame, whole; else a new job, if a credit is held.  The body polls with
+        ``empty()``; here the firing waits for any input it can act on -- ``s_in`` only with a credit."""
+        yield from self.wait_any(self.s_crd, self.s_fb, *((self.s_in,) if self.credit > 0 else ()))
+        if (yield from self.s_crd.get_schema_nb(Crd)) is not None:
+            self.credit += 1
+        tag = yield from self.s_fb.get_schema_nb(Tag)
+        if tag is not None:
+            words = yield from self.s_fb.get()
+        elif self.credit > 0 and (job := (yield from self.s_in.get_schema_nb(Job))) is not None:
+            self.credit -= 1
+            tag = Tag(tx_id=job.tx_id, n=job.n, npass=0)
+            words = yield from self.s_in.get()
+        else:
+            return                                        # only a credit came in
+        yield from self.m_tag.write(tag)
+        yield from self.m_k.write(np.asarray(words, dtype=np.uint64))
 
 
 @dataclass

@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included (records at the end). Next: Stage 2.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open (records at the end). Next: Stage 3.**
 
 ## Why
 
@@ -279,6 +279,79 @@ The gates in `tests/examples/test_ring_stub.py -m xsi`: 6 pass, 0 skip.
 - `tests/conftest.py::WANT_XSI_GATES` 259 -> 265: the four ring-stub gates the pysim commit added, which it
   did not count, and the two timing gates.
 
+## Stage 2 record (2026-11-21): `wait_any`, `StreamArbiter`, `StreamDemux` -- pysim, HLS and RTL
+
+Done on the developer laptop, Vitis HLS / Vivado 2025.1. Every RTL number below is the generator's default
+part, **xc7z020-clg484-1 at 100 MHz**, 32-bit ports.
+
+**1. The polling primitive.** `wait_any(*slaves)` in `waveflow/hw/interface.py` (and `FreeRunMod.wait_any`):
+block until one slave holds a *delivered* burst, return the first such index in argument order, take
+nothing. It borrows each slave's existing arrival event (`_arrival`, which every put already fires), so it
+needed no new hook. A body waits only on the inputs it can act on -- otherwise it returns at once forever.
+Tests: `tests/hw/test_wait_any.py` (7). The stub's `Mux` is now one `run_iter` in the HLS body's order
+(`wait_any(s_crd, s_fb, s_in if credit)`, then `get_schema_nb` feedback first); the three-process model and
+its priority lock are gone. The ring stub's 7 pysim tests and 6 RTL gates still pass, cycle counts unchanged.
+
+**2-3. The blocks**, each in `StreamBroadcast`'s four parts (model, templated body in `src/`, a step, a gate):
+
+- `StreamArbiter` (`waveflow/streams/arbiter.py`, `src/stream_arbiter_task.h`): `n_in` 2-16 framed inputs to
+  `m_out`, a frame = `frame_bursts` (1-255) TLAST bursts, never interleaved; `policy` `"priority"` or
+  `"round_robin"` (D4); the winner's index on `m_sel`, one word before each frame (D3). Signature
+  `(m_out, m_sel, s_in_0, ...)`: the inputs are the pack, last.
+- `StreamDemux` (`waveflow/streams/demux.py`, `src/stream_demux_task.h`): one input to `n_out` 2-16, by an
+  `s_sel` word a frame (`route="sel"`, the arbiter's `m_sel`) or by bits of the frame's first word
+  (`route="header"`, D3's in-band option). An index naming no output drops the frame; pysim counts it
+  (`dropped`).
+- `StreamBodyStep` (`waveflow/streams/body_step.py`): the copy-a-body step the three blocks' steps now share.
+
+**4. Gates.** `tests/streams/test_arbiter_demux.py`: 26 pysim tests and 4 RTL gates, all pass. The arbiter's
+gate is the **pair** `ArbiterDemuxPair` (`waveflow/streams/rtl.py`): `arb.m_out -> dmx.s_in`, `arb.m_sel ->
+dmx.s_sel`, each input back on its own output whatever the interleave -- the answer to Stage 1's second gap.
+The policies themselves are checked in pysim on inputs held backlogged (the output's reader holds off, then
+releases): priority drains input 0, then 1, then 2; round-robin alternates exactly. `waveflow/streams/rtl.py`
+now builds any block (`--block broadcast|demux|demux_hdr|pair`); the broadcast's API is unchanged.
+`WANT_XSI_GATES` 265 -> 269.
+
+| gate | estimated clock | FF | LUT |
+|---|---|---|---|
+| demux by `s_sel`, 3 outputs, 2-burst frames | 5.73 ns | 253 | 492 |
+| demux by header field, 3 outputs | 3.18 ns | 261 | 422 |
+| pair, 3 inputs, round-robin, 1-burst frames | 7.26 ns | 494 | 1000 |
+| pair, 3 inputs, priority, 2-burst frames | **7.82 ns** (budget 7.3) | 581 | 995 |
+
+Every loop II = 1. No BRAM, no DSP.
+
+**Found on the way:**
+
+- **A build input that is not an `HwParam` must be listed in `build_fields`**, or the harness's fresh copy
+  drops it silently (`harness._fresh_module` -> `build_params`). `policy` and `route` are strings, so not
+  `HwParam`s (those are wrapped as `int`). Before the fix the round-robin pair ran as priority and the
+  header demux as `s_sel` -- and their pysim tests still passed, since the goldens do not depend on the
+  setting. The tests now assert the DUT kept it. Worth a check in the framework: a dataclass field of a
+  `FreeRunMod` neither an `HwParam`, in `build_fields`, nor a known runtime field.
+- **The frame-copy loop's shape is load-bearing.** A 32-bit burst count was the critical path (10.08 ns in
+  the pair); an 8-bit one brought it to 7.82. Two rewrites meant to shorten it further passed pysim and
+  csynth (one reached 7.18 ns) but **hung at RTL** after an input's last frame: a `for (;;)` with the exit
+  as a `break` after the read, and a `while (!done)` on a flag computed one burst ahead. The mechanism is
+  not established (a read issued past the frame's end fits both); the bodies keep `while (b < NB)` with a
+  comment saying why. The 7.82 ns case is **open**: it is an estimate on the slowest part at 100 MHz, and
+  the real target (250 MHz, xczu48dr) has not been tried.
+- **A csynth failed twice on unchanged code, then passed once its project directory was deleted.** The
+  priority pair, after the two failed rewrites: `HLS 214-208 ... 'm_out_2' is not an AXI-Stream and/or is
+  not a port in the interface`. The generated TCL opens the project with `-reset`, so the cause is not
+  known. Recorded in case it recurs.
+- **D6 checked.** The Vitis Utility Library's `streamNToOne` (read on `main`,
+  `utils/L1/include/xf_utils_hw/stream_n_to_one/`): every policy moves one element an input a turn (frames
+  interleave), nothing knows a packet or TLAST, and it is a function that returns once every input raises
+  its end flag, not a free-running task. So it cannot be the arbiter inside a composite; written up on
+  `docs/guide/streams/arbiter.md`.
+
+Guide: `docs/guide/streams/arbiter.md`, `demux.md`, two rows in `streams/index.md`; `wait_any` on
+`interface/primitive/index.md` beside `get_nb`.
+
+Left for later stages: putting the arbiter and demux into the ring stub in place of its hand-written mux
+(the stub's mux carries a credit and a design tag, which stay in a design); the 250 MHz check.
+
 ## Hand-off: continuing on the lab machine (2026-11-21)
 
 Written for the next agent, on a machine with Vitis HLS / Vivado 2025.1. Everything is on branch
@@ -331,8 +404,8 @@ If something fails, in order of likelihood:
   error, then fix it in the generator as an extension (AGENTS.md: propose, then build it in this repo with a
   test), not around it.
 
-**2. Start Stage 2 (allowed before step 1 is done, D5).** *Taken up 2026-11-21 on the developer laptop
-(Vitis / Vivado 2025.1 available there); progress goes in a Stage 2 record below.* `StreamArbiter` and `StreamDemux` in
+**2. Start Stage 2 (allowed before step 1 is done, D5).** *Done 2026-11-21 on the developer laptop (Vitis /
+Vivado 2025.1); see the Stage 2 record. Kept for reference.* `StreamArbiter` and `StreamDemux` in
 `waveflow/streams/`, each in the four parts of `StreamBroadcast`: the model, a templated HLS body in `src/`,
 a build step, an RTL gate in `waveflow/streams/rtl.py`; then a page under `docs/guide/streams/` and a row in
 its index. Start from `examples/ring_stub/src/ring_mux_task.h`: its feedback-first frame copy is the

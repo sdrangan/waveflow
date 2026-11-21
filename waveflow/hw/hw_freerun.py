@@ -298,6 +298,14 @@ class FreeRunMod(HwModule):
                 self._pending_firing["end"] = self.now
                 self.firing_records.append(self._pending_firing)
 
+    def wait_any(self, *eps) -> ProcessGen[int]:
+        """Block until one of the stream slaves *eps* holds a burst; the index of the first that does.
+        The pysim form of a body that polls several inputs with ``empty()``: see
+        :func:`waveflow.hw.interface.wait_any`, and wait only on the inputs this firing can act on."""
+        from waveflow.hw.interface import wait_any
+
+        return (yield from wait_any(*eps))
+
     def kernel_task(self):
         """The ``hls::task`` body descriptor: its C++ name, header, argument order, and template args.
 
