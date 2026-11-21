@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21 (record at the end).**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 pysim and codegen DONE, RTL pending a machine with Vitis 2025.1 (records at the end).**
 
 ## Why
 
@@ -171,4 +171,60 @@ build it that way inside the repository, and ask the user first in a design of t
 - Found and fixed: `dsp/ssr_fft/parameters.md` ended "The inverse transform is not built yet", which
   contradicts the page's own `inverse=True` section (built and tested: `tests/dsp/ssr_fft/test_hw.py`). The
   agent read it and concluded the inverse did not exist. The sentence is removed.
+
+## Stage 1 record (2026-11-21): pysim and codegen; RTL pending
+
+The stub is `examples/ring_stub/` (not curated, no doc page): `Mux -> Inc (K) -> Post`, Post feeding each
+job's first pass back to Mux (`fb`), a credit token back on a second backward edge (`crd`), the tag beside K
+(`tag`). `FMAX = 4` jobs in the loop, frames of 1 to 64 words; K adds 1, so each answer is the input plus 2.
+Tests: `tests/examples/test_ring_stub.py`.
+
+What it showed, here (no Vitis):
+
+- **The generator needs nothing for a cycle.** `composite_top_spec` / `render_top` emit `fb` and `crd` as
+  ordinary `hls_thread_local` channels at their stated depths; the mux task takes them as inputs, Post
+  writes them. Asserted on the generated top.
+- **pysim runs the loop**: the composite against the golden on 10 and 40 jobs, more than the credit, so the
+  mux waits on credit; K and Post alone against the golden. All bit for bit, TLAST included.
+- **Deadlock looks like success, confirmed.** With no effective credit and shallow loop links, the same
+  composite answers 0 of 40 jobs and `run()` returns cleanly. The test asserts the counts.
+- **The HLS bodies compute the golden.** A g++ run of the three bodies on mock streams (the open-source
+  `ap_int` headers from `Xilinx/HLS_arbitrary_Precision_Types`, a minimal `hls::stream`, the tasks called
+  round-robin until none moves): both scenarios bit for bit with the golden, every internal FIFO within its
+  declared depth (peaks: `k_in`/`k_out` 64 of 64, `fb` 65 of 260, `tag` and `crd` 1 of 5). Not Vitis csim
+  and not RTL: the scheduling is sequential. Not committed as a test, since it needs headers from outside
+  the repository.
+- **The DAG runs through `codegen` and every `golden` step** (`--through golden`, `long_golden`,
+  `inc_golden`, `post_golden`); it stops at `csynth` for want of Vitis.
+
+Gaps found, for Stage 2:
+
+- **A polling kernel cannot be harnessed in pysim as written.** The mux's HLS body polls (`empty()`,
+  feedback first). Modelled the same way in pysim it never runs out of events, and `harness()` takes no
+  `run_until`. So the pysim `Mux` is three processes sharing its output under a priority lock, a second
+  description beside the HLS one. The extension: a pysim primitive that blocks until any of several
+  inputs holds a burst (for example `yield from self.wait_any(self.s_fb, self.s_in)`), so a polling
+  body's model is one `run_iter` in the order the HLS checks. `StreamArbiter` needs it.
+- **A mux alone has no comparable RTL recording**: the order it interleaves two inputs depends on when the
+  stand-ins deliver them. The composite is comparable because its output order does not depend on timing.
+  `StreamArbiter`'s RTL gate needs scenarios whose order is fixed (one source at a time, or both sources
+  queued before it starts, with strict priority), or a compare per source.
+- **`CreditStreamIF` is not the loop's credit.** It is a window on one link (fwd + cumulative counts). A
+  loop's credit is end to end: a token stream from the stage where a job leaves back to the admission
+  point. A plain framed stream does that; nothing to extend.
+- **The real `SsrFft` on the ring is left to Stage 3 / 5.** Its self-flush, the property a loop needs, is
+  already measured (`dsp/ssr_fft/synthesis.md`, `timing.md`); putting it in the stub needs the U64-to-
+  `RadixWord` packing the example will have anyway.
+
+Left for a machine with Vitis 2025.1 and Vivado:
+
+```bash
+python -m examples.ring_stub.ring_stub_build                          # the composite through compare
+python -m examples.ring_stub.ring_stub_build --through long_compare   # 40 jobs
+python -m examples.ring_stub.ring_stub_build --through inc_compare    # K alone
+python -m examples.ring_stub.ring_stub_build --through post_compare   # Post alone
+pytest tests/examples/test_ring_stub.py -m xsi                        # the four gates
+```
+
+Record the cycle counts (Vitis 2025.1) here. Stage 2 starts once the composite compares clean at RTL.
 
