@@ -27,7 +27,7 @@ from protecting that property.
    |---|---|---|
    | Python, words | `Schema().deserialize(words, word_bw=W)` | `inst.serialize(word_bw=W)` |
    | Python, element array | `read_array(words, elem_type=T, word_bw=W, shape=n).val` | `write_array(x, elem_type=T, word_bw=W)` |
-   | pysim stream port | `yield from s_in.get_schema(Schema)`; `s_in.get_array(T, count=n)` | `yield from m_out.write(inst)` |
+   | pysim stream port | `yield from s_in.get_schema(Schema)`; `s_in.get_array(T, count=n)` | `yield from m_out.write(inst)`; `m_out.write_array(T, n, array(T, y))` (a `DataArray`, not an ndarray) |
    | HLS, one message | `m.read_axi4_stream<W>(s)`, `read_stream<W>`, `read_array<W>(words)`, or `streamutils::read_msg<W>(m, s)` | `m.write_axi4_stream<W>(s, last)`, ..., `streamutils::write_msg<W>(m, s, last)` |
    | HLS, element array | `<elem>_array_utils::read_axi4_stream_lane<W>`, `read_array_slice<W>`, `elem_read<W>` | the `write_*` twins |
    | test-data files | `inst.write_uint32_file(path)` / `arrayutils.write_uint32_file(...)` | C++: `streamutils::read_uint32_file(v, path)` |
@@ -39,7 +39,9 @@ from protecting that property.
    do not work around it.
 6. **Generate the headers with build steps**, never by writing the struct yourself:
    `StreamUtilsStep(output_dir="include")`, one `DataSchemaStep(cls, word_bw_supported=[...],
-   include_dir="include")` per schema (enums and nested arrays included, inner before outer), and
+   include_dir="include")` per schema (enums and nested arrays included, inner before outer: an
+   `EnumField` needs **its own** step -- the header of the `DataList` holding it `#include`s
+   `<enum>.h`, and if that step is missing nothing fails until a C++ compile), and
    `ArrayUtilsStep(elem_type, [...])` for each element type a kernel moves as an array. **The array
    utils go to the element type's own `include_dir`, not the step's**: declare the element with it,
    `FixedField.specialize(12, 1, include_dir="include")` / `FloatField.specialize(bitwidth=32,
@@ -123,5 +125,5 @@ value, `Thresh(cmd.thresh)`) compares exactly, as `ap_fixed` does, for any two f
 - [ ] No `.range(`, `>>`, `<<`, `&` masks, or `from_bytes` on message or sample words, in Python or C++.
 - [ ] Every read of a message uses the schema's reader -- not only every write.
 - [ ] No hand-written copy of a generated struct; the headers come from `DataSchemaStep` /
-      `ArrayUtilsStep`.
+      `ArrayUtilsStep`, with a step for every `EnumField` too.
 - [ ] No defensive `int()` / `np.asarray()` around field reads.

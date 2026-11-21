@@ -18,25 +18,46 @@ its HLS body is `waveflow-kernel-hls`; the system around the devices (`HwSystem`
    `MemRStream` / `MemWStream` as children of a composite beside the kernel (`add_comp`, framed `add_if`
    streams between them). That composite is a **device**, not a kernel: call it one. Never give a kernel
    an `MMIFMaster`, and never write a memory model or an AXI slave of your own.
-2. **Memory, in-band.** Build the reader and writer with `inband=True`. A read is a `MemRCmd(addr, len,
-   fwd_bursts)` on the reader's `s_cmd`; the data comes back as one burst after any relayed bursts. A
-   write is one stream, `[MemWCmd | relayed bursts | data]`, on the writer's `s_in`. `addr` and `len` are
-   **words** (bus words, not bytes, not elements); count a buffer's words with the schema
-   (`get_nwords`), and pack elements with the array utils.
+2. **Memory, in-band.** Build the reader and writer with `inband=True` (`interface/axi_mm/master.md`).
+   - **A read** is one `MemRCmd(addr, len, fwd_bursts)` on the reader's `s_cmd`: `addr` the first word,
+     `len` the words to read, `fwd_bursts` how many bursts that **follow it on `s_cmd`** the reader
+     relays to `m_out` untouched, ahead of the data. Its output is `[relayed bursts | len words]`, the
+     data one burst. `fwd_bursts=1` with a descriptor behind it carries the job to whichever stage takes
+     the data; `fwd_bursts=0` relays nothing (the second read of a job, or a descriptor sent on its own
+     stream). Several reads a job are served in order.
+   - **A write** is one stream on the writer's `s_in`: `[MemWCmd(addr, len, fwd_bursts) | the
+     fwd_bursts bursts | len data words]`; the relayed bursts come back on `m_done` after the write.
+   - **Units.** `addr` and `len` are **bus words** from the arena base (not bytes, not elements; the
+     top's pointers are `offset=off`, base 0). Count with the schema, never `ceil(n*bits/W)`: Python
+     `get_nwords(Elem, W, n)` (`from waveflow.hw.arrayutils import get_nwords`), C++
+     `<elem>_array_utils::get_nwords<W>(n)`; pack elements with the array utils.
+   - **Never send a `MemRCmd` with `len=0`**: pysim refuses it (`ValueError: nwords must be a positive
+     integer`), and at RTL the reader sends no data burst at all, so whoever waits for one hangs. Decide
+     an empty or bad job in the issuing kernel and send no read. A `MemWCmd` with `len=0` is fine (rule
+     3's error path).
 3. **"Done" means stored: answer through the writer.** Put the job's response or status behind the
    write (`MemWCmd(..., fwd_bursts=1)`, then the status, then the data) on a writer built with
    `emit_done=True` and `max_fwd_words` large enough for it; the writer echoes it on `m_done` only after
    the memory acknowledged the write. A status the kernel sends on its own stream can reach the host
    before the data lands. With no data to write (an error), send `MemWCmd(len=0, fwd_bursts=1)` and the
    status, then stop (`yield self.event()`).
-4. **The writer writes whole words.** A buffer whose length is not a multiple of the elements per word
+4. **Who asks is not who takes.** The default device is a pipeline: an **issue** kernel reads the
+   command, sends the `MemRCmd`s and passes the command on (its own stream, or relayed ahead of the
+   data with `fwd_bursts`); a **compute** kernel takes the command, then the data, and frames the write.
+   A kernel that sends a `MemRCmd` and then waits for its data with a blocking read is the HLS trap of
+   `waveflow-kernel-hls` rule 7 -- it passes pysim and can deadlock at RTL; if you keep one kernel,
+   its HLS body must poll the data with `read_nb`. **One reader per input needed at the same time**:
+   an element-wise `z = f(x, y)` gets two `MemRStream`s, so x and y arrive side by side; one reader
+   serves them one after the other, and the kernel would have to hold all of x (with `n` unbounded).
+   Every `m_axi` port gets its own bundle; the harness puts them all on one memory.
+5. **The writer writes whole words.** A buffer whose length is not a multiple of the elements per word
    gets its last word written whole: the spare lanes are overwritten. State it, and allocate whole words.
-5. **The host reaches a device through views, declared on the class**: `mm_views: ClassVar[tuple]`
+6. **The host reaches a device through views, declared on the class**: `mm_views: ClassVar[tuple]`
    (`QueueIn`, `QueueOut`, `RegBank`, `CreditIn`, `BramWindow` from `waveflow.hw.mm_device`), each naming a
    stream port of the class (a composite's ports may be its children's). `build_mm_device(dev, ...)`
    builds them; `BoundMemSlaveAdaptor(device.layout.at(base), host.m)` gives the host its endpoints by
    view name.
-6. **Pick the view by what the host must do**:
+7. **Pick the view by what the host must do**:
    - sends jobs or data: a **queue in**; takes results: a **queue out**, which drops TLAST -- the host
      sizes each read from a header or a fixed-size message;
    - is **woken**: only a queue's level **interrupt** (`IrqIF`, source the view's `m_irq`, the host's
@@ -45,20 +66,20 @@ its HLS body is `waveflow-kernel-hls`; the system around the devices (`HwSystem`
      at a stated point (`get_schema_nb`); reads the latest status at any time: the bank's status side.
    - **The register bank raises no interrupt.** "A status register with an interrupt" cannot be built
      today: say so, and send what must wake the host to a queue out (a bank beside it is fine).
-7. **Order holds only where the guide says it does.** Behind **one front** (`one_front=True`), bus
+8. **Order holds only where the guide says it does.** Behind **one front** (`one_front=True`), bus
    transactions are served in order, so "write the data, then ring the doorbell" works there and not
    across fronts. Between two kernel-side streams there is **no** order: a configuration the data
    depends on carries an id that the data names.
-8. **Bound what is outstanding.** A queue out that fills stalls whatever writes it (the writer, then the
+9. **Bound what is outstanding.** A queue out that fills stalls whatever writes it (the writer, then the
    kernel). The host keeps at most as many jobs in flight as the response queue holds -- state the
    number.
-9. **Across a shared bus, credit.** A kernel writing another device's queue over the bus uses a credit
+10. **Across a shared bus, credit.** A kernel writing another device's queue over the bus uses a credit
    stream (`MmCreditStreamIF`: `CreditIn` on the producer, `QueueIn` on the consumer), never a plain
    stream; size the forward FIFO and the queue (the credit window) as `credit_streams.md` says.
-10. **Storage is not an event.** A `BramIF` (or a `BramWindow` on the bus) is read by address; what says
+11. **Storage is not an event.** A `BramIF` (or a `BramWindow` on the bus) is read by address; what says
     it is ready is a stream message (a doorbell). A memory shared by two tasks cannot live inside the HLS
     top: it is RTL beside it (`rtl_module()`).
-11. **At RTL, the generator owns the `m_axi`.** The device's HLS top (its kernels, readers, writers, bus
+12. **At RTL, the generator owns the `m_axi`.** The device's HLS top (its kernels, readers, writers, bus
     writers) is generated with `offset=off` + `stable` pointers; never hand-write those pragmas (an
     `offset=slave` pointer to an `hls::task` deadlocks when tasks fire unequally). In a kernel body, a
     request to the reader and the wait for its reply are two streams: never a write then a blocking read
@@ -91,39 +112,55 @@ pages, `waveflow_search` it -- **do not guess an API name.**
 
 ## The shape
 
+Two inputs and one output in memory, `z = f(x, y)`: an issue kernel, two readers, a compute kernel and
+a writer, all streams between them. With one input, drop a reader.
+
 ```python
 @dataclass
-class Dev(FreeRunMod):                       # a device: a kernel and its memory adaptors
+class Dev(FreeRunMod):                       # a device: kernels and their memory adaptors
     cpp_kernel_name: ClassVar[str | None] = "dev"
-    mm_views: ClassVar[tuple] = (            # how a host reaches it (only if one does)
-        QueueIn("q_cmd", port="s_cmd", depth=...),
-        QueueOut("q_done", port="m_done", depth=...),   # its IrqIF wakes the host
-    )
+    mm_views: ClassVar[tuple] = ()           # QueueIn / QueueOut ... only if a host reaches it on a bus
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.core = Core(name=f"{self.name}_core", sim=self.sim, clk=self.clk)   # streams only
-        self.rd = MemRStream(name=f"{self.name}_r", sim=self.sim, mem_dwidth=W, inband=True,
-                             clk=self.clk)
-        self.wr = MemWStream(name=f"{self.name}_w", sim=self.sim, mem_dwidth=W, inband=True,
-                             emit_done=True, done_framed=False,          # to a queue out
-                             max_fwd_words=Done.nwords_per_inst(W), clk=self.clk)
-        for c in (self.core, self.rd, self.wr):
+        w, kw = W, dict(sim=self.sim, clk=self.clk)
+        self.issue = Issue(name=f"{self.name}_issue", **kw)          # s_cmd -> m_rx, m_ry, m_desc
+        self.rx = MemRStream(name=f"{self.name}_rx", mem_dwidth=w, inband=True, **kw)
+        self.ry = MemRStream(name=f"{self.name}_ry", mem_dwidth=w, inband=True, **kw)
+        self.comp = Compute(name=f"{self.name}_comp", **kw)          # s_desc, s_x, s_y -> m_wr
+        self.wr = MemWStream(name=f"{self.name}_w", mem_dwidth=w, inband=True, emit_done=True,
+                             max_fwd_words=Resp.nwords_per_inst(w), **kw)
+        for c in (self.issue, self.rx, self.ry, self.comp, self.wr):
             self.add_comp(c)
-        # framed StreamIFs: core.m_rd -> rd.s_cmd, rd.m_out -> core.s_rd, core.m_wr -> wr.s_in (add_if)
-        ...
-        self.boundary = ["s_cmd", "m_rd_mem", "m_wr_mem", "m_done"]   # add_comp x add_endpoint order
-        self.s_cmd, self.m_done = self.core.s_cmd, self.wr.m_done
-        self.m_rd_mem, self.m_wr_mem = self.rd.m_mem, self.wr.m_mem
+        for nm, m, s in (("rx", self.issue.m_rx, self.rx.s_cmd), ("ry", self.issue.m_ry, self.ry.s_cmd),
+                         ("desc", self.issue.m_desc, self.comp.s_desc),
+                         ("x", self.rx.m_out, self.comp.s_x), ("y", self.ry.m_out, self.comp.s_y),
+                         ("wr", self.comp.m_wr, self.wr.s_in)):
+            link = StreamIF(name=f"{self.name}_{nm}_if", bitwidth=w, framed=True, **kw)
+            link.bind("master", m); link.bind("slave", s); self.add_if(link)
+        self.boundary = ["s_cmd", "m_x_mem", "m_y_mem", "m_z_mem", "m_done"]  # add_comp x add_endpoint order
+        self.s_cmd, self.m_done = self.issue.s_cmd, self.wr.m_done
+        self.m_x_mem, self.m_y_mem, self.m_z_mem = self.rx.m_mem, self.ry.m_mem, self.wr.m_mem
 
-# the core's firing: ask, compute, then [MemWCmd(fwd_bursts=1) | Done | data] to the writer
-#     yield from self.m_rd.write(MemRCmd(addr=cmd.src, len=nw, fwd_bursts=0))
-#     x = yield from self.s_rd.get_array(Elem, cmd.n)
-#     yield from self.m_wr.write(MemWCmd(addr=cmd.dst, len=nw, fwd_bursts=1))
-#     yield from self.m_wr.write(Done(tx_id=cmd.tx_id, ...))
-#     yield from self.m_wr.write_array(Elem, cmd.n, array(Elem, y))
+# Issue.run_iter: ask, pass the command on -- never wait for the data
+#     cmd = yield from self.s_cmd.get_schema(Cmd)
+#     yield from self.m_rx.write(MemRCmd(addr=cmd.x_addr, len=nw, fwd_bursts=0))   # nw from the schema
+#     yield from self.m_ry.write(MemRCmd(addr=cmd.y_addr, len=nw, fwd_bursts=0))
+#     yield from self.m_desc.write(cmd)                                           # write(msg): no serialize()
+# Compute.run_iter: the command, the data, then [MemWCmd(fwd_bursts=1) | Resp | z] to the writer
+#     cmd = yield from self.s_desc.get_schema(Cmd)
+#     x = yield from self.s_x.get_array(Elem, cmd.n)
+#     y = yield from self.s_y.get_array(Elem, cmd.n)
+#     z = golden_fn(x.val, y.val)                                                 # an ndarray
+#     yield from self.m_wr.write(MemWCmd(addr=cmd.z_addr, len=nwz, fwd_bursts=1))
+#     yield from self.m_wr.write(Resp(tx_id=cmd.tx_id, n=cmd.n, code=Code.OK))
+#     yield from self.m_wr.write_array(ZElem, cmd.n, array(ZElem, z))             # array: waveflow.hw.arrayutils
 ```
+
+An error found by the issue kernel travels with the command: it sends no reads, passes the command on,
+and stops; the compute kernel answers it through the writer (`MemWCmd(len=0, fwd_bursts=1)` and the
+error status) and stops. Worked in full, with its HLS bodies: `evaluation/skill_tests/results/vmul_2026-11-21/`.
 
 Its tests: the device alone, `harness(Dev, workload=kind)` -- the memory's image under one memory port
 of the workload, the final arena in `vectors/mem` after `write_scenario` -- then on a bus with its host
@@ -133,6 +170,8 @@ of the workload, the final arena in `vectors/mem` after `write_scenario` -- then
 
 - [ ] Every kernel is streams-only; memory through `MemRStream` / `MemWStream` children, in-band;
       the composite holding them is called a device.
+- [ ] No kernel sends a `MemRCmd` and then blocks reading its data (or its HLS body polls with
+      `read_nb`); one reader per input needed at the same time.
 - [ ] Addresses and lengths in words; buffers counted and packed by the schema.
 - [ ] The answer to each job comes through the writer's echo, so it means "stored"; the error path too.
 - [ ] Every way the host reaches the device is a view in `mm_views`; every wait is on an interrupt.

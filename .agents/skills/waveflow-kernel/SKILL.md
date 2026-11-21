@@ -42,8 +42,10 @@ readers and writers, the bus views, a device's HLS top), `waveflow-pipeline` (a 
    input until a reset (in pysim: `yield self.event()`, never triggered).
 5. **Every message by its schema** (`get_schema`, `get_array`, `write(msg)`, `write_array`), never
    words by hand. A complex sample is one element, a `ComplexField` of its integer or fixed type
-   (`schema/python/complex.md`), not two integers split by hand. (The `waveflow-schema` skill has the
-   details.)
+   (`schema/python/complex.md`), not two integers split by hand. `write` takes the message itself
+   (`write(cmd)`, not `write(np.asarray(cmd.serialize(...)))`, which older examples still do), and
+   `write_array` takes a `DataArray`: wrap a NumPy result as `array(Elem, y)` (`from
+   waveflow.hw.arrayutils import array`). (The `waveflow-schema` skill has the details.)
 6. **Read in the order the writer writes.** A blocking read on the wrong stream deadlocks. Where the
    kernel must not wait (a setting that may or may not have changed), check with `get_schema_nb` --
    and the order of those checks is the kernel's priority: state it. A check made once before a
@@ -143,8 +145,8 @@ class Kern(FreeRunMod):
         cmd = yield from self.s_in.get_schema(Cmd)
         yield from self.m_out.write(Resp(tx_id=cmd.tx_id, n=cmd.n))
         x = yield from self.s_in.get_array(Elem, cmd.n)          # fewer if the burst ended early
-        y = golden_fn(cmd, x)                                    # the golden's pure function
-        yield from self.m_out.write_array(Elem, cmd.n, y)        # the results, one burst
+        y = golden_fn(cmd, x.val)                                # the golden's pure function: an ndarray
+        yield from self.m_out.write_array(Elem, cmd.n, array(Elem, y))   # a DataArray, one burst
         code = Code.OK if len(x.val) == cmd.n else Code.SHORT
         yield from self.m_status.write(Status(tx_id=cmd.tx_id, code=code))
         if code != Code.OK:
