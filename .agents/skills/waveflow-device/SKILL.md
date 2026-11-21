@@ -18,11 +18,23 @@ its HLS body is `waveflow-kernel-hls`; the system around the devices (`HwSystem`
    `MemRStream` / `MemWStream` as children of a composite beside the kernel (`add_comp`, framed `add_if`
    streams between them). That composite is a **device**, not a kernel: call it one. Never give a kernel
    an `MMIFMaster`, and never write a memory model or an AXI slave of your own.
-2. **Memory, in-band.** Build the reader and writer with `inband=True`. A read is a `MemRCmd(addr, len,
-   fwd_bursts)` on the reader's `s_cmd`; the data comes back as one burst after any relayed bursts. A
-   write is one stream, `[MemWCmd | relayed bursts | data]`, on the writer's `s_in`. `addr` and `len` are
-   **words** (bus words, not bytes, not elements); count a buffer's words with the schema
-   (`get_nwords`), and pack elements with the array utils.
+2. **Memory, in-band.** Build the reader and writer with `inband=True` (`interface/axi_mm/master.md`).
+   - **A read** is one `MemRCmd(addr, len, fwd_bursts)` on the reader's `s_cmd`: `addr` the first word,
+     `len` the words to read, `fwd_bursts` how many bursts that **follow it on `s_cmd`** the reader
+     relays to `m_out` untouched, ahead of the data. Its output is `[relayed bursts | len words]`, the
+     data one burst. `fwd_bursts=1` with a descriptor behind it carries the job to whichever stage takes
+     the data; `fwd_bursts=0` relays nothing (the second read of a job, or a descriptor sent on its own
+     stream). Several reads a job are served in order.
+   - **A write** is one stream on the writer's `s_in`: `[MemWCmd(addr, len, fwd_bursts) | the
+     fwd_bursts bursts | len data words]`; the relayed bursts come back on `m_done` after the write.
+   - **Units.** `addr` and `len` are **bus words** from the arena base (not bytes, not elements; the
+     top's pointers are `offset=off`, base 0). Count with the schema, never `ceil(n*bits/W)`: Python
+     `get_nwords(Elem, W, n)` (`from waveflow.hw.arrayutils import get_nwords`), C++
+     `<elem>_array_utils::get_nwords<W>(n)`; pack elements with the array utils.
+   - **Never send a `MemRCmd` with `len=0`**: pysim refuses it (`ValueError: nwords must be a positive
+     integer`), and at RTL the reader sends no data burst at all, so whoever waits for one hangs. Decide
+     an empty or bad job in the issuing kernel and send no read. A `MemWCmd` with `len=0` is fine (rule
+     3's error path).
 3. **"Done" means stored: answer through the writer.** Put the job's response or status behind the
    write (`MemWCmd(..., fwd_bursts=1)`, then the status, then the data) on a writer built with
    `emit_done=True` and `max_fwd_words` large enough for it; the writer echoes it on `m_done` only after

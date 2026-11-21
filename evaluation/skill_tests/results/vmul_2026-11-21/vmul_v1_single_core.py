@@ -26,7 +26,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from waveflow.hw.arrayutils import array, read_array, write_array
+from waveflow.hw.arrayutils import array, get_nwords, read_array, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -76,11 +76,11 @@ class VmulResp(DataList):
 
 def x_words(n: int) -> int:
     """Bus words holding n int16 elements (from the schema layout, not ceil by hand)."""
-    return len(write_array(np.zeros(n, np.int16), elem_type=XElem, word_bw=W))
+    return get_nwords(XElem, W, n)
 
 
 def z_words(n: int) -> int:
-    return len(write_array(np.zeros(n, np.int32), elem_type=ZElem, word_bw=W))
+    return get_nwords(ZElem, W, n)
 
 
 # ---------------------------------------------------------------- golden
