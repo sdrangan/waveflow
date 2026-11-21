@@ -35,8 +35,8 @@ from protecting that property.
    **Writing the schema is not enough -- check the read side.** The common failure is to declare a
    `DataList` and then decode its words by hand anyway.
 5. **Never hand-edit a generated file** (`include/*.h`, `*_array_utils.h`, `streamutils*.h`). Change the
-   Python class and regenerate. If the generated code cannot express what you need, **stop and say so**;
-   do not work around it.
+   Python class and regenerate. If the generated code cannot express what you need, **do not work around
+   it**: say so and propose the change to the generator (`waveflow-start`, its rules).
 6. **Generate the headers with build steps**, never by writing the struct yourself:
    `StreamUtilsStep(output_dir="include")`, one `DataSchemaStep(cls, word_bw_supported=[...],
    include_dir="include")` per schema (enums and nested arrays included, inner before outer: an

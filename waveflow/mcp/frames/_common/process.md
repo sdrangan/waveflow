@@ -73,7 +73,9 @@ you may read and must never edit.
   through its Waveflow schema or the Waveflow array utilities, in Python and
   in C++ alike.
 - **Never edit a generated file.** If the machinery cannot express something
-  you need, **stop and report it** with the exact error you saw.
+  you need, **stop and report it** with the exact error you saw, and propose
+  the extension to Waveflow that would express it (what, where, its parts).
+  Waveflow is early and meant to grow; changing it is the user's call.
 - **Never write your own PASS column.** A criterion passes when a check step
   or the build says so.
 - **The Stage 1 artifacts are frozen in Stage 2.** If you believe one is
