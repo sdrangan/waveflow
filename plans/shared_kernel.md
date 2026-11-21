@@ -107,7 +107,7 @@ SALSA tile) is **out of scope** here and gets its own plan once this one is buil
 1. **De-risk the cycle.** A stub composite: two clients, a mux, a pass-through K (then the real `SsrFft`), a
    post stage that feeds frames back. Take it through pysim, codegen, csynth and XSI. Record what the
    generator, the top, the testbench and the DAG do with a cycle, and fix what breaks. Check `CreditStreamIF`
-   between children. Nothing after this stage starts until the stub runs at RTL.
+   between children. Stage 2's RTL gate waits until the stub runs at RTL; its pysim and HLS work need not (D5).
 2. **`StreamArbiter` and `StreamDemux`.** Each one: the model, the templated HLS body, the build step, the RTL
    gate in its own harness, and the guide page, in the shape of `StreamBroadcast`.
 3. **`SsrFft` direction per frame.** Bit-exact against the fixed-direction builds in both directions; the
@@ -135,6 +135,20 @@ SALSA tile) is **out of scope** here and gets its own plan once this one is buil
   block's default, in-band is an option of `StreamDemux`.
 - **D4. Arbiter policy.** Strict priority and round-robin, fixed at build time; weighted later if a design
   needs it. **Accepted.**
+- **D5. Stage 2 does not wait for Stage 1's RTL run** (2026-11-21). Its design does not depend on what
+  that run shows; only `StreamArbiter`'s own RTL gate waits until the stub compares clean. **Accepted.**
+- **D6. `StreamArbiter` is written in Vitis HLS**, not taken from AMD (2026-11-21). **Accepted.** The vendor
+  options and why they do not fit inside a composite go on the shared-kernels page:
+  - the **AXI4-Stream Switch / Interconnect** (PG085, RTL) arbitrates on TLAST with fixed priority or
+    round-robin, a whole packet a grant. But it joins IPs in a block design: it cannot sit between the
+    `hls::task`s of one HLS top (a `framed_word` is an HLS FIFO's struct, not a wire). Using it means
+    splitting K and its clients into separate tops, the loop crossing IP boundaries on real AXIS, where
+    the switch is used **unmodified**. That is the right tool between devices (SALSA's tiles), not inside a
+    composite;
+  - the **Vitis Utility Library's `streamNToOne`** (`xf::common::utils_hw`: round-robin, load balance,
+    tag select) is HLS, but as far as is known moves an element at a time (frames interleave) and uses
+    end-flag streams for a run that ends. Stage 2 checks both points; if it can keep frames whole, wrapping
+    it under `waveflow.vitis_l1` is the alternative and the page says so.
 
 ## Not in this plan
 
@@ -226,5 +240,74 @@ python -m examples.ring_stub.ring_stub_build --through post_compare   # Post alo
 pytest tests/examples/test_ring_stub.py -m xsi                        # the four gates
 ```
 
-Record the cycle counts (Vitis 2025.1) here. Stage 2 starts once the composite compares clean at RTL.
+Record the cycle counts (Vitis 2025.1) here. Stage 2's pysim and HLS work may start before this (decision D5); only its RTL gate waits on it.
+
+## Hand-off: continuing on the lab machine (2026-11-21)
+
+Written for the next agent, on a machine with Vitis HLS / Vivado 2025.1. Everything is on branch
+`claude/waveflow-gradient-descent-test-3itqxa` (pushed; not merged to `main`). Read this plan from the top
+first: the design space, D1-D6, and the Stage 0 and 1 records.
+
+**0. Set up.** The venv, the Vitis / Vivado paths and any machine setup are in that machine's
+`CLAUDE.local.md`, not here.
+
+```bash
+git fetch origin claude/waveflow-gradient-descent-test-3itqxa
+git checkout claude/waveflow-gradient-descent-test-3itqxa
+pip install -e ".[dev]"
+test_amd_tools                                                       # Vitis found?  else set WAVEFLOW_VITIS_PATH
+pytest tests/examples/test_ring_stub.py -m "not xsi"                 # 7 pass: pysim + codegen
+```
+
+**1. Finish Stage 1: the stub at RTL.** Run, in this order (K and Post alone first, so a failure in the
+composite is known to be the loop's):
+
+```bash
+python -m examples.ring_stub.ring_stub_build --through inc_compare
+python -m examples.ring_stub.ring_stub_build --through post_compare
+python -m examples.ring_stub.ring_stub_build                          # the composite, 10 jobs
+python -m examples.ring_stub.ring_stub_build --through long_compare   # 40 jobs
+pytest tests/examples/test_ring_stub.py -m xsi                        # the four gates; a skip is a failure
+```
+
+Pass = every `compare` clean (RTL recordings equal to pysim's, word for word, TLAST included). Then:
+
+- record in the Stage 1 record, with "Vitis 2025.1" beside every number: the csynth result of each top
+  (II of the copy and inc loops, any warnings about the `empty()` checks or the `static` credit), the cycle
+  each scenario's last `m_status` word appeared, and each top's resources from `kernel_resources`;
+- add an exact cycle-count assertion for the composite to `tests/examples/test_ring_stub.py`, in the
+  pattern of the other XSI gates (CLAUDE.md lists them), so a change in the loop's timing is seen;
+- set the Status line: Stage 1 DONE.
+
+If something fails, in order of likelihood:
+
+- **The composite's run ends with words missing**: a deadlock at RTL. Compare against pysim's counts
+  first. Look for Vitis putting a stream read and a write in one state (`docs/guide/rf/rfshotbuf/
+  tx_internal.md`, the `read_nb` poll-loop finding), for a FIFO Vitis sized differently from `DEPTH`
+  (`ring_stub.py`), and for the credit's reset (`#pragma HLS reset variable=credit` in
+  `src/ring_mux_task.h`; `CLAUDE.md` notes `config_rtl -reset state`). If the bound is simply too short, raise
+  `n_cycles` in `ring_stub_build.py` (20000 / 60000) and say so in the record.
+- **K or Post alone differ from pysim**: a body bug. Their g++ run matched the golden here; csim the body
+  if needed.
+- **The generator or csynth refuses the cycle**: that is the finding Stage 1 exists for. Record the exact
+  error, then fix it in the generator as an extension (AGENTS.md: propose, then build it in this repo with a
+  test), not around it.
+
+**2. Start Stage 2 (allowed before step 1 is done, D5).** `StreamArbiter` and `StreamDemux` in
+`waveflow/streams/`, each in the four parts of `StreamBroadcast`: the model, a templated HLS body in `src/`,
+a build step, an RTL gate in `waveflow/streams/rtl.py`; then a page under `docs/guide/streams/` and a row in
+its index. Start from `examples/ring_stub/src/ring_mux_task.h`: its feedback-first frame copy is the
+arbiter's core, without the credit and the tag format (those stay in a design). In order:
+
+1. the pysim primitive a polling body needs: block until any of several inputs holds a burst (Stage 1
+   record, first gap). Put it on the stream slave or `FreeRunMod`; test it; then rewrite the stub's `Mux` as
+   one `run_iter` in the HLS body's order, and keep its tests green;
+2. `StreamArbiter`: n framed inputs to one, whole frames, strict priority or round-robin (D4), the winner's
+   index on an `m_sel` side stream (D3);
+3. `StreamDemux`: one framed stream to n by an `s_sel` side stream, or by a header field (D3);
+4. their harness scenarios fixed in order (the second gap); their RTL gates;
+5. the vendor check of D6 (`streamNToOne`'s granularity), recorded on the arbiter's page.
+
+Then Stage 3 (`SsrFft` direction per frame). Keep this plan's records current as each stage lands; open a
+pull request only when the user asks.
 
