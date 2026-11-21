@@ -38,9 +38,9 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 | `waveflow-schema` | DataSchema, fields, fixed point, tagged unions, HLS serialize, array utils, header generation | done; blind-tested (51-54 of 54 both arms) |
 | `waveflow-kernel` | a kernel in Python: the stream for each thing it talks to, command-response, `run_iter`, the harness test that asserts counts | done (renamed from `waveflow-module`, #326); blind-tested as the module skill (49-52 of 52) |
 | `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, state and reset, deadlocks | done (renamed from `waveflow-hls-body`, #326); blind-tested (43-44 of 44) |
-| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | **written, test and reference written (#326); no blind runs yet** |
-| `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | **written, test and reference written (#326); no blind runs yet** |
-| `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | **written, test and reference written (#326; the test hides a deadlock and a dropped word); no blind runs yet** |
+| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | done; blind-tested 2026-11-21 (MCP 49 / 44, skill 50 / 50 of 50 after two fixes) |
+| `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | done; blind-tested 2026-11-21 (MCP 44 / 44, skill 46 / 46 of 46 after one fix) |
+| `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | done; blind-tested 2026-11-21 (all four 48 of 48, both hidden faults caught by every run; redundant for this task) |
 
 **Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
 unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
@@ -53,11 +53,19 @@ agent's loader dropped the description -- the text that decides when a skill loa
 `fix/skill-front-matter`. **The module skill's four blind runs used that broken description**: it
 loaded anyway (on its name, at the second call), but its trigger was never tested.
 
+**Blind runs for device, pipeline and system (2026-11-21):** four each plus reruns of the skill arms
+after fixes; results in `evaluation/skill_tests/results/{device01,pipeline01,system01}_2026-11-21.md`
+and `docs/evaluation/agent_skills/{device,pipeline,system}.md`. The device skill's pointer into
+`evaluation/` leaked the answers' file names (two runs discarded;
+`test_no_skill_points_into_the_evaluation_folder` now guards it); the device self-check gained the protocol and "what RTL still
+needs"; the pipeline skill gained the token-id check and the cost of each broadcast option. The MCP
+arms of device and pipeline stop at the frame's Stage 1 review and need one `--resume --message
+"Approved. Continue."`; the skill arms never stop (an open question for the frames process).
+
 ## Next
 
-1. **Blind runs for device, pipeline and system** -- four each (Opus, Sonnet x MCP, MCP + skill), the
-   recipe below. Their tests, references and review sheets are in `evaluation/skill_tests/{device,
-   pipeline,system}/`; the references pass in `tests/mcp/test_skills.py`.
+1. **Harder second tests** where no worked example carries the MCP arm (device: two readers or a
+   credit stream; pipeline: three stages sized together; system: an overlapping host window).
 2. **Trigger prompts** for every skill (`evaluation/skill_tests/*/trigger_prompts.md`), never run.
    Now that the descriptions parse, this is the first real test of whether each skill loads when it
    should. Run on Sonnet.
@@ -110,6 +118,10 @@ loaded anyway (on its name, at the second call), but its trigger was never teste
 - **Front matter must be valid YAML.** An unquoted `: ` in a description drops it in the agent's
   loader while Waveflow's own line parser reads it fine; `tests/mcp/test_skills.py` now checks.
 - **Small models may not load the skill at all** (Haiku 4.5 never did).
+- **Never point a skill into `evaluation/`**: the answers live there, and an agent that follows the
+  pointer lists the folder (device v1, two runs discarded). Point to the guide and curated examples.
+- **A point every run misses is the skill's to give** (pipeline B4 / D2: all four runs, both arms).
+- **Check the transcript for reads of the checkout** (`evaluation/`, `answers/`) before scoring a run.
 - **`--setting-sources project` does not hide built-in or account-plugin skills**; both arms see the
   same set, so the comparison holds.
 - No wall-clock times on this laptop (it is in use): report turns and tokens.

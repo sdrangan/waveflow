@@ -160,7 +160,7 @@ class Dev(FreeRunMod):                       # a device: kernels and their memor
 
 An error found by the issue kernel travels with the command: it sends no reads, passes the command on,
 and stops; the compute kernel answers it through the writer (`MemWCmd(len=0, fwd_bursts=1)` and the
-error status) and stops. Worked in full, with its HLS bodies: `evaluation/skill_tests/results/vmul_2026-11-21/`.
+error status) and stops. The `memcpy` example is this shape with one reader (`waveflow_get_example`).
 
 Its tests: the device alone, `harness(Dev, workload=kind)` -- the memory's image under one memory port
 of the workload, the final arena in `vectors/mem` after `write_scenario` -- then on a bus with its host
@@ -178,4 +178,9 @@ of the workload, the final arena in `vectors/mem` after `write_scenario` -- then
 - [ ] Anything the user asked for that Waveflow cannot build (an interrupt from a register bank,
       interrupt-enable registers, ...) is **stated**, with what you used instead.
 - [ ] The host's jobs in flight are bounded by what the response queue holds.
-- [ ] Choices the user left open are written down: the status path, whole words, the protocol.
+- [ ] Choices the user left open are written down: the status path, whole words, and the protocol
+      (every parameter of a job travels in its command on one stream, so no order between two
+      streams is relied on -- or, if you used two, the id that pairs them).
+- [ ] What an RTL run would still need is named, not worked around: each kernel's HLS body
+      (`waveflow-kernel-hls`), the host's C++ twin (`build/sw_threads.md`), and any bus feature from
+      `slave.md`'s *What is not built yet* the user asked for.

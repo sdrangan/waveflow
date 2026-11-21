@@ -31,12 +31,15 @@ pipeline itself -- its links and the rules that keep it from hanging.
 5. **A token per job through every stage.** A stage that consumes a job and emits nothing -- no result,
    an empty result, an error -- leaves the next stage waiting forever. Forward a message for every
    job, always. An empty data burst cannot be sent (a zero-element read has no answer): say "none" in
-   the header's count and send no data burst, or end with an in-band END.
+   the header's count and send no data burst, or end with an in-band END. **The token carries the job's
+   id, and the stage that takes it checks it** against its own copy of the command: a mismatch means
+   the two paths have slipped apart, and is reported as an error, not answered with the wrong job.
 6. **Two stages need one stream: `StreamBroadcast`.** Each reads its copy and skips what is not its
    own. Its outputs move in **lockstep**: a stage that waits on a sibling must first consume
    everything queued ahead in its own copy (into a local buffer of a stated maximum), or its copy's
-   link must be deep enough to hold all of it -- state which, and why. Otherwise the copy fills, the
-   broadcast stalls, the sibling starves, and nothing moves.
+   link must be deep enough to hold all of it -- state which, why, and what each costs (a local
+   buffer of the largest job inside the stage, or a FIFO of that many words on the link). Otherwise the
+   copy fills, the broadcast stalls, the sibling starves, and nothing moves.
 7. **pysim may not show rule 6.** pysim admits a burst longer than a link's depth once the link has
    room for part of it, so a stage waiting with one long burst unread in its copy passes in pysim and
    hangs at RTL. Check the read order and the depths by reading the code, not by a passing run.
@@ -96,16 +99,18 @@ class Pipe(FreeRunMod):                         # a composite: children and link
         self.s_in, self.m_out, self.m_status = self.bcast.s_in, self.b.m_out, self.b.m_status
 
 # StageB.run_iter: its copy of the command, then ALL of its copy of the job's data (rule 6),
-# then the token from A (one per job, errors included), then the response, the data, the status.
+# then the token from A (one per job, errors included; its id checked against the command's),
+# then the response, the data, the status.
 ```
 
 ## Before you finish, check your own work
 
 - [ ] The composite has children, links and a boundary, and no body; each stage is a leaf kernel.
 - [ ] Every link has a stated depth, sized by what can queue in it.
-- [ ] Every stage emits something for every job, errors and empty results included.
+- [ ] Every stage emits something for every job, errors and empty results included; a token's id is
+      checked against the command it is paired with.
 - [ ] No stage waits on a sibling while its own broadcast copy still holds data queued ahead
-      (or that copy's link holds a whole job, stated).
+      (or that copy's link holds a whole job, stated), and the cost of the choice not taken is written down.
 - [ ] The last stage answers: one response and one status per job.
 - [ ] Each stage tested alone, then the whole; every output's burst count asserted; a passing pysim
       run is not taken as proof that rule 6 holds.
