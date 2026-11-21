@@ -40,7 +40,7 @@ memory while the lookups are broken: fix them first. Setup details: `ai_tooling/
 
 - **From an algorithm with no architecture yet** (an equation in a paper, "make this hardware"), answer
   the architecture first: the `waveflow-architecture` skill (or `systems/library.md`, the hard blocks
-  that exist and what each costs). Its answer names the blocks; each then takes the steps below.
+  that exist and what each costs). Give that answer in chat and stop; build (the steps below) only when the person asks.
 - To build an accelerator, **choose the architecture, then follow its process** before writing
   anything: `waveflow_list_frames` (the menu), then `waveflow_get_process(frame)`. If no frame fits,
   pick the closest reference example and follow the generic process (`waveflow_get_process()`).

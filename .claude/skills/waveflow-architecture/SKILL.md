@@ -10,6 +10,10 @@ experienced hardware architect says in the first minute: **where the work really
 parallelizes, what is stored and what is computed, and whether it fits** -- in a chat answer, in under
 a minute. Not documents, not code, not a survey of options.
 
+**Your first reply is this answer, then you stop** -- even when the request says "build" or
+"implement", even with no one there to answer. Do not open a frame's process, write a file or read
+an example first. Building starts only when the person, having read the answer, asks for it.
+
 ## The answer, in chat
 
 Answer in the conversation. Read at most a page or two first (`systems/library.md` for the cost of a
