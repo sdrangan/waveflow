@@ -73,6 +73,13 @@ step. If a skill is not installed, read its page instead.
 - Anything Waveflow generates is never hand-edited: change the Python source and regenerate.
 - Messages and sample bursts are serialized through their schema or the generated array utilities,
   never packed into words by hand.
-- If Waveflow cannot express something, stop and say so rather than working around it.
+- Never work around a gap: no hand-made substitute for a missing block or interface, no edit to a
+  generated file, no word packed by hand.
+- Waveflow is early and meant to grow. When the right design needs something it does not have -- a
+  block, an option, an interface, a generator feature -- do not bend the design around the gap:
+  propose the extension, saying what it is, where it would live and its parts (a bit-exact model,
+  the pysim module, the HLS body, tests, a guide page), following the closest existing block
+  (`StreamBroadcast`, `SsrFft`). Inside the Waveflow repository, build it that way; in a design of
+  your own, ask the user before changing Waveflow.
 - Python simulation needs only Python. Vitis HLS / Vivado (2025.1) are needed only for synthesis and
   RTL simulation; say so rather than skipping a step silently when they are missing.

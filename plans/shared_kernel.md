@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). No stage started.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21 (record at the end).**
 
 ## Why
 
@@ -142,3 +142,33 @@ SALSA tile) is **out of scope** here and gets its own plan once this one is buil
 - Many-to-many fabrics: `CrossBarIF` exists in pysim; whether it synthesizes between kernels is not checked
   here.
 - Replicating K automatically, or choosing between the six options automatically (DSE).
+
+## Stage 0 record (2026-11-21)
+
+The rule now reads, in `AGENTS.md` and `waveflow-start`: never work around a gap (no hand-made substitute, no
+edit to a generated file, no word packed by hand); Waveflow is early and meant to grow, so when the right design
+needs something it lacks, propose the extension (what, where, its parts, following the closest existing block),
+build it that way inside the repository, and ask the user first in a design of their own.
+
+- Changed: `AGENTS.md`; the skills `waveflow-start`, `waveflow-kernel`, `waveflow-schema`, `waveflow-system`
+  (each points back to `waveflow-start`'s rules); `waveflow/mcp/server.py` (INSTRUCTIONS);
+  `waveflow/mcp/frames/_common/process.md`; `frames/stream_inband/frame.md`. The copies in `.claude/skills/`
+  and `.agents/skills/` refreshed with `waveflow skills install --dir . --force`.
+- Added: `waveflow-architecture` step 2 and its checklist -- a block or option the best map needs is named as
+  an extension, not designed around. That is where the reluctance showed in the A/B run.
+- Not changed: `waveflow/mcp/resources/agents_block.md` (the `waveflow init` block) never carried the rule;
+  it defers to `waveflow-start`.
+- Tests: `pytest tests/mcp`, 213 passed. Two failures are pre-existing on `main` and unrelated
+  (`test_generated_code_is_excluded_by_default`, `test_generated_files_are_excluded_from_usage_by_default`:
+  they need generated build output, which a fresh checkout does not have).
+- Check: the held-out prompt rerun once with the new wording (one agent, 2026-11-21). The agent quoted the new
+  rule, and its design needed fewer extensions. It shared the FFT with **no arbiter**: the feeder is the FFT's
+  only writer and takes the loopback frames itself (option 5 in the table), and the inverse pass is the conj
+  trick on a forward FFT. The extensions it named were radix-2 stages (for n not a power of 4) and a longer
+  `SsrFft` for a zero-padded grid. It also scheduled other frames between a forward pass and its inverse, which
+  avoids the A/B run's arbiter-stall flaw. The check is weak evidence for the rule: the architecture changed
+  as well, and one run is one sample.
+- Found and fixed: `dsp/ssr_fft/parameters.md` ended "The inverse transform is not built yet", which
+  contradicts the page's own `inverse=True` section (built and tested: `tests/dsp/ssr_fft/test_hw.py`). The
+  agent read it and concluded the inverse did not exist. The sentence is removed.
+

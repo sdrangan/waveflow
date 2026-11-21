@@ -51,7 +51,10 @@ Answer these, in order, briefly:
    at the same rate. Stages that must run concurrently at different rates, or that both need one input,
    make a **composite** (`waveflow-pipeline`). Use a library kernel only where it is hard to build well
    -- an FFT (`SsrFft`), a large complex matrix product (`SystolicEngine`) -- and write simple ones
-   (element-wise, magnitude, peak search, reductions) yourself (`systems/library.md`).
+   (element-wise, magnitude, peak search, reductions) yourself (`systems/library.md`). If the best map
+   needs a block or an option Waveflow does not have yet (a stream arbiter, an FFT whose direction
+   changes per frame), name it as an extension to build -- Waveflow is early and meant to grow --
+   rather than bending the map around the gap.
 3. **What each kernel talks to**, and so its adaptors: samples from the ADC (`Rfdc`) or from a buffer in
    memory (a memory reader); results to memory (a memory writer, "done" when it echoes) or to a host
    (a queue out, an interrupt); configuration from a host (a register bank, or a queue in for commands);
@@ -87,6 +90,7 @@ Keep it to about a screen; read only what a number or a name needs.
 - [ ] Every block is named as a kernel (leaf or composite), an adaptor, a device or a memory.
 - [ ] Each kernel's interfaces are streams; whatever is not a stream is reached through an adaptor.
 - [ ] Library kernels only where they are hard to build; simple stages fused and written.
+- [ ] A missing block or option the best map needs is named as an extension, not designed around.
 - [ ] One rate check, each number with its source.
 - [ ] The frame, the closest example, the build order and the skill for each piece are named.
 - [ ] A chat answer of about a screen: no files, no code.
