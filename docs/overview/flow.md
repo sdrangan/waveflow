@@ -8,8 +8,8 @@ nav_order: 3
 # The Waveflow flow
 
 In Waveflow, everything *flows* from the underlying [Python model specification](./pymodel.md). The
-design under test (the **DUT**) is simulated at **two levels**
-([The DUT and two levels of simulation](../guide/systems/dut.md)):
+design under test (the **DUT**) is simulated at **two levels**, both checked against an untimed,
+bit-exact golden ([Waveflow Architecture](../guide/systems/index.md)):
 
 - **pysim** — a **SimPy discrete-event simulation (DES)** runs it **fast** and **bit-exact**, using a
   **calibrated, cycle-approximate** timing model, beside anything else the question needs (a host, a
@@ -19,7 +19,7 @@ design under test (the **DUT**) is simulated at **two levels**
   Vivado's simulator, with every testbench part as its C++ twin: cycle- and resource-**exact** ground
   truth.
 
-The flow, a page per step, is the guide's [Flow Overview](../guide/systems/index.md).
+The flow, a page per step, is the guide's [Flow Overview](../guide/systems/flow.md).
 
 <p align="center">
   <img src="../assets/waveflow_methodology.svg" width="820"

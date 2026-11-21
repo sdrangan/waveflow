@@ -15,22 +15,47 @@ claude     ``.claude/skills/``     Claude Code
 agents     ``.agents/skills/``     the cross-agent location (Codex and others)
 =========  ======================  ===========================================
 
+A skill that has been renamed or withdrawn is *retired* (:data:`RETIRED`).  Installing its
+replacement removes a project's copy of the retired skill -- otherwise an agent would load both --
+but only a copy that is exactly a version Waveflow shipped; an edited copy is left and reported.
+
 Whether skills help is measured in ``evaluation/skill_tests/`` (docs: Evaluation > Agent skills).
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-__all__ = ["SKILLS_DIR", "TARGETS", "list_skills", "install_skills"]
+__all__ = ["SKILLS_DIR", "TARGETS", "RETIRED", "list_skills", "install_skills"]
 
 #: The shipped skills (package data).
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 
 #: Where each kind of agent looks for a project's skills.
 TARGETS: dict[str, str] = {"claude": ".claude/skills", "agents": ".agents/skills"}
+
+#: Skills Waveflow no longer ships, each with the skill that replaces it.
+RETIRED: dict[str, str] = {
+    "waveflow-module": "waveflow-kernel",
+    "waveflow-hls-body": "waveflow-kernel-hls",
+}
+
+#: The SHA-256 (line endings normalized to LF) of every ``SKILL.md`` a retired skill shipped with.
+#: A retired skill was one file, so a folder holding exactly that file, unchanged, is Waveflow's own
+#: copy and safe to remove.
+_RETIRED_SHA256: dict[str, frozenset[str]] = {
+    "waveflow-module": frozenset({
+        "73b93ef0e274cd53f5dc2f88b57a71cd5f8c0b8007922c049a857341695868a9",
+        "7fa2190328c61250f28c19f4119b87b8291c6ab09b6b03e13b7548c125439889",
+    }),
+    "waveflow-hls-body": frozenset({
+        "c5a807d161ad92044ee5bd7bcc8dcaa62a725cb2d03de9351a62413758ae8300",
+        "ec794a65015d1a7afac695f2e325d60f9311f9680d8551757f64077f5cbd6990",
+    }),
+}
 
 _FRONT = re.compile(r"\A---\s*\n(.*?)\n---", re.DOTALL)
 
@@ -44,6 +69,19 @@ def _front_matter(skill_md: Path) -> dict[str, str]:
             if sep and not line.startswith((" ", "\t")):
                 out[key.strip()] = val.strip()
     return out
+
+
+def _skill_md_sha256(skill_md: Path) -> str:
+    text = skill_md.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(text).hexdigest()
+
+
+def _is_shipped_copy(folder: Path, name: str) -> bool:
+    """True if *folder* is exactly a shipped version of the retired skill *name*: its one file,
+    ``SKILL.md``, unchanged."""
+    files = [p for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+    return ([p.relative_to(folder).as_posix() for p in files] == ["SKILL.md"]
+            and _skill_md_sha256(folder / "SKILL.md") in _RETIRED_SHA256.get(name, frozenset()))
 
 
 def _skill_folders(root: Path = SKILLS_DIR) -> list[Path]:
@@ -74,6 +112,10 @@ def install_skills(
 
     *names* picks skills (default: all).  A skill already installed is left alone unless
     *force*, which replaces it -- so a project's edits to a skill are never overwritten silently.
+
+    Installing a skill also removes the retired skill it replaces (:data:`RETIRED`) from the same
+    target, when that copy is exactly one Waveflow shipped; an edited copy is kept and listed under
+    ``retired_kept`` for the user to delete or merge.
     """
     bad = [t for t in targets if t not in TARGETS]
     if bad:
@@ -87,8 +129,17 @@ def install_skills(
         return {"error": f"no skill(s) named {missing}", "available": sorted(available)}
 
     root = Path(directory).resolve()
-    installed, skipped = [], []
+    installed, skipped, removed, retired_kept = [], [], [], []
     for t in targets:
+        for old, new in RETIRED.items():
+            dst = root / TARGETS[t] / old
+            if new not in chosen or not dst.is_dir():
+                continue
+            if _is_shipped_copy(dst, old):
+                shutil.rmtree(dst)
+                removed.append(str(dst))
+            else:
+                retired_kept.append(str(dst))
         for n in chosen:
             dst = root / TARGETS[t] / n
             if dst.exists() and not force:
@@ -98,6 +149,14 @@ def install_skills(
                 shutil.rmtree(dst)
             shutil.copytree(available[n], dst, ignore=shutil.ignore_patterns("__pycache__"))
             installed.append(str(dst))
-    note = "already installed (pass --force to replace): " if skipped else ""
+    notes = []
+    if skipped:
+        notes.append("already installed (pass --force to replace): " + ", ".join(skipped))
+    if removed:
+        notes.append("removed retired skills: " + ", ".join(removed))
+    if retired_kept:
+        notes.append("retired skills left in place because they were edited (delete them, or merge "
+                     "your edits into " + ", ".join(sorted({RETIRED[Path(p).name] for p in retired_kept}))
+                     + "): " + ", ".join(retired_kept))
     return {"directory": str(root), "installed": installed, "skipped": skipped,
-            "note": note + ", ".join(skipped) if skipped else ""}
+            "removed": removed, "retired_kept": retired_kept, "note": "\n".join(notes)}

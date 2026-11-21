@@ -49,7 +49,7 @@ An XSI simulation runs a **DUT** and a **testbench** around it, cut from one Pyt
 ![mem_copy as a system with no crossbar. A dotted box, the HwSystem mem_copy_system(), holds everything. Inside it, a solid box is the DUT: the MemCopy kernel alone, one sub-top in a dashed box, made of three blue Vitis HLS tasks -- a Sequencer feeding a MemRStream and a MemWStream, with a data stream from the reader to the writer. Outside the DUT, in tan, the testbench: a command driver (StreamDriver) whose stream enters the Sequencer, a completion sink (StreamSink) fed by the MemWStream, and a memory (MemoryMod) answering the reader's m0_axi and the writer's m1_axi. A caption says each port leaving the DUT is answered by a testbench model: AxisMaster and AxisSlave for the driver and sink, one FlatMemory behind both m_axi groups.](./figures/kernel_cut.svg)
 
 The picture is mem_copy, the kernel-scale twin of the system picture in
-[Systems and the cut](../systems/index.md), in the same colours. At either scale the graph is an
+[Waveflow Architecture](../systems/index.md), in the same colours. At either scale the graph is an
 `HwSystem` whose `dut()` names the DUT, and everything else is testbench. mem_copy is one kernel and
 no crossbar: its kernel's four ports (two streams, two `m_axi` bundles) leave the top, and each is
 answered by a testbench model. It runs through the system flow (`mem_copy_system_build.py`) and

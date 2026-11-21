@@ -9,7 +9,7 @@ summary: "Reference for hardware modules: what a HwModule is (typed ports and a 
 
 # Modules
 
-A design is a tree of **hardware modules**. The [Flow Overview](../systems/index.md) walks a design
+A design is a tree of **hardware modules**. The [Flow Overview](../systems/flow.md) walks a design
 through the flow; these pages are the reference for the modules themselves:
 
 - [Hardware modules](modules.md) -- what a `HwModule` is, its kinds, its hooks, and the cut.

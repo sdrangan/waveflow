@@ -8,7 +8,7 @@ be picked up by an agent with no memory of that session: everything needed is he
 - **The guide's narrative is the Flow Overview**, `docs/guide/systems/` (title *Flow Overview*): one page
   per step of the flow, each walking the free-running polynomial (`examples/stream_kernel`), with steps
   up to `block_eq` and `markov`:
-  `index.md` -> `dut.md` (*The DUT and two levels of simulation*) -> `streams.md` -> `command_response.md`
+  `index.md` (*Waveflow Architecture*) -> `kernels.md` -> `devices.md` -> `flow.md` (*Flow Overview*) -> `dut.md` (*Designing the DUT*) -> `streams.md` -> `command_response.md`
   -> `hwmodule.md` (*Defining the kernel in Python and HLS*) -> `pysim.md` -> `rtl.md` ->
   `verification.md` -> `calibration.md` -> `dse.md`.
 - `docs/guide/flows/` is now the **Modules** reference (what a module is, writing one, module by module,

@@ -33,13 +33,13 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 
 | skill | covers | status |
 |---|---|---|
-| `waveflow-start` | looking things up (MCP or shell), installing, the concept pages, which skill covers which piece | done (PR #322); **needs the concept pages and the new skill table** |
+| `waveflow-start` | looking things up (MCP or shell), installing, the concept pages, which skill covers which piece | done (PR #322); concept pages and skill table added (PR #326) |
 | `waveflow-schema` | DataSchema, fields, fixed point, tagged unions, HLS serialize, array utils, header generation | done (PRs #316-#317); 51-54 of 54 both arms |
-| `waveflow-kernel` | a kernel in Python: its streams and the stream for each interface (point at Kernels' table), command-response, `run_iter`, timed phases, the harness test that asserts counts | **rename of `waveflow-module`** (PR #324; 49-52 of 52) |
-| `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, pragmas, state and reset, deadlocks | **rename of `waveflow-hls-body`** (PR #319; 43-44 of 44) |
-| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors (queues, register bank, interrupts), credit streams, BRAM, `MemoryMod`; building them in pysim (`build_mm_device`) and RTL (`render_adaptor_slot`, the "not built yet" list); the HLS top and sub-top | **to build** (was `waveflow-memory`) |
-| `waveflow-pipeline` | composite kernels: when to split, internal stream depths and widths, `StreamBroadcast` (drain your own copy), a token per job, the command travelling with the data, credit across a bus | **to build** (new) |
-| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG (`add_system_steps`, `run_dag_cli`), csynth / XSI / `compare`, asserting counts so a deadlock cannot pass | **to build** (was `system` + `verify`, merged) |
+| `waveflow-kernel` | a kernel in Python: its streams and the stream for each interface (point at Kernels' table), command-response, `run_iter`, timed phases, the harness test that asserts counts | renamed from `waveflow-module` (PR #326; 49-52 of 52) |
+| `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, pragmas, state and reset, deadlocks | renamed from `waveflow-hls-body` (PR #326; 43-44 of 44) |
+| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors (queues, register bank, interrupts), credit streams, BRAM, `MemoryMod`; building them in pysim (`build_mm_device`) and RTL (`render_adaptor_slot`, the "not built yet" list); the HLS top and sub-top | written, test and reference ready, not run blind (PR #326) |
+| `waveflow-pipeline` | composite kernels: when to split, internal stream depths and widths, `StreamBroadcast` (drain your own copy), a token per job, the command travelling with the data, credit across a bus | written, test and reference ready, not run blind (PR #326) |
+| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG (`add_system_steps`, `run_dag_cli`), csynth / XSI / `compare`, asserting counts so a deadlock cannot pass | written, test and reference ready, not run blind (PR #326) |
 
 ## Step 1: migrate the old skills (do this first)
 

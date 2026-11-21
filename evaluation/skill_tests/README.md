@@ -30,7 +30,7 @@ skill_tests/
     answers/                      linked by no spec, so never copied to an agent
       01_pulse_report.review.md   the review sheet
       ref_01/                     a reference answer: runs, generates its headers, passes its check
-  hls_body/                       the waveflow-hls-body skill
+  kernel_hls/                     the waveflow-kernel-hls skill (was waveflow-hls-body)
     01_gain_stats.md              a task spec: the kernel body only
     given_01/                     the schemas, header script and golden the agent is given (--files)
     check_body.py                 compiles a trial's body (plain g++) and compares it with the golden
@@ -38,13 +38,34 @@ skill_tests/
     answers/
       01_gain_stats.review.md
       ref_01/                     the reference body (II=1 at csynth) and the driver check_body.py uses
-  module/                         the waveflow-module skill
+  kernel/                         the waveflow-kernel skill (was waveflow-module)
     01_three_blocks.md            three blocks described by what they talk to: Python modules + tests
     check_blocks.py               runs a trial's tests; lists each module's kind, ports and mm_views
     trigger_prompts.md
     answers/
       01_three_blocks.review.md
       ref_01/                     the reference: three blocks, their harness tests, DESIGN.md
+  device/                         the waveflow-device skill
+    01_scale_offload.md           a kernel between a memory reader and writer, behind a host's queues
+    trigger_prompts.md
+    answers/
+      01_scale_offload.review.md
+      ref_01/                     the reference: messages, kernel, device, bus system, tests, DESIGN.md
+  pipeline/                       the waveflow-pipeline skill
+    01_peak_picker.md             a broadcast and two concurrent stages; the drain-first and token traps
+    trigger_prompts.md
+    answers/
+      01_peak_picker.review.md
+      ref_01/                     the reference: stages, composite, tests (one strict xfail: a pysim gap)
+  system/                         the waveflow-system skill
+    01_two_devices.md             two given devices, a memory and a host: the HwSystem, its DAG, tests
+    given_01/                     the two devices (--files); devices.py swaps in a broken one by WF_VARIANT
+    _variants.py                  the broken devices (a deadlock, a dropped word): never given
+    check_variants.py             runs a trial's tests as given, then under each variant: PASS FAIL FAIL
+    trigger_prompts.md
+    answers/
+      01_two_devices.review.md
+      ref_01/                     the reference: system, DAG (through the no-toolchain steps), tests, DESIGN.md
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)
@@ -77,10 +98,10 @@ start-up (anything there that the harness did not install is listed, so both arm
 the same set), which skill was loaded at which tool call, before or after the first write, and which
 of its files were read.
 
-A test that starts from given code (`hls_body/`: the agent writes a body against schemas and a golden
+A test that starts from given code (`kernel_hls/`: the agent writes a body against schemas and a golden
 it must not change) passes each given file with `--files`, which copies it beside the spec:
-`--files evaluation/skill_tests/hls_body/given_01/gain_msgs.py` (and `gen_headers.py`,
-`gain_model.py`).  Its reviewer also runs `hls_body/check_body.py <trial folder>`: a plain-C++
+`--files evaluation/skill_tests/kernel_hls/given_01/gain_msgs.py` (and `gen_headers.py`,
+`gain_model.py`).  Its reviewer also runs `kernel_hls/check_body.py <trial folder>`: a plain-C++
 compile of the body against the golden, no Vitis -- a correctness item on the sheet, not a pattern score.
 
 For the trigger prompts, run each with the stub spec, which only says the request is in the first

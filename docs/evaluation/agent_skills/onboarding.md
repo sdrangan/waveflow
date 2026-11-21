@@ -31,7 +31,7 @@ the project, sets three things up for that:
 | case | evidence |
 |---|---|
 | An agent with the MCP server uses it | every [blind test](../../guide/ai_tooling/blind.md) since the server was built |
-| An installed skill loads when the task matches | the skill arms of the [schema](schemas.md) and [HLS-body](hls_body.md) tests |
+| An installed skill loads when the task matches | the skill arms of the [schema](schemas.md) and [HLS-body](kernel_hls.md) tests |
 | **The `init` setup, locally**: a lab's own `AGENTS.md` with the Waveflow section appended, the skills, the MCP server | one smoke run (Sonnet 5.5, 2026-11-19): `waveflow-start` loaded at the first tool call; the agent chose the architecture through the MCP tools and read the protocol page before writing anything; it still followed the lab's own conventions |
 
 ## What is not verified, and how to test it

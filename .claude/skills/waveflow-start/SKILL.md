@@ -41,14 +41,30 @@ memory while the lookups are broken: fix them first. Setup details: `ai_tooling/
 - To build an accelerator, **choose the architecture, then follow its process** before writing
   anything: `waveflow_list_frames` (the menu), then `waveflow_get_process(frame)`. If no frame fits,
   pick the closest reference example and follow the generic process (`waveflow_get_process()`).
-- The design flow starts at the guide's *Flow Overview*, `systems/index.md`. The default protocol
-  between modules is `systems/command_response.md`.
+- Read what is being built before how: the guide's four concept pages, in order --
+  `systems/index.md` (*Waveflow Architecture*: the three levels of simulation, the layer around the
+  DUT), `systems/kernels.md` (*Kernels*: a `FreeRunMod` on streams only, leaf or composite),
+  `systems/devices.md` (*Devices and the DUT*: adaptors, devices, the HLS top and sub-top) and
+  `systems/command_response.md` (the default protocol). Then the steps: `systems/flow.md` (*Flow
+  Overview*). Every term is in `systems/glossary.md`.
 - Copy the patterns of the closest reference example rather than inventing your own;
   `waveflow_find_usage` shows a name used in real code.
-- The other `waveflow-*` skills hold the rules for particular steps (data schemas, HLS kernel
-  bodies): load the matching one before that step.
 
-## 3. Rules that hold everywhere
+## 3. Which skill covers which piece
+
+The other `waveflow-*` skills hold the rules for one piece each: load the matching one before that
+step. If a skill is not installed, read its page instead.
+
+| the piece | skill | or read |
+|---|---|---|
+| a message: a `DataSchema`, fixed point, serializing it in Python and HLS | `waveflow-schema` | `schema/index.md` |
+| a kernel in Python: its streams, the protocol, `run_iter`, its harness test | `waveflow-kernel` | `systems/kernels.md`, `systems/hwmodule.md` |
+| a leaf kernel's HLS body: loops, the lane loop, pragmas, state and reset | `waveflow-kernel-hls` | `vectorization/hls/loop_optimization.md` |
+| a device: memory readers and writers, a host's queues and registers, credit, BRAM, the HLS top | `waveflow-device` | `systems/devices.md` |
+| a composite kernel: stages, internal streams, broadcast, a token per job | `waveflow-pipeline` | `systems/streams.md` |
+| the system: `HwSystem`, the build DAG, RTL simulation, tests that count | `waveflow-system` | `systems/rtl.md`, `systems/verification.md` |
+
+## 4. Rules that hold everywhere
 
 - Anything Waveflow generates is never hand-edited: change the Python source and regenerate.
 - Messages and sample bursts are serialized through their schema or the generated array utilities,

@@ -23,7 +23,7 @@ waveflow_get_example("stream_kernel_mm", file="stream_kernel_mm.py") # PolyHost 
 waveflow_get_example("stream_kernel_mm", file="poly_kernel_host.h")  # the host's C++ twin
 ```
 
-Then `docs/guide/systems/index.md` for the order of the steps: the kernel verified alone in its
+Then `docs/guide/systems/flow.md` (*Flow Overview*) for the order of the steps: the kernel verified alone in its
 harness first, then the system.
 
 **For several kernels, a credit link or a shared memory, your reference is `markov`**: two kernels, a credit link routed

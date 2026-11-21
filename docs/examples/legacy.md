@@ -12,7 +12,7 @@ These three examples are the worked material of the **sequential (host-activated
 [Legacy flows](../guide/legacy/index.md) in the guide: one control-driven kernel -- `ap_ctrl_hs` and an
 `s_axilite` register map -- that a host launches and waits on, verified by a sequential C++ testbench
 ([`SeqTB`](../guide/comp_codegen/testbench.md)) in Vitis C-simulation and C/RTL co-simulation. New
-designs use the [system flow](../guide/systems/index.md), which the examples before this group teach.
+designs use the [system flow](../guide/systems/flow.md), which the examples before this group teach.
 
 - [Register mapped simple function](regmap/index.md) -- a host-launched kernel over an AXI-Lite register
   map: the launch protocol, a sequential testbench, csim and cosim.
