@@ -66,6 +66,14 @@ skill_tests/
     answers/
       01_two_devices.review.md
       ref_01/                     the reference: system, DAG (through the no-toolchain steps), tests, DESIGN.md
+  architecture/                   the waveflow-architecture skill
+    01_mmse_detector.md           a paper's MMSE MIMO detector and an NR cell: a plan, no code; the bottleneck,
+                                  the library blocks and the uncovered solve are the traps
+    trigger_prompts.md
+    answers/
+      01_mmse_detector.review.md  (the run is resumed at each checkpoint with a fixed answer)
+      ref_01/                     the reference: plans/ (spec, arch, eval, blocks), golden.py, price.py (every
+                                  number of eval.md from its model), test_golden.py
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)

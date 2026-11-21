@@ -7,6 +7,7 @@ index, and the reference answer to the schema skill's test must still run.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -69,7 +70,8 @@ def test_every_guide_page_a_skill_names_exists():
 
     for s in sk.list_skills()["skills"]:
         text = (sk.SKILLS_DIR / s["name"] / "SKILL.md").read_text(encoding="utf-8")
-        pages = set(re.findall(r"`([\w/]+\.md)`", text)) - {"SKILL.md"}
+        # SKILL.md, and the documents the architecture skill has the agent write, are not guide pages
+        pages = set(re.findall(r"`([\w/]+\.md)`", text)) - {"SKILL.md", "spec.md", "arch.md", "eval.md"}
         assert pages, s["name"]
         for page in pages:
             assert "error" not in waveflow_get_doc(page), f"{s['name']} names {page}"
@@ -299,3 +301,21 @@ def test_the_system_tests_reference_passes_and_catches_both_broken_devices(tmp_p
     assert r.returncode == 0, r.stdout + r.stderr
     assert "variants caught: 2 of 2; given run passes" in r.stdout, r.stdout
     assert not (work / "_variants.py").exists()
+
+
+ARCHITECTURE = REPO / "evaluation" / "skill_tests" / "architecture"
+
+
+def test_the_architecture_tests_reference_runs_and_prices_what_it_quotes(tmp_path):
+    """The architecture test's reference plan -- an MMSE detector -- has a golden whose checks hold
+    (the edge cases, the CG iteration count, the formats), and ``price.py`` still prints, from the
+    platform's models, every number ``plans/eval.md`` quotes: a model refitted or an API renamed shows
+    up here, not in a reviewer's comparison."""
+    work = tmp_path / "ref"
+    shutil.copytree(ARCHITECTURE / "answers" / "ref_01", work,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                        str(work / "test_golden.py")], cwd=work, capture_output=True, text=True,
+                       timeout=1800, env={**os.environ, "WF_REPO": str(REPO)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "4 passed" in r.stdout, r.stdout
