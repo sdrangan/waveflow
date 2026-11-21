@@ -1,0 +1,144 @@
+# Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
+
+**Status: DRAFT, not started, written 2026-11-21.**
+
+## Why
+
+Waveflow's guide and examples teach linear shapes: one kernel, a pipeline of stages, `StreamBroadcast` when
+two stages need one stream. Nothing teaches a kernel **K shared by several clients**, or a kernel whose output
+comes back to its own input. That is the shape of SALSA (`docs/overview/salsa.md`: PEs with a job queue and a
+micro-scheduler, several flows on one fabric), and of any design that keeps one expensive block busy with
+independent jobs.
+
+The evidence is an A/B run on 2026-11-21. Two fresh agents, one with only Vitis HLS knowledge and one with the
+Waveflow skills, were given a joint fractional delay / Doppler estimator. It uses one FFT for a coarse grid, the
+grid's inverse pass, and gradient refinement, across antennas that finish out of order. Both reached the same
+architecture: a scheduler, a frame-granular mux in front of the FFT, a tag FIFO beside it, credits, and a
+feedback frame. They also shared a flaw: the feedback descriptor is written before its data, so the mux commits
+early and starves the FFT. The Waveflow arm was better grounded (the measured `SsrFft` latency, the conj trick
+for the fixed direction, requantizing the feedback frame), but it:
+
+- found no merge or arbiter block (`waveflow.streams` has only `StreamBroadcast`);
+- found no rule or example for a cycle inside a composite, and called it "untested territory";
+- did not propose extending Waveflow (an arbiter, a run-time FFT direction). The rule "if Waveflow cannot
+  express something, stop and say so" reads to an agent as "do not add blocks".
+
+The delay / Doppler problem is the **held-out evaluation** for this plan (Stage 7). It must not appear in the
+guide, the examples or the skills.
+
+## The design space the guide page states
+
+The four questions for any shared K are: how commands merge (policy), where data lives (inline or by address),
+how results get back (tag or address), and what stops one client's full buffer from stalling K.
+
+| option | data | buffering | main risk | best when |
+|---|---|---|---|---|
+| 1. shared memory | by address; stream arbiter on commands, memory arbiter on data | in memory | port contention, buffer ownership | large or reused data, several readers (SALSA) |
+| 2. dedicated inline streams | per-client streams into K | deep FIFOs, or the client blocks | a full stream stalls K mid-frame | one request outstanding, nothing else to do |
+| 3. inline with credits | per-client streams, sent only with a credit | one frame per credit | the credit round trip | as 2, without the deep FIFOs |
+| 4. data resident at K | loaded once into slots; only commands with a slot id travel | slot storage at K | slot allocation, free-slot tokens | the same data used many times |
+| 5. centralized requester | clients become states in one dispatcher, K's only client | the dispatcher's | a complex, serial dispatcher | the control is naturally one thing |
+| 6. static schedule | fixed slots | minimal | wasted slots under irregular load | regular workloads |
+
+Replicating K is the baseline whenever K is small (`systems/library.md`: write simple kernels dedicated).
+
+The return path has its own rules:
+- K never blocks on a result write. Reserve the response space before issuing (end-to-end credit), or
+  guarantee the client always drains it.
+- Requests and responses travel on separate channels, so a request backlog cannot block a response
+  (message-dependent deadlock).
+- A client's request-then-wait is a poll loop, never a blocking read after a write. Vitis schedules both into
+  one state and the request is never sent (`rf/rfshotbuf/tx_internal.md`, measured 2025.1).
+- A feedback frame is announced only once it is complete (store and forward), so the arbiter never commits to
+  a frame that is still being produced.
+- A streaming unit on a cycle must flush an isolated frame without the next one pushing it out. `SsrFft` does
+  (`dsp/ssr_fft/synthesis.md`, the bubble group; `timing.md`, isolated frames measured).
+
+## Where it lives
+
+| what | where | new or changed |
+|---|---|---|
+| the rule: extend Waveflow, never work around it | `AGENTS.md:51`; `waveflow/skills/{waveflow-start,waveflow-kernel,waveflow-schema,waveflow-system}/SKILL.md`; `waveflow/mcp/server.py:26` (INSTRUCTIONS); `waveflow/mcp/frames/_common/process.md:75`; `frames/stream_inband/frame.md:37`; the `waveflow init` template (`waveflow/mcp/init_project.py`) | changed |
+| `StreamArbiter`: n framed inputs to one, whole frames, priority or round-robin, the winner's index on a side `m_sel` stream | `waveflow/streams/arbiter.py`, `src/stream_arbiter_task.h`, its build step, its RTL gate in `waveflow/streams/rtl.py`; guide `docs/guide/streams/arbiter.md` | new |
+| `StreamDemux`: one framed stream to n, routed by a side `s_sel` stream (the arbiter's, carried beside K) or by a field of the frame's header | `waveflow/streams/demux.py` and the same four parts; guide `docs/guide/streams/demux.md` | new |
+| the stream blocks' index table | `docs/guide/streams/index.md` | changed |
+| `SsrFft` direction chosen per frame | `waveflow/dsp/ssr_fft/` (an option such as `direction="runtime"` with a per-frame direction input; conjugation at the ends plus the `1/L` shift); guide `dsp/ssr_fft/parameters.md`, `interfaces.md`; `systems/library.md` row | changed |
+| credit between children of a composite | `CreditStreamIF` exists (`interface/derived/credit_stream.md`) and is routed over the bus today; Stage 1 checks it inside a composite | checked, extended if needed |
+| the concept page: "Sharing a kernel" (the table above, the return-path rules, the blocks, the example) | `docs/guide/systems/shared_kernels.md`, linked from `kernels.md`, `streams.md`, `command_response.md`, `glossary.md` (shared kernel, client, arbiter, tag, credit, slot, feedback frame) | new |
+| deadlock on a cycle | a section in the shared-kernels page; cross-linked with `plans/deadlock_teaching.md` if that page is built | new |
+| the curated example | `examples/os_filterbank/` and `docs/examples/os_filterbank/index.md` (`example_dir:` key) | new |
+| the skill | `waveflow/skills/waveflow-shared-kernel/SKILL.md`, copied to `.claude/skills/` and `.agents/skills/` | new |
+| hand-offs to the skill | the descriptions and bodies of `waveflow-architecture` (one line in the mapping steps) and `waveflow-pipeline` ("several clients, or a cycle: `waveflow-shared-kernel`") | changed |
+| a frame | `waveflow/mcp/frames/stream_shared/` (frame.md, frame.toml, process.md, prompts), reference `os_filterbank`; or a variant of `stream_pipeline` (decision D2) | new |
+
+## The example: a multi-channel overlap-save filter bank
+
+C channels, each with its own filter. Per block and channel: `FFT(block)`, then `× H_c`, then `IFFT` on the
+**same** `SsrFft`, then discard the overlap. It uses each part of the pattern once and nothing else:
+
+- **one shared unit**: the FFT, used forward and inverse by every channel;
+- **an arbiter** in front of it: new blocks from the input side, and feedback frames (the `× H_c` products)
+  with priority;
+- **tags beside it**: an `m_sel` / side tag stream carries (channel, pass) past the FFT, because `SsrFft`
+  frames are delimited by count only;
+- **resident data** (option 4): each `H_c` is loaded once into a slot beside the multiply;
+- **credits**: on feedback frames in flight, so the post stage never blocks;
+- **out-of-order results**: channels may arrive at different rates, and each answers its own command with a
+  `Resp` and a `Status` echoing its `tx_id` (`systems/command_response.md`).
+
+It has no data-dependent iteration. That stays the held-out test's novelty.
+
+Gates, as in every curated example: a bit-exact NumPy golden; each leaf alone in its harness; the composite in
+pysim with staggered channels, counts asserted (a deadlock looks like a clean finish); codegen and csynth; the
+XSI testbench with an exact cycle count and the FFT's busy fraction read at its ports. Vitis 2025.1; the
+version is named next to every number.
+
+A second, memory-based example (option 1: shared on-chip memory, a job queue and a micro-scheduler, close to a
+SALSA tile) is **out of scope** here and gets its own plan once this one is built.
+
+## Stages
+
+0. **The rule.** Reword it everywhere listed above: never work around a gap (no hand-packed words, no edits to
+   generated code, no ad-hoc substitute); when the right design needs something Waveflow lacks, propose the
+   extension: what, where, its parts (model, pysim, HLS body, tests, guide page), following an existing block.
+   In a design folder outside this repository, ask the user before changing Waveflow. Rerun the original
+   delay / Doppler chat prompt as a quick check that the agent now proposes the arbiter and the run-time
+   direction. *Independent of the rest.*
+1. **De-risk the cycle.** A stub composite: two clients, a mux, a pass-through K (then the real `SsrFft`), a
+   post stage that feeds frames back. Take it through pysim, codegen, csynth and XSI. Record what the
+   generator, the top, the testbench and the DAG do with a cycle, and fix what breaks. Check `CreditStreamIF`
+   between children. Nothing after this stage starts until the stub runs at RTL.
+2. **`StreamArbiter` and `StreamDemux`.** Each one: the model, the templated HLS body, the build step, the RTL
+   gate in its own harness, and the guide page, in the shape of `StreamBroadcast`.
+3. **`SsrFft` direction per frame.** Bit-exact against the fixed-direction builds in both directions; the
+   timing unchanged (a frame every `L/R`); the resource delta measured.
+4. **The concept page** `systems/shared_kernels.md` and its links and glossary terms.
+5. **The example** `os_filterbank`, with its gates and its doc page.
+6. **The skill and the frame.** The skill points to the page and the example and never restates them (house
+   rule, `plans/agent_skills.md`). It is checked for triggering: a prompt with a shared unit or a cycle must
+   load it, a plain pipeline prompt must not.
+7. **Evaluation on the held-out problem.** The delay / Doppler prompt as in the 2026-11-21 run, to the
+   Waveflow arm before and after (the baseline transcripts are the 2026-11-21 ones), on Sonnet 5.5 and
+   Opus 5.5 (`plans/agent_skills.md`). Score: the architecture (the six options considered, the return-path
+   rules kept, extensions proposed); then, in a design folder, whether the agent takes its design to pysim
+   with counts asserted, and to XSI on a machine with Vivado. The prompt is kept **outside the repository**,
+   so `waveflow kb` and grep cannot find it.
+
+## Decisions
+
+- **D1. Names.** `StreamArbiter` / `StreamDemux`, "shared kernel", "client", "feedback frame". Proposed; open.
+- **D2. A new frame or a `stream_pipeline` variant.** A new frame `stream_shared` makes the agent choose it
+  from the spec ("a unit used by several clients, or a stage fed back"). A variant keeps the frame list short.
+  Proposed: a new frame.
+- **D3. Where the tag travels.** Beside K on a side stream (works for any K, including count-framed units such
+  as `SsrFft`), or in-band in a header (simpler, but K must pass it through). Proposed: the side stream is the
+  block's default, in-band is an option of `StreamDemux`.
+- **D4. Arbiter policy.** Strict priority and round-robin, fixed at build time; weighted later if a design
+  needs it.
+
+## Not in this plan
+
+- The memory-based variant and the SALSA job queue and micro-scheduler (next plan).
+- Many-to-many fabrics: `CrossBarIF` exists in pysim; whether it synthesizes between kernels is not checked
+  here.
+- Replicating K automatically, or choosing between the six options automatically (DSE).
