@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: DRAFT, not started, written 2026-11-21.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). No stage started.**
 
 ## Why
 
@@ -126,15 +126,15 @@ SALSA tile) is **out of scope** here and gets its own plan once this one is buil
 
 ## Decisions
 
-- **D1. Names.** `StreamArbiter` / `StreamDemux`, "shared kernel", "client", "feedback frame". Proposed; open.
+- **D1. Names.** `StreamArbiter` / `StreamDemux`, "shared kernel", "client", "feedback frame". **Accepted.**
 - **D2. A new frame or a `stream_pipeline` variant.** A new frame `stream_shared` makes the agent choose it
   from the spec ("a unit used by several clients, or a stage fed back"). A variant keeps the frame list short.
-  Proposed: a new frame.
+  **Accepted: a new frame.**
 - **D3. Where the tag travels.** Beside K on a side stream (works for any K, including count-framed units such
-  as `SsrFft`), or in-band in a header (simpler, but K must pass it through). Proposed: the side stream is the
+  as `SsrFft`), or in-band in a header (simpler, but K must pass it through). **Accepted:** the side stream is the
   block's default, in-band is an option of `StreamDemux`.
 - **D4. Arbiter policy.** Strict priority and round-robin, fixed at build time; weighted later if a design
-  needs it.
+  needs it. **Accepted.**
 
 ## Not in this plan
 
