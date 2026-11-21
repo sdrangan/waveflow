@@ -1,6 +1,6 @@
 ---
 name: waveflow-kernel
-description: Write a Waveflow kernel -- a FreeRunMod whose interfaces are all streams (or, only when the spec says the host launches it, a HostActivated kernel) -- from the interfaces a user describes in their own words: pick the stream for each thing it talks to (another kernel, a host's queue or registers, memory), choose and state how commands and data travel, write its pysim behaviour (run_iter, one firing per message) and its harness test that asserts counts. Use whenever you design or review a kernel's ports, its protocol on them, its Python model, or the user describes what a block receives, sends, is told or tells the host.
+description: Write a Waveflow kernel -- a FreeRunMod whose interfaces are all streams (or, only when the spec says the host launches it, a HostActivated kernel) -- from the interfaces a user describes in their own words -- pick the stream for each thing it talks to (another kernel, a host's queue or registers, memory), choose and state how commands and data travel, write its pysim behaviour (run_iter, one firing per message) and its harness test that asserts counts. Use whenever you design or review a kernel's ports, its protocol on them, its Python model, or the user describes what a block receives, sends, is told or tells the host.
 ---
 
 # Waveflow kernels: from the user's interfaces to streams
