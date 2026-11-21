@@ -28,8 +28,13 @@ something else.
      clock, the full bus rate, `PF` copies of the datapath.
    - **An element per iteration**, reading a word every `PF` iterations: one element a clock, one
      copy of the datapath.
+   - **Inputs and outputs packed differently** (int16 in at 4 a word, int32 out at 2): step the loop by
+     the **output** word, `i += ZPF` at II=1, and read an input word every `XPF / ZPF` iterations
+     (`if ((i / ZPF) % (XPF / ZPF) == 0)`), indexing the input lane at `k * ZPF + t`.
    Pass the tail count, `min(PF, n - i)`, so the last word is zero-filled as in Python. Never
-   `.range()`, shift or mask a word by hand.
+   `.range()`, shift or mask a word by hand. The routine follows the stream type: `*_axi4_stream_lane`
+   on a top's boundary port (`axi4s_word`), `*_framed_stream_lane` on a composite's internal edge
+   (`framed_word`, and messages by `read_framed_stream` / `write_framed_stream`).
 3. **Pragmas on the loop that does the work.** `#pragma HLS PIPELINE II=1` on the data loop;
    `ARRAY_PARTITION ... complete` on every lane array; `UNROLL` on the loop across lanes. Size every
    array with a compile-time constant (`PF`), not with `n`.
@@ -43,6 +48,9 @@ something else.
      does not clear it. If the value must restart on reset ("since reset", "until a reset clears
      it"), add `#pragma HLS reset variable=<name>` under it. Vitis 2025.1 honours it, although csynth
      still warns "Register '<name>' is power-on initialization" (it prints that either way).
+   - **A fatal error** is `static bool halted` under `#pragma HLS reset variable=halted`, set after
+     the error status is written; every firing begins `if (halted) return;` (`stream_kernel`'s
+     `poly_kernel_task.h`). That is the HLS form of pysim's `yield self.event()`.
    - **Write-first bodies.** A task whose firing starts with a write, not a blocking read, runs during
      reset and advances its state there: begin with the blocking read of the command, or reset every
      register with `config_rtl -reset state` in the build.
@@ -57,6 +65,10 @@ something else.
    at full precision (the product of `ap_fixed<Wa, Ia>` and `ap_fixed<Wb, Ib>` is `<Wa+Wb, Ia+Ib>`, exact), then assign to the
    declared type, which rounds and saturates. No `float` / `double` in the datapath, and no casts the
    golden does not make.
+
+**Where the body lives.** A hand-written body is a header in the design's `src/` (`<kernel>_task.h`,
+a `template <int W>` function), named by the module's `kernel_task()` (`KernelTask(fn, header,
+ports, template_args=...)`); `include/` is for generated headers only.
 
 ## Which page to read before which step
 

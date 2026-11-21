@@ -48,6 +48,11 @@ x word and one y word every two iterations, using the generated `int16` / `int32
 
 ## Where the skills were unclear, wrong or missing (most important first)
 
+Fixed in the same branch: 1 (device skill: new rule 4 and a new shape), 2 (kernel and schema skills),
+3 (schema skill), 4 (kernel skill names `write(msg)`; the examples and `master.md` are not yet changed),
+5 and 7 (kernel-hls skill: where the body lives, mixed lane widths, the framed lane routines, the
+fatal-error `halted` pattern). Not fixed: 6 and 8 (code / guide changes, not skill text).
+
 1. **The device skill's shape leads to a poor HLS design** (`waveflow-device`, "The shape"). It shows
    one core kernel that sends `MemRCmd` to the reader and then reads the reply in the same firing. That
    contradicts `waveflow-kernel-hls` rule 7 ("never wait for a reply you just requested ... with a
