@@ -41,7 +41,7 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 | `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | done; blind-tested 2026-11-21 (MCP 49 / 44, skill 50 / 50 of 50 after two fixes) |
 | `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | done; blind-tested 2026-11-21 (MCP 44 / 44, skill 46 / 46 of 46 after one fix) |
 | `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | done; blind-tested 2026-11-21 (all four 48 of 48, both hidden faults caught by every run; redundant for this task) |
-| `waveflow-architecture` | the step before all the others: from an algorithm in a paper to `spec.md` (I/O, the operation, requirements, workload), `arch.md` (alternatives, existing Waveflow blocks, interfaces), `eval.md` (static II / latency / resources) and a spec per block | written 2026-11-21 (with `systems/library.md`, its test and reference); **not yet run blind** -- see [The architecture skill](#the-architecture-skill-planned-2026-11-21) |
+| `waveflow-architecture` | the step before all the others: the architecture question for an algorithm, answered in chat in under a minute (the structure that collapses the work, a block diagram, the key trade-offs, one rate and one memory check, a recommendation) | written 2026-11-21 (with `systems/library.md`); the four-document plan dropped the same day; **no test yet** |
 
 **Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
 unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
@@ -77,9 +77,8 @@ arms of device and pipeline stop at the frame's Stage 1 review and need one `--r
    them; 6, `MemStreamStep` copies other examples' bodies into a user's `include/`; 8, the smaller
    points (the generated top's `m_done` has no TLAST with `done_framed=True`; no frame for "one kernel
    plus memory"; `vecmult` misleads by its name).
-4. **The architecture skill** (below): written, with its test (`evaluation/skill_tests/architecture/`,
-   an MMSE detector) and reference; **run it blind** (four runs, resumed at each checkpoint as the
-   review sheet says), then the second and third tests (OFDM LS estimation, an LDPC decoder).
+4. **The architecture skill**: a tier-1 test -- a PRACH-style question timed to the first answer, scored
+   on the structure found, the trade-offs named and the sourced checks.
 
 ## The architecture skill (planned, 2026-11-21)
 
@@ -168,17 +167,10 @@ search` found no catalog for "matrix inverse", "LDPC decoder" or "which library 
 `docs/guide/systems/library.md` (*Library blocks and their models*) lists every reusable block in a comms
 engineer's words with the state of its models, what no block covers, how to price a point (the calls,
 the formulas), and the part's capacity; linked from the flow table, the glossary and the DSP index.
-The test is `evaluation/skill_tests/architecture/01_mmse_detector.md`; its reference's `price.py` prints
-every number of its `eval.md` from the models and `tests/mcp/test_skills.py` checks they still match.
-What the reference found, worth knowing for scoring: the apply `W·Y` is input-bound (2.94 128-bit
-words a cycle), so user count does not change it; CG on the vector unit needs 5 iterations at 8 users
-(-38 dB) and then does not fit at a filter per PRB (12 units); a direct solve is the uncovered block.
-**Revised the same day after the user's PRACH trial** (a run spent 30+ minutes on documents): the
-default is now a tier-1 chat answer in under a minute -- the structure that collapses the work, a block
-diagram, the key trade-offs (parallelize how; store or regenerate), one rate and one memory check, a
-recommendation, open questions -- and the four documents only when asked. "Library first" is dropped:
-reuse only hard blocks (FFT, systolic); simple steps get dedicated fused kernels; `VecUnit` only when
-programmability is the requirement. No A/B test for now.
+**Then the written plan was dropped** (the user, 2026-11-21): not obviously a good plan in general, and it
+slows the fast interactions agents are good at. The four-document version, and its MMSE test and
+reference (golden, `price.py`), are kept outside the repo as a student-project handout; they are in git
+history at commit e882291.
 Decided: a skill, not a frame (a frame's process starts from a chosen frame; this skill ends by naming
 one per block). Not added: a numerology table -- the skill says to derive from the standard's tables and
 cite them; the blind runs will show whether agents get NR's numbers right without one.

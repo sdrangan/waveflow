@@ -1,16 +1,16 @@
 ---
 name: waveflow-architecture
-description: Answer the architecture question for an algorithm before any Waveflow code -- from an equation in a paper or a "make this hardware" request -- in a quick chat answer by default (the structure that collapses the work, a block diagram, the key trade-offs an expert asks in the first minute, one rate check and one memory check with sourced numbers, a recommendation, two or three open questions), and the full written plan (spec.md, arch.md, eval.md, a spec per block) only when asked. Use whenever someone asks to implement, accelerate or put on an FPGA an algorithm (a detector, an estimator, a correlator, a filter, a decoder, a transform) and no architecture is decided yet, or asks how to parallelize it, what to store and what to compute, how many blocks, whether it fits or how fast it would be.
+description: Answer the architecture question for an algorithm before any Waveflow code -- from an equation in a paper or a "make this hardware" request -- in a quick chat answer (the structure that collapses the work, a block diagram, the key trade-offs an expert asks in the first minute, one rate check and one memory check with sourced numbers, a recommendation, two or three open questions). Use whenever someone asks to implement, accelerate or put on an FPGA an algorithm (a detector, an estimator, a correlator, a filter, a decoder, a transform) and no architecture is decided yet, or asks how to parallelize it, what to store and what to compute, how many blocks, whether it fits or how fast it would be.
 ---
 
-# Waveflow architecture: the first-minute answer, then a plan if asked
+# Waveflow architecture: the first-minute answer
 
 The person is often an expert in the algorithm and new to hardware. What they want first is what an
 experienced hardware architect says in the first minute: **where the work really is, how it
 parallelizes, what is stored and what is computed, and whether it fits** -- in a chat answer, in under
 a minute. Not documents, not code, not a survey of options.
 
-## Tier 1 (the default): a chat answer
+## The answer, in chat
 
 Answer in the conversation. Read at most a page or two first (`systems/library.md` for the cost of a
 hard block; nothing else unless a number needs it). No files, no golden, no checkpoints. The answer has:
@@ -32,7 +32,7 @@ hard block; nothing else unless a number needs it). No files, no golden, no chec
    write by its lane loop (one word an iteration at II = 1); a standard's numbers from its table, cited.
 5. **A recommendation** in one sentence, and **two or three open questions**, most important first.
 
-Keep it to a screen. If the person wants more, they will ask -- then go to tier 2.
+Keep it to a screen. If the person wants more, they will ask: answer that question the same way, briefly.
 
 ## Which blocks: reuse only what is hard
 
@@ -44,7 +44,7 @@ Keep it to a screen. If the person wants more, they will ask -- then go to tier 
 - **The programmable vector unit (`VecUnit`) only when programmability is the requirement** (one
   datapath must run several different programs), never as a stand-in for a simple kernel.
 
-## Rules that hold in both tiers
+## Rules
 
 - **Every number names its source**: a model or a page (`systems/library.md`), a formula, a standard's
   table, or a stated assumption. A block no model covers is "unknown -- needs a csynth probe", not a
@@ -53,29 +53,15 @@ Keep it to a screen. If the person wants more, they will ask -- then go to tier 
   the paper spends its pages on.
 - **No code** until the person has the answer and asks for it.
 
-## Tier 2 (only when asked): the written plan
+## Pages, when a number needs one
 
-When the person asks for a written plan, a spec, a full evaluation or documents, write them under
-`plans/` in their design folder, in this order, each ending with open questions:
-
-| document | holds |
-|---|---|
-| `spec.md` | inputs and outputs (type, shape, precision); the operation with edge cases and a golden model that runs; why hardware as numbers (ops a second, the CPU baseline priced by `cpu/dse.md`'s `CpuPlatform`); requirements and the workload, each with its assumption |
-| `arch.md` | two or three alternatives that differ in a real decision; the HW / SW split; blocks as kernels, adaptors and devices (`systems/kernels.md`, `systems/devices.md`); an interface table with kind, contents, width and rate (`systems/command_response.md`) |
-| `eval.md` | per alternative: ops weighted by the workload, per block II, latency and resources with sources, the bottleneck, the replication that meets the rate, the part's utilization, the csynth probes that settle each unknown |
-| `blocks/<name>.md` | per block: ports, messages, rate, II and latency budget, resources, the library block if any, its frame (`waveflow_list_frames`) |
-
-Stop for the person after `spec.md` (requirements and workload) and after `eval.md` (the choice).
-
-| step | page |
+| for | page |
 |---|---|
 | the hard blocks and how well their cost is known; the part | `systems/library.md` |
 | a kernel's II from its loop | `vectorization/hls/loop_optimization.md` |
-| resource models and their confidence | `resource_model/index.md` |
-| fixed-point formats | `schema/python/fixpoint.md` |
-| the flow the blocks then take | `systems/flow.md` |
+| the flow the blocks then take, once the person wants to build | `systems/flow.md` |
 
-## The shape of a tier-1 answer
+## The shape of an answer
 
 > **Structure.** A range-Doppler map is 256 range FFTs (one a chirp) then 1,024 Doppler FFTs a frame;
 > the corner turn between them, not the FFTs, sets the memory.
@@ -95,4 +81,4 @@ Stop for the person after `spec.md` (requirements and workload) and after `eval.
 - [ ] Two or three key trade-offs, each answered with its deciding number.
 - [ ] One rate check and one memory check, each number sourced.
 - [ ] Library blocks only for hard blocks; simple steps as dedicated, fused kernels.
-- [ ] A chat answer of about a screen, unless documents were asked for.
+- [ ] A chat answer of about a screen: no files, no code.
