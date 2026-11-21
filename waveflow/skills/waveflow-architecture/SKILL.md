@@ -1,88 +1,92 @@
 ---
 name: waveflow-architecture
-description: Answer the architecture question for an algorithm before any Waveflow code -- from an equation in a paper or a "make this hardware" request -- in a quick chat answer (the structure that collapses the work, a block diagram, the key trade-offs an expert asks in the first minute, one rate check and one memory check with sourced numbers, a recommendation, two or three open questions). Use whenever someone asks to implement, accelerate or put on an FPGA an algorithm (a detector, an estimator, a correlator, a filter, a decoder, a transform) and no architecture is decided yet, or asks how to parallelize it, what to store and what to compute, how many blocks, whether it fits or how fast it would be.
+description: The big picture of a Waveflow design, and how to map an algorithm onto it -- a system is a testbench around a DUT; the DUT is devices, memories and the interconnect (streams and a crossbar); a device is kernels plus the adaptors that join them to memory, a host's bus or the RF converters; a kernel works on streams only, a leaf or a composite of child kernels; messages are typed and command-response; golden, pysim and RTL check each other. Use whenever someone asks how they would build something in Waveflow (a receiver block, a detector, a filter, an accelerator), how a Waveflow design is organized, or what a kernel, device, adaptor or system is, before any code.
 ---
 
-# Waveflow architecture: the first-minute answer
+# Waveflow architecture: the big picture, and an algorithm mapped onto it
 
-The person is often an expert in the algorithm and new to hardware. What they want first is what an
-experienced hardware architect says in the first minute: **where the work really is, how it
-parallelizes, what is stored and what is computed, and whether it fits** -- in a chat answer, in under
-a minute. Not documents, not code, not a survey of options.
+Every other `waveflow-*` skill covers one piece. This one is the map they fit on. When someone asks
+"how would I build X in Waveflow", answer **in chat, in a minute or two**: X drawn in Waveflow's terms
+-- which kernels, which adaptors, which devices, how they are joined -- and which piece to build first
+with which skill. Then stop: build only when the person asks. Even when the request says "build", this
+answer comes first.
 
-**Your first reply is this answer, then you stop** -- even when the request says "build" or
-"implement", even with no one there to answer. Do not open a frame's process, write a file or read
-an example first. Building starts only when the person, having read the answer, asks for it.
+## The picture
 
-## The answer, in chat
+```text
+ testbench (derived: drivers, sinks, memory models, a host program and its C++ twin)
+ ┌──────────────────────────────── DUT ───────────────────────────────────────┐
+ │  device A                          device B                       memory    │
+ │  ┌──────────────────────┐ stream  ┌──────────────────────────┐   ┌───────┐  │
+ │  │ adaptor ─ kernel(s)  │────────▶│ kernel(s) ─ adaptor      │   │ RAM   │  │
+ │  └──────────┬───────────┘         └──────────────┬───────────┘   └───┬───┘  │
+ │             └──────────── crossbar (AXI-MM, an address map) ─────────┘      │
+ └─────────────────────────────────────────────────────────────────────────────┘
+```
 
-Answer in the conversation. Read at most a page or two first (`systems/library.md` for the cost of a
-hard block; nothing else unless a number needs it). No files, no golden, no checkpoints. The answer has:
+| level | what it is | page |
+|---|---|---|
+| **system** | `HwSystem(sim, dut)`: the DUT and a testbench derived around it (only what has an RTL twin); in pysim, a `Simulation` that can hold anything else too (a channel model, a processor model, traffic) | `systems/index.md` |
+| **DUT** | devices, memories (`MemoryMod`) and the interconnect: **streams** between devices, and a **crossbar** when a host or a memory is reached by address | `systems/devices.md` |
+| **device** | one or more kernels plus their **adaptors**: one sub-top in the Verilog, one IP | `systems/devices.md` |
+| **adaptor** | streams on one side, something else on the other: a memory reader / writer (`MemRStream` / `MemWStream`, `m_axi`); a slave adaptor whose views a host reaches (`QueueIn`, `QueueOut`, `RegBank`, interrupts); a credit stream's bus writer; the RF converters (`Rfdc`) | `systems/devices.md` |
+| **kernel** | a `FreeRunMod` whose interfaces are **all streams**: a **leaf** (a Python `run_iter`, one firing per message, and an HLS body) or a **composite** (child kernels joined by internal streams, a pipeline) | `systems/kernels.md` |
+| **message** | a `DataSchema`; on every stream a command carrying its size and a `tx_id`, the results headed by a response, a status per command (command-response) | `systems/command_response.md` |
+| **software** | a host program on the bus (`SwHost`, with a C++ twin for RTL), or a calibrated processor (`Processor`) for control and rare paths | `systems/rtl.md`, `cpu/index.md` |
 
-1. **The structure that collapses the work.** Before counting, look for what makes the naive count
-   wrong: shared factors (many sequences that are shifts or rotations of a few roots), a matrix computed
-   once per block and applied per sample, symmetry, sparsity, an operation that is a convolution and so
-   an FFT. Say it in one or two sentences: "the 64 preambles are cyclic shifts of N roots, so the work
-   scales with the roots, not the preambles".
-2. **A block diagram**: a few kernels in a line, as text (`in → FFT → × conj(root) → IFFT → peak →
-   out`), each with what it computes. Say what is time-shared and what is replicated.
-3. **The key trade-offs, as questions with your answer.** The two or three decisions an expert would
-   raise immediately, each with the deciding number: how to parallelize (one time-shared pipeline, or
-   `k` copies, and why), **store or regenerate** (a table in BRAM against computing it, and what else
-   that computation needs), fixed point or the precision that matters, what runs in software.
-4. **One rate check and one memory check**, each a short calculation with its source: the cycles
-   available a job at the clock against the cycles the pipeline needs; the bits to store against the
-   part's BRAM (a BRAM36 is 36 Kb). A library block's numbers from `systems/library.md`; a kernel you
-   write by its lane loop (one word an iteration at II = 1); a standard's numbers from its table, cited.
-5. **A recommendation** in one sentence, and **two or three open questions**, most important first.
+Three levels check each other: the **golden** (pure Python functions, bit-exact, untimed), **pysim**
+(the modules in Python, timed; `run_iter` calls the golden) and **RTL** (the HLS bodies, cycle by cycle,
+compared with pysim word for word). Any module can be the DUT of its own harness, so each kernel and
+device is tested alone before the whole.
 
-Keep it to a screen. If the person wants more, they will ask: answer that question the same way, briefly.
+## Mapping an algorithm onto it
 
-## Which blocks: reuse only what is hard
+Answer these, in order, briefly:
 
-- **Reuse a library block when it is hard to build well**: an FFT (`SsrFft`), a large complex matrix
-  product (`SystolicEngine`), the memory adaptors, the RF converters (`systems/library.md`).
-- **Write a dedicated kernel for simple work**: an element-wise multiply, a magnitude, a threshold, a
-  peak search, a reduction. Fuse neighbouring simple steps into one kernel. Agents write these well,
-  and a dedicated kernel is smaller and faster than a general unit.
-- **The programmable vector unit (`VecUnit`) only when programmability is the requirement** (one
-  datapath must run several different programs), never as a stand-in for a simple kernel.
+1. **The stages and where the work is.** The algorithm's steps in a line, and what collapses the work
+   (shared factors, something computed once per block and applied per sample, a convolution done by
+   FFT). One rate check (cycles available a job against cycles needed) and, if something is stored, one
+   memory check -- each number with its source.
+2. **The kernels.** Each stage a leaf kernel, or several stages fused into one when they are simple and
+   at the same rate. Stages that must run concurrently at different rates, or that both need one input,
+   make a **composite** (`waveflow-pipeline`). Use a library kernel only where it is hard to build well
+   -- an FFT (`SsrFft`), a large complex matrix product (`SystolicEngine`) -- and write simple ones
+   (element-wise, magnitude, peak search, reductions) yourself (`systems/library.md`).
+3. **What each kernel talks to**, and so its adaptors: samples from the ADC (`Rfdc`) or from a buffer in
+   memory (a memory reader); results to memory (a memory writer, "done" when it echoes) or to a host
+   (a queue out, an interrupt); configuration from a host (a register bank, or a queue in for commands);
+   another kernel (a stream). The table in `systems/kernels.md` gives the stream for each.
+4. **The devices.** Group each kernel with its adaptors; kernels with no adaptor between them can share
+   a device. Say which device is reached by a host, which reads memory, which touches the converters.
+5. **The system.** The devices, any memory, the crossbar if anything is reached by address, the host
+   or processor, and the testbench's stand-ins. Name the closest frame (`waveflow_list_frames`) and the
+   closest worked example.
+6. **The order to build it, and the skill for each piece**: the messages (`waveflow-schema`), each
+   kernel in Python and its harness test (`waveflow-kernel`), its HLS body (`waveflow-kernel-hls`), a
+   composite (`waveflow-pipeline`), a device's adaptors (`waveflow-device`), the system and its tests
+   (`waveflow-system`). Bottom-up: the golden first, each module alone, then the whole.
 
-## Rules
-
-- **Every number names its source**: a model or a page (`systems/library.md`), a formula, a standard's
-  table, or a stated assumption. A block no model covers is "unknown -- needs a csynth probe", not a
-  guess.
-- **Count after collapsing the structure**, and name the term that dominates: it is often not the step
-  the paper spends its pages on.
-- **No code** until the person has the answer and asks for it.
-
-## Pages, when a number needs one
-
-| for | page |
-|---|---|
-| the hard blocks and how well their cost is known; the part | `systems/library.md` |
-| a kernel's II from its loop | `vectorization/hls/loop_optimization.md` |
-| the flow the blocks then take, once the person wants to build | `systems/flow.md` |
+End with two or three open questions that change the map (the rate, what feeds it, who configures it).
+Keep it to about a screen; read only what a number or a name needs.
 
 ## The shape of an answer
 
-> **Structure.** A range-Doppler map is 256 range FFTs (one a chirp) then 1,024 Doppler FFTs a frame;
-> the corner turn between them, not the FFTs, sets the memory.
-> **Blocks.** `ADC → range FFT (SsrFft L=1024) → corner-turn buffer → Doppler FFT (SsrFft L=256) → |·|² → CFAR → detections`;
-> one FFT of each, time-shared.
-> **Trade-offs.** One range FFT keeps up: 256 cycles a chirp at L/R (`dsp/ssr_fft/timing.md`) against
-> 500 at a 2 µs chirp (assumed) and 250 MHz. One Doppler FFT too: 1,024 × 64 = 65,536 cycles against the
-> frame's 128,000. The corner turn holds 256 × 1,024 × 32 bits = 8.4 Mb, about 228 BRAM36 (36 Kb each),
-> 456 double-buffered of the part's 1,080: on chip is possible but heavy -- UltraRAM, or single-buffer
-> with a read-before-write order, is the question.
-> **Recommendation.** Two FFTs, the corner turn in UltraRAM, CFAR as a dedicated kernel.
-> **Open.** The chirp period; whether detections need angle (a third FFT across antennas).
+> **Stages.** Range FFT per chirp, corner turn, Doppler FFT per range bin, `|·|²`, CFAR. One FFT of each
+> keeps up: 256 cycles a chirp at `L/R` (`dsp/ssr_fft/timing.md`) against 500 available.
+> **Kernels.** `SsrFft` L=1024 and L=256 (library); `power_cfar`, a leaf kernel of mine (`|·|²` and CFAR
+> fused). The corner turn is a memory, not a kernel.
+> **Adaptors and devices.** Device 1: `Rfdc` → range FFT → memory writer (chirps into the corner-turn
+> buffer). Device 2: memory reader (by range bin) → Doppler FFT → `power_cfar` → queue out to the host,
+> an interrupt per frame. The host sets the threshold through a register bank on device 2.
+> **System.** Two devices, one memory, a crossbar, a `SwHost`; closest frame `bus_system`.
+> **Order.** Schemas; the golden; `power_cfar` alone; each device in its harness; the system.
+> **Open.** Chirp period; whether detections need angle (a third FFT across antennas).
 
 ## Before you answer, check
 
-- [ ] The structure that collapses the work is named, and the count is made after it.
-- [ ] Two or three key trade-offs, each answered with its deciding number.
-- [ ] One rate check and one memory check, each number sourced.
-- [ ] Library blocks only for hard blocks; simple steps as dedicated, fused kernels.
+- [ ] Every block is named as a kernel (leaf or composite), an adaptor, a device or a memory.
+- [ ] Each kernel's interfaces are streams; whatever is not a stream is reached through an adaptor.
+- [ ] Library kernels only where they are hard to build; simple stages fused and written.
+- [ ] One rate check, each number with its source.
+- [ ] The frame, the closest example, the build order and the skill for each piece are named.
 - [ ] A chat answer of about a screen: no files, no code.
