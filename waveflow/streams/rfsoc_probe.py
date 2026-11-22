@@ -1,6 +1,7 @@
 """rfsoc_probe.py -- the shared-kernel blocks on the RFSoC part at 250 MHz: a timing probe.
 
-The stream blocks, the ring stub and ``SsrFft(direction="runtime")`` against its fixed builds.
+The stream blocks, the ring stub, ``SsrFft(direction="runtime")`` against its fixed builds, and the
+overlap-save filter bank (``examples/os_filterbank``: one FFT shared by every channel).
 
     python -m waveflow.streams.rfsoc_probe <root>                      # generate and csynth every top
     python -m waveflow.streams.rfsoc_probe <root> --steps impl         # place and route those csynths
@@ -19,7 +20,8 @@ runs csynth, and reads, per top:
   *Timing violations* section, which lists each FSM state's chain whether or not it violates);
 * with ``--steps impl``: Vivado out-of-context synthesis, place and route of the csynth RTL through
   ``export_design -flow impl`` (the flow of ``examples/mimo_cg/hw/impl_check.py``; ``rtl_ooc`` and
-  ``system_ooc`` stop at synthesis), the achieved clock and the worst routed path.
+  ``system_ooc`` stop at synthesis), the achieved clock, the worst routed path, and the routed
+  utilization cell by cell (the hierarchical report ``export_design`` writes; :func:`hier_util`).
 
 Each probe is its own directory ``<root>/<name>``, and its result ``<root>/<name>/probe.json``; the run
 prints a table of the probes it ran (all of them in ``<root>/probe_summary.json``).
@@ -77,6 +79,9 @@ PROBES: dict[str, Probe] = {
     "arb4_w64_rr": Probe("arbiter", 4, 2, "round_robin", bitwidth=64),
     "dmx16_w128_sel": Probe("demux", 16, 2, bitwidth=128),
     "dmx4_w64_sel": Probe("demux", 4, 2, bitwidth=64),
+    # The overlap-save filter bank (plans/shared_kernel.md Stage 5): C channels on one SsrFft, the
+    # composite as its gates build it (examples/os_filterbank, already at the RFSoC target).
+    "os_filterbank": Probe("os_filterbank"),
 }
 
 
@@ -95,6 +100,12 @@ def generate(work: Path, probe: Probe) -> str:
         from waveflow.dsp.ssr_fft import rtl as fft_rtl
         return fft_rtl.generate(work, probe.length, reorder="pingpong", inverse=probe.inverse,
                                 direction=probe.direction, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
+    if probe.kind == "os_filterbank":
+        # The example's own generator: its tops already target the RFSoC at 4 ns, so the probe's build
+        # is the gates' (the bank, a front alone, post alone; the bank is csynth'd here).
+        from examples.os_filterbank import os_filterbank_build as ob
+        shutil.copytree(ob.HERE / "src", work / "src", dirs_exist_ok=True)   # the hand-written bodies
+        return ob.generate(work)[0]
     from waveflow.streams import rtl
     mod, _gate_top = rtl.make(probe.kind, probe.n, probe.bitwidth, probe.frame_bursts, probe.policy)
     return rtl.generate_for(work, mod, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
@@ -226,7 +237,34 @@ def impl_report(work: Path, top: str) -> dict | None:
         out[name] = None if m is None else (m.group(1).strip() if name == "tool" else _num(m.group(1)))
     out["timing_met"] = re.search(r"^Timing met", text, re.MULTILINE) is not None
     out["worst_path"] = _routed_path(sol)
+    hier = sol / "impl" / "verilog" / "report" / f"{top}_utilization_hierarchical_routed.rpt"
+    out["hier"] = hier_util(hier) if hier.is_file() else []
     return out
+
+
+def hier_util(rpt: Path) -> list[dict]:
+    """Vivado's ``report_utilization -hierarchical`` (the routed one ``export_design`` writes): one row a
+    cell -- its instance, its depth below the wrapper, its module and its counters (``Total LUTs``,
+    ``FFs``, ``RAMB36``, ``DSP Blocks``, ...).  A ``(name)`` row is the cell's own logic, beside its
+    children."""
+    text = rpt.read_text(encoding="utf-8", errors="replace")
+    lines = [ln for ln in text.splitlines() if ln.startswith("|")]
+    start = next((i for i, ln in enumerate(lines) if re.match(r"\|\s+Instance\s+\|\s+Module\s+\|", ln)), None)
+    if start is None:
+        return []
+    header = [c.strip() for c in lines[start].strip().strip("|").split("|")]
+    rows = []
+    for ln in lines[start + 1:]:
+        cells = ln.strip().strip("|").split("|")
+        if len(cells) != len(header):
+            continue
+        inst = cells[0].rstrip()
+        depth = (len(inst) - len(inst.lstrip(" ")) - 1) // 2
+        row = {"instance": inst.strip(), "depth": depth, "module": cells[1].strip()}
+        for name, c in zip(header[2:], cells[2:]):
+            row[name] = _num(c.strip())
+        rows.append(row)
+    return rows
 
 
 def report(work: Path, top: str) -> dict:

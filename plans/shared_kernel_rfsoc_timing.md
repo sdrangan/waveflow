@@ -3,9 +3,10 @@
 **Status: DONE 2026-11-21, on the lab machine, Vitis HLS / Vivado 2025.1.** It
 answers the item `plans/shared_kernel.md` leaves open in its Stage 2 record: "the 7.82 ns case is open ...
 the real target (250 MHz, xczu48dr) has not been tried". That plan is not edited here (another agent owns
-it); its Stage 2 record should link this page when it is next touched. Three parts: the stream blocks and
-the ring stub (below); `SsrFft` with the direction chosen per frame against its fixed builds; and
-(2026-11-22) the stream blocks' resource records and the arbiter's cost per frame. That last part found an
+it); its Stage 2 record should link this page when it is next touched. Four parts: the stream blocks and
+the ring stub (below); `SsrFft` with the direction chosen per frame against its fixed builds;
+(2026-11-22) the stream blocks' resource records and the arbiter's cost per frame; and the overlap-save
+filter bank (Stage 5), one FFT shared by three channels. That last part found an
 RTL hang in the arbiter (from 3 inputs alone, from 4 in the pair) and fixed its body. The first part's 3-input pair builds the same RTL
 with the fixed body (re-probed), so its numbers stand.
 
@@ -561,3 +562,172 @@ stand. The shared arbiter module appeared in the lone arbiter from 3 inputs, and
 - No XSI at the RFSoC clock, so the gaps are 100 MHz numbers.
 - No gap measured at 2-burst frames or at widths other than 32.
 - Out of context, as before. The routed figures include the standalone top's AXIS register slices.
+
+## The overlap-save filter bank: one FFT shared by three channels (Vitis HLS / Vivado 2025.1, xczu48dr at 4 ns)
+
+Asked by the planning session (2026-11-22), after Stage 5 (`examples/os_filterbank`, 381efe7) and Stage 6
+(ead8011) were merged into this branch. The composite: three fronts, a 4-input priority arbiter
+(feedback first), `pre`, one `SsrFft(L=64, direction="runtime")` taking each block forward and then back,
+`post` (the filter multiply, the feedback, the credits) and three demuxes. The questions: does it meet
+4 ns on the RFSoC part, what share of it is the FFT, and is the shared-kernel overhead small next to the
+FFT?
+
+**The answer.**
+
+- **It meets 4 ns.** csynth estimates 2.920 ns, exactly the 2.92 ns budget, and every loop is II = 1
+  (Vitis HLS 2025.1). After routing: 3.096 ns, WNS +0.904 ns and WHS +0.011 ns, with no failing endpoint
+  (Vivado 2025.1). The worst routed path is inside the FFT, not in the sharing logic.
+- **The FFT is about half of the bank:** 50% of the routed LUT, 49% of the FF and 60% of the DSP (Vivado
+  2025.1).
+- **The sharing overhead is not small next to one FFT at L = 64.** The arbiter, the demuxes, `pre` and the
+  links route at 3,074 LUT and 4,679 FF, no DSP. That is 49% of the FFT's LUT and 62% of its FF. With
+  `post` it is 72% and 76%, plus 16 DSP (Vivado 2025.1). Leaving out the bank's own output-port register
+  slices, which any design has, it is 38% and 45%.
+- **It is small next to what it replaces.** The FFT is shared by 3 channels x 2 passes, so the
+  alternative is 6 fixed FFTs. Sharing costs one FFT plus about half an FFT of overhead, where replicating
+  costs six.
+- **The arbiter fix leaves this composite unchanged.** Built with the old and the fixed arbiter body, the
+  bank's csynth is the same module for module (Vitis HLS 2025.1). In it the arbiter already had one `COPY`
+  pipeline per input. All six of the example's XSI gates pass on the merged branch, the two pinned
+  `LAST_STATUS` timing gates included.
+
+### How
+
+The probe gained `os_filterbank`, built by the example's own `generate` (its `src/` bodies copied). The
+example's tops already target the RFSoC at 4 ns (`gen_top`, `RFSOC4X2_PART` / `RFSOC4X2_PERIOD_NS`), so
+the probe's `.tcl` and `.cpp` for all three tops are the gates', byte for byte. That is checked here and
+kept by `tests/streams/test_rfsoc_probe.py`. The gated build is unchanged: no file under
+`examples/os_filterbank/` was edited.
+
+Run with `--only os_filterbank --steps csynth impl`. csynth took 35 s and the implementation 9 minutes
+(Vitis HLS / Vivado 2025.1). The probe now also reads the hierarchical utilization that
+`export_design` writes (`<top>_utilization_hierarchical_routed.rpt`, `rfsoc_probe.hier_util`). The
+grouping below is from the top's csynth Instance and FIFO tables, and from the routed cells under the HLS
+top.
+
+The gates, on the merged branch with the fixed arbiter (Vitis / Vivado 2025.1):
+
+- First `os_filterbank_build --through csynth`, `front_csynth` and `post_csynth` (`--synth build`). The
+  gates run with `synth="check"`.
+- `pytest tests/examples/test_os_filterbank.py -m xsi`: 6 pass. These are the bank on both scenarios,
+  a front alone, post alone, and the bank's timing, `LAST_STATUS` 821 / 1067 / 888 and 2349 / 2371 / 2424
+  cycles.
+- `pytest tests/streams/test_arbiter_demux.py -m xsi`: 4 pass.
+- The non-XSI tests of `tests/streams`, `tests/calib`, `tests/docs/test_step_docs.py` and the example:
+  402 pass.
+
+### csynth (Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns: budget 2.92 ns)
+
+The estimate is 2.920 ns. The top totals 16,193 FF, 19,225 LUT, 40 DSP and 80 BRAM_18K. Every loop is
+II = 1.
+
+| state, Vitis 2025.1 | its chain, Vitis 2025.1 |
+|---|---|
+| `post` `OUT` S2, **2.920 ns** | `y` FIFO read 1.460 -> `ans` FIFO write 1.460 |
+| `pre` `COPY` S1, **2.920 ns** | `frm` FIFO read 1.460 -> `x` FIFO write 1.460 |
+| FFT `st2` S3, 2.855 ns | the twiddle product's subtract -> two adds, as in the FFT's own build |
+| `post` `MUL` S3, 2.833 ns | the filter's 30-bit multiply |
+| FFT `st0` S4, 2.813 ns | the direction's select 0.360 -> the twiddle multiply |
+| 184-bit answer demux S2, 2.493 ns | the call into its `DROP` pipeline |
+| arbiter S1, 2.353 ns | `blk0` empty test -> the `win` selects and sparsemux -> `sel` FIFO write |
+
+The two 2.920 ns states are the FIFO-to-FIFO chain that sets the ring stub's estimate: one internal FIFO
+read and one write at 1.460 ns each on this part. The FFT's states and resources inside the bank match its
+standalone runtime build (the `SsrFft` section above): 9,165 FF against 9,168, the same 24 DSP and 6
+BRAM_18K, and `st2` 2.855 ns. Loop depths (Vitis HLS 2025.1): the FFT's 2-5, the arbiter's four `COPY`
+pipelines 2, the demuxes' `COPY` 2, post `MUL` 4, front `WRITE` 3.
+
+Two details for the flow:
+
+- **The bank's arbiter and its 32-bit demux carry plain RTL names** (`stream_arbiter_task`,
+  `stream_demux_hdr_task`). That is gap 1 of the previous section, already reached in a real composite at
+  4 inputs. `InspectSynthStep` on this bank would fail attribution there.
+- **csynth's 80 BRAM_18K become no BRAM at all after routing.** The links' 62, the fronts' 12 and the FFT's
+  6 all land in 2,297 LUTRAMs.
+
+### The FFT's share and the overhead
+
+Groups:
+
+- **FFT:** its 10 tasks and its 12 internal `fft_*` channels.
+- **links:** `blk0`-`blk2`, `fb`, `frm`, `x`, `y`, `ans`.
+- **pre and the small links:** `pre`, the third demux, and `sel`, `tag`, `dir`, `st`, `crd`,
+  `crd0`-`crd2`. Vivado's hierarchical report has no row of their own for these cells (Vivado 2025.1). Their
+  logic is in the HLS top's total but under no child, so this row is the top's total less every listed
+  child.
+
+Every column sums to the top's total. Routed:
+
+| group | routed LUT (LUTRAM), Vivado 2025.1 | routed FF, Vivado 2025.1 | DSP, Vivado 2025.1 | csynth FF / LUT / BRAM_18K, Vitis 2025.1 |
+|---|---|---|---|---|
+| **the FFT** | **6,269** (619) | **7,557** | **24** | 9,165 / 10,709 / 6 |
+| arbiter | 325 | 550 | 0 | 551 / 468 / 0 |
+| demuxes: routed, the 184-bit answer demux and one 32-bit one (the third is in the `pre` row); csynth, all three | 1,085 | 2,716 | 0 | 1,764 / 1,284 / 0 |
+| ... of which the bank's output-port register slices | 678 | 1,278 | 0 | -- |
+| links | 1,452 (1,102) | 1,226 | 0 | (all links) 1,971 / -- / 62 |
+| `pre` and the small links | 212 | 187 | 0 | `pre` 190 / 300 / 0 |
+| `post` (filter multiply, feedback, credits) | 1,426 (192) | 1,034 | 16 | 1,433 / 2,266 / 0 |
+| fronts (3) | 1,655 (384) | 2,283 | 0 | 1,119 / 2,466 / 12 |
+| the bank | 12,424 (2,297) | 15,553 | 40 | 16,193 / 19,225 / 80 |
+
+csynth's FIFO LUT (1,732) is not split by FIFO, so it is left out of the csynth column.
+
+**The FFT's share of the bank:**
+
+| | LUT | FF | DSP | LUTRAM |
+|---|---|---|---|---|
+| routed, Vivado 2025.1 | 50% | 49% | 60% | 27% |
+| csynth, Vitis HLS 2025.1 | 56% | 57% | -- | -- |
+
+In csynth the FFT also holds 7.5% of the BRAM_18K.
+
+**The overhead against the FFT** (routed, Vivado 2025.1):
+
+| overhead counted | LUT | FF | DSP |
+|---|---|---|---|
+| arbiter, demuxes, `pre` and every link | 3,074 (49%) | 4,679 (62%) | 0 |
+| the same less the bank's output-port register slices | 2,396 (38%) | 3,401 (45%) | 0 |
+| with `post`, the planning session's grouping | 4,500 (72%) | 5,713 (76%) | 16 (67%) |
+
+In csynth, the first row is 2,052 LUT (19%, before FIFO LUT) and 4,476 FF (49%) (Vitis HLS 2025.1).
+
+Where the overhead goes (routed, Vivado 2025.1):
+
+- **The 184-bit answer demux is the largest piece:** 833 LUT and 2,298 FF. 572 LUT and 1,119 FF of that are
+  the three `m_out` register slices: the bank's ports, not the sharing.
+- **Then the loop's links:** `fb` 402 LUT (its 102 x 129 bits in 296 LUTRAMs), each `blk` about 183, `frm`
+  174, `ans` 128, `y` 129.
+- **The arbiter is small:** 325 LUT and 550 FF.
+
+**Share against replicate, for this bank.** Each block goes through the FFT twice (forward, then back), so
+without sharing the bank needs two fixed FFTs per channel: six. At the standalone fixed L = 64 routed size
+(the `SsrFft` section: 6,204 LUT, 7,943 FF and 24 DSP each), that is about 37,200 LUT, 47,700 FF and 144 DSP.
+Sharing costs the one runtime FFT plus the overhead: 9,343 LUT, 12,236 FF and 24 DSP (Vivado 2025.1). That
+is without the filter multiply, which `post` has once here and each channel would have once.
+
+So the overhead is about half an FFT, and it replaces five. Two limits on reading this:
+
+- **It is resources only.** Whether one FFT keeps up with every channel's two passes is the throughput
+  question that the pinned `LAST_STATUS` cycles and the arbiter's cost per frame (previous section) answer
+  for this workload.
+- **It is one size.** At larger L the FFT grows faster than the arbiter and the demuxes, which depend on
+  width and port count. But the loop's links grow with the frame (`fb` holds C x CR frames of L/R + 1
+  words). The overhead's share at L = 1024 is not measured.
+
+### Post-route (Vivado 2025.1, out of context, xczu48dr-ffvg1517-2-e at 4 ns)
+
+| CP post-synth, Vivado 2025.1 | CP routed, Vivado 2025.1 | WNS / WHS, Vivado 2025.1 | LUT (LUTRAM) / FF / SRL, Vivado 2025.1 | DSP / BRAM, Vivado 2025.1 | worst routed path, Vivado 2025.1 |
+|---|---|---|---|---|---|
+| 2.434 ns | 3.096 ns | **+0.904** / +0.011 ns | 12,424 (2,297) / 15,553 / 126 | 40 / 0 | FFT `st1`: a register -> through the DSP48E2 (pre-adder, multiplier, ALU) to its ALU output; 5 levels, 50% route |
+
+Timing is met, with no failing endpoint for setup or hold. The worst path is the FFT's own, with about the
+standalone runtime build's slack (+0.962 ns at L = 64, routed alone). None of the sharing logic is near it:
+csynth's two 2.920 ns FIFO-to-FIFO states are not the routed critical path, as for the ring stub.
+
+### Not done (the filter bank)
+
+- Only L = 64 and C = 3, the example's own build. No other size was built.
+- Out of context: no I/O timing. The bank's ports carry AXIS register slices that a larger design might
+  not keep (they are counted above, inside the demuxes, fronts and `post`).
+- The six fixed FFTs of the replicated alternative are the standalone builds' numbers, not a built
+  replicated bank.

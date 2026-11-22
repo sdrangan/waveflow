@@ -108,3 +108,41 @@ def test_pysim_arbiter_spends_one_cycle_between_frames():
     for n, policy in ((2, "priority"), (4, "round_robin")):
         g = pysim_gaps(n, policy)
         assert g["frames"] == 12 * n and set(g["gaps"]) == {1}
+
+
+def test_the_filterbank_probe_builds_the_gates_tops(tmp_path):
+    """``examples/os_filterbank``'s tops already target the RFSoC at 4 ns: the probe builds the gates'
+    own, byte for byte (``tests/examples/test_os_filterbank.py``)."""
+    from examples.os_filterbank import os_filterbank_build as ob
+
+    gate = ob.generate(tmp_path / "gate")
+    top = rfsoc_probe.generate(tmp_path / "probe", rfsoc_probe.PROBES["os_filterbank"])
+    assert top == gate[0] == "os_filterbank"
+    for name in gate:
+        for rel in (f"gen/{name}.tcl", f"gen/{name}.cpp"):
+            assert (tmp_path / "probe" / rel).read_text() == (tmp_path / "gate" / rel).read_text()
+    assert (tmp_path / "probe" / "src" / "os_post_task.h").is_file()
+
+
+_HIER = """\
+| Design State : Routed
++----------------+---------------+------------+---------+-----+--------+------------+
+|    Instance    |     Module    | Total LUTs | LUTRAMs | FFs | RAMB36 | DSP Blocks |
++----------------+---------------+------------+---------+-----+--------+------------+
+| bd_0_wrapper   |         (top) |        120 |      16 |  90 |      1 |          2 |
+|   inst         |     bd_0_top  |        120 |      16 |  90 |      1 |          2 |
+|     (inst)     |     bd_0_top  |          4 |       0 |   2 |      0 |          0 |
+|     fb_U       |   bd_0_fifo   |         36 |      16 |  28 |      1 |          0 |
+|     post_U0    |   bd_0_post   |         80 |       0 |  60 |      0 |          2 |
++----------------+---------------+------------+---------+-----+--------+------------+
+"""
+
+
+def test_the_hierarchical_utilization_parser(tmp_path):
+    rpt = tmp_path / "h.rpt"
+    rpt.write_text(_HIER)
+    rows = rfsoc_probe.hier_util(rpt)
+    assert [(r["instance"], r["depth"]) for r in rows] == [
+        ("bd_0_wrapper", 0), ("inst", 1), ("(inst)", 2), ("fb_U", 2), ("post_U0", 2)]
+    assert (rows[3]["Total LUTs"], rows[3]["LUTRAMs"], rows[3]["FFs"], rows[3]["RAMB36"]) == (36, 16, 28, 1)
+    assert rows[4]["DSP Blocks"] == 2 and rows[4]["module"] == "bd_0_post"
