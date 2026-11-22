@@ -262,8 +262,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: shared SsrFft -- a front alone, post alone, the bank on two scenarios, and the bank's timing on both
 #: (tests/examples/test_os_filterbank.py).
 #: 278 + 1 -> 279 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes): StreamFramer in its harness
-#: (tests/streams/test_framer.py).
-WANT_XSI_GATES = 279
+#: (tests/streams/test_framer.py).  279 + 1 -> 280: the ring stub's `late` scenario, its first job
+#: delayed -- the XSI AxisMaster's start_gap_cycles (tests/examples/test_ring_stub.py).
+WANT_XSI_GATES = 280
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

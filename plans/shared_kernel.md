@@ -611,7 +611,8 @@ What the build run found, fixed in the framework:
    unit's throughput (overlap receive and send; a framer and a demux split the feedback from the
    answers), and the loop-depth rule with its check; the harness page states `gap_before`.
 
-Pending a machine with Vitis 2025.1 / Vivado: `pytest tests/streams/test_framer.py -m xsi`, and an XSI
-run with a first-burst gap set (`start_gap_cycles`) to check the `AxisMaster` change, for example the
-ring stub with a delayed first job.
+Pending a machine with Vitis 2025.1 / Vivado: `pytest tests/streams/test_framer.py -m xsi` (the framer),
+`pytest tests/examples/test_ring_stub.py -m xsi` (its new `late` scenario delays the first job by 300
+cycles: the `AxisMaster`'s `start_gap_cycles`), and, since `xsi_bfm.h` changed, a full `pytest -m xsi`
+to confirm no other gate moved (`WANT_XSI_GATES` is now 280).
 

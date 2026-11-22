@@ -6,6 +6,7 @@
     python -m examples.ring_stub.ring_stub_build --through inc_compare    # K alone, at RTL
     python -m examples.ring_stub.ring_stub_build --through post_compare   # Post alone, at RTL
     python -m examples.ring_stub.ring_stub_build --through long_compare   # the composite, 40 jobs
+    python -m examples.ring_stub.ring_stub_build --through late_compare   # the first job arriving late
 
 The three bodies are hand-written (``src/``); everything else is generated: the schemas' C++ (framed, for
 the internal FIFOs), the UInt64 lane routines, and three free-running tops -- the composite (with its
@@ -102,6 +103,8 @@ def build_dag(work_dir=WORK_DIR) -> BuildDag:
     add_system_steps(dag, harness(RingStub, workload="test", n_cycles=20000), work_dir=work_dir, top=TOP)
     add_system_steps(dag, harness(RingStub, workload="long", n_cycles=60000), work_dir=work_dir, top=TOP,
                      prefix="long_")
+    add_system_steps(dag, harness(RingStub, workload="late", n_cycles=20000), work_dir=work_dir, top=TOP,
+                     prefix="late_")
     add_system_steps(dag, harness(Inc, workload="test"), work_dir=work_dir, top=INC_TOP, prefix="inc_")
     add_system_steps(dag, harness(Post, workload="test"), work_dir=work_dir, top=POST_TOP, prefix="post_")
     return dag

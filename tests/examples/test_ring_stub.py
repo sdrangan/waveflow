@@ -42,12 +42,12 @@ def _assert_golden(sysm):
             np.testing.assert_array_equal(g, np.asarray(w, dtype=np.uint64))
 
 
-@pytest.mark.parametrize("kind", ["test", "long"])
+@pytest.mark.parametrize("kind", ["test", "long", "late"])
 def test_the_composite_matches_the_golden(kind):
     sysm = harness(RingStub, workload=kind)
     sysm.run()
     _assert_golden(sysm)
-    assert len(_bursts(sysm, "m_status")) == len(jobs(kind))      # every job answered
+    assert len(_bursts(sysm, "m_status")) == len(jobs("test" if kind == "late" else kind))  # every job
 
 
 @pytest.mark.parametrize("cls", [Inc, Post], ids=["k", "post"])
@@ -95,9 +95,10 @@ def dag():
 @pytest.mark.parametrize("prefix,top,outs", [
     ("", TOP, ["m_out", "m_status"]),
     ("long_", TOP, ["m_out", "m_status"]),
+    ("late_", TOP, ["m_out", "m_status"]),
     ("inc_", INC_TOP, ["m_out"]),
     ("post_", POST_TOP, ["m_crd", "m_fb", "m_out", "m_status"]),
-], ids=["composite", "long", "k", "post"])
+], ids=["composite", "long", "late", "k", "post"])
 def test_rtl_recordings_match_pysim(dag, prefix, top, outs):
     """THE gates: K alone, Post alone, and the composite with its cycle on both scenarios -- every
     recording at RTL equal to pysim's, word for word and TLAST for TLAST."""

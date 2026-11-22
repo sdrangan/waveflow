@@ -145,12 +145,20 @@ def jobs(kind: str = "test") -> list[tuple[int, np.ndarray]]:
     return out
 
 
-def stimulus(js) -> list[StreamBurst]:
+def stimulus(js, gaps: dict[int, int] | None = None) -> list[StreamBurst]:
+    """The input stream: per job, its ``Job`` header then its words.  *gaps* maps a job's index to the
+    idle cycles before its header (``StreamBurst.gap_before``): the ``late`` scenario."""
+    gaps = gaps or {}
     out = []
-    for tx, x in js:
-        out.append(StreamBurst(_hdr(Job(tx_id=tx, n=len(x))), True))
+    for i, (tx, x) in enumerate(js):
+        out.append(StreamBurst(_hdr(Job(tx_id=tx, n=len(x))), True, gap_before=int(gaps.get(i, 0))))
         out.append(StreamBurst(np.asarray(x, dtype=np.uint64), True))
     return out
+
+
+#: The ``late`` scenario: the test jobs, the first arriving 300 cycles after the start and the fifth 200
+#: cycles after the fourth -- so the RTL driver's start gap (``start_gap_cycles``) is exercised.
+LATE_GAPS = {0: 300, 4: 200}
 
 
 def expected(js) -> dict[str, list[np.ndarray]]:
@@ -363,7 +371,9 @@ class RingStub(FreeRunMod):
         self.m_status = self.post.m_status
 
     def workload(self, kind: str = "test") -> dict:
+        if kind == "late":
+            return {"s_in": stimulus(jobs("test"), LATE_GAPS)}
         return {"s_in": stimulus(jobs(kind))}
 
     def golden(self, kind: str = "test") -> dict:
-        return expected(jobs(kind))
+        return expected(jobs("test" if kind == "late" else kind))
