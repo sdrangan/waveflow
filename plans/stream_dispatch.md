@@ -4,8 +4,9 @@
 2025.1: the four pool gates pass, 48 resource records filed, the cost per job measured at RTL. Stage 6
 DONE: every probed top meets 250 MHz on xczu48dr. Stage 7 DONE: the decision cycles in pysim, opt-in on the
 platform, exact for each block alone; in a pool still 7-17% long, and its first-free assignment still
-pysim's (open questions 5 and 6, for the user). Stage 5, the curated example, not started: it waits for the
-user (the hand-off's Step 6).**
+pysim's. Open questions 5-7 DECIDED by the user 2026-11-22: **Stage 8, word against burst, is the next
+task -- see *Stage 8* below; a fresh lab session starts there.** Stage 5, the curated example, not started:
+it waits for the user (the hand-off's Step 6).**
 
 ## Why
 
@@ -98,6 +99,7 @@ s_in --> [ StreamDispatch ]--m_out_1--> worker 1 --+--> [ StreamArbiter ] --m_ou
 | 5 | a curated example: jobs of data-dependent length on M workers with their own HLS body, results tagged by `tx_id`, against the same work on one worker | pysim, RTL, an exact cycle count |
 | 6 | the RFSoC probe (250 MHz on `xczu48dr`), as the arbiter's | timing and resources recorded |
 | 7 | the decision cycles in pysim (open question 1, decided; *Stage 7* below) | pysim's idle cycles between jobs equal the RTL's at every calibrated point -- DONE; the pool's assignment as the RTL's -- not met (open question 6) |
+| 8 | word against burst: both blocks commit on a begun burst (open question 6, decided; *Stage 8* below) | the pool's first-free assignment as the RTL's; the tables recalibrated; rule 2's stall shown in pysim |
 
 ## Progress log
 
@@ -265,17 +267,61 @@ progress row "7"; what is left is open questions 5-7.
    word types Vitis 2025.1 spelled other than predicted (`framed_word` for `framed_word_32`, in the pool and
    the arbiter-demux pair) by its `<body>_<template args>` prefix, the one instance with it. The prediction
    in `composite_gen._vitis_type_name` is unchanged; it is right for markov's chain core.
-5. **The decision cost inside a composite** (Stage 7). The table is each block alone, every port a
+5. **DECIDED 2026-11-22 (the user): no general fix now.** A design that needs the decision cost exact inside
+   a composite calibrates it in context, by tracing that composite. **The decision cost inside a composite** (Stage 7). The table is each block alone, every port a
    top-level AXI-Stream port; inside the pool the dispatcher's credit firing costs 2 to 4 cycles less, so
    the timed pool runs 7-17% long. Options: calibrate in context -- the pool, traced, gives a job gap with
    one credit between (`G + K`), not `G` and `K` apart, so the credit firing's in-pool cost would be taken
    as the pool's gap less the alone `G`; or a composite bench putting each block's ports on internal FIFOs;
    or a context feature in the basis (which ports are at the top). For the user: which, if any.
-6. **Word against burst** (Stage 7). The RTL blocks commit to a frame on its first word; pysim moves a
+6. **DECIDED 2026-11-22 (the user): build the fix -- Stage 8 below.** **Word against burst** (Stage 7). The RTL blocks commit to a frame on its first word; pysim moves a
    burst whole, so in a pool the arbiter's credit comes back later in pysim than at RTL, and first-free
    picks other workers (RTL: every job to worker 0 at one credit). No delay fixes it. pysim has the
    mechanism (`begin_read(pending_ok=True)`, a writer's begun bursts, `plans/pipelined_ops.md`): both
    blocks would commit on a begun burst and copy as its words arrive -- a change to their pysim semantics,
    which would also let pysim show rule 2's stall (a job announced before it is all there). For the user.
-7. **Width and frame** (Stage 7). At 128 bits with 2-burst frames every gap is a cycle longer than the
+7. **DECIDED 2026-11-22 (the user): no extension now.** A design calibrates at its own width and frame. **Width and frame** (Stage 7). At 128 bits with 2-burst frames every gap is a cycle longer than the
    32-bit, 1-burst table's; not yet told apart (width or bursts), and not in the basis.
+
+## Stage 8: word against burst -- the next task (for a lab machine with Vitis / Vivado 2025.1)
+
+**For the agent picking this up:** a fresh session. Read this plan whole first (D1-D6, the rules, Stage 7
+and its progress-log row, the open questions), then `waveflow/streams/timing.py`, `waveflow/streams/arbiter.py`,
+`waveflow/streams/dispatch.py`, `waveflow/hw/interface.py`'s `wait_any` and `begin_read`, and
+`plans/pipelined_ops.md`. Work on `ccr-62d70dbe-679k63` (pull first); commit and push after each step.
+
+**The problem** (open question 6). The RTL blocks commit to a frame on its first word and copy as the words
+arrive, so in a pool the arbiter returns a worker's credit during the copy. pysim moves a burst whole: a block
+sees a burst only once delivered (`wait_any`: "A burst whose transfer has only begun does not count"), so the
+credit comes back later by about one burst. At one credit a worker, first-free at RTL sends every job to worker
+0; pysim, timed or not, spreads them 20 / 20. No delay fixes it.
+
+**Why it matters:** `plans/dse_matrix_sched.md` (Sections 5-7) puts a pool of CG units behind `StreamDispatch`
+with a deadline. With one credit a worker, a late credit adds about one result burst (hundreds of words) to
+every job's idle gap -- a few percent of a ~3,400-cycle job, where the deadline decides. Until this lands that
+study uses at least 2 credits a worker.
+
+**What to build:**
+1. `StreamArbiter` and `StreamDispatch` commit on a **begun** burst and copy its words as they arrive -- the
+   mechanism already in pysim (`begin_read(pending_ok=True)`, a writer's begun bursts, `plans/pipelined_ops.md`).
+   These two blocks need a way to wait on a begun burst. Keep TLAST counting, frames whole, D1-D6 unchanged.
+2. **Always on**, timed or untimed: it is fidelity, not an option.
+3. **Recalibrate the decision tables** (`python -m waveflow.calib.fixtures.stream_blocks`): their residual is
+   rtl - pysim, so they move with pysim's semantics. Same platform, 4 ns, Vitis / xsim 2025.1; converge as before.
+
+**Stop and ask the user:**
+- if any existing gate's recorded number moves (os_filterbank's timing gates, ring_stub, the pair, the pool,
+  anything with an exact cycle count): report before and after for each, before re-recording anything;
+- before any change to `waveflow/hw/interface.py` beyond adding a way to wait on a begun burst: describe it.
+
+**Done when:**
+- the pool at one credit, 250 MHz (`dispatch_timing --pool-fidelity`): first-free's assignment matches the RTL's;
+  report each worker's count (RTL against pysim) and the pool's end cycle (RTL against timed pysim, against
+  Stage 7's 7-17% long);
+- a test shows rule 2's stall in pysim: a job announced before it is all there stalls the block, as at RTL;
+- pysim's speed holds: the pool's wall time at 8 and 512 words a job (Stage 7: 3.7 / 3.8 ms);
+- every existing test and the stream XSI gates pass; `WANT_XSI_GATES` with a dated note if gates are added;
+- a progress-log row, the status line, `docs/guide/streams/dispatch.md` and `arbiter.md` (the word-against-burst
+  caveat removed or restated), `plans/dse_matrix_sched.md` precondition 2 (the 2-credit rule lifted if met);
+  committed and pushed. Then stop and report.
+
