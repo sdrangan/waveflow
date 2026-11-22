@@ -1,9 +1,10 @@
 # Plan: why os_filterbank's pysim runs 17-27% short of its RTL, and a gate so it cannot drift again
 
 **Status: ACCEPTED 2026-11-22 (the user), for a lab machine with Vitis / Vivado 2025.1. Steps 1-3 DONE
-2026-11-22 (`examples/os_filterbank/fidelity.py`; the record is Section 5). Step 4 STOPPED for the user: the
-cause of 92-103% of the gap is `SsrFft`'s model (its interval after a gap), which this plan says to ask about
-before changing.**
+2026-11-22 (`examples/os_filterbank/fidelity.py`; the record is Section 5). Cause A's fix APPROVED by the user
+2026-11-22, rule first (Section 6): confirmed exact and deterministic at `L = 64, 256, 1024` (the last
+transposer commutator sets it), but at `L = 16` the intervals SPREAD (an arrival-phase jitter, no throughput
+lost) -- so, as the approval says, STOPPED before modelling, for the user.**
 Written by the cloud planning session from `plans/stream_dispatch.md` Stage 8's record (commits `4552413`,
 `03a9b4f`). Branch `ccr-62d70dbe-679k63`; pull first, commit and push after each step.
 
@@ -132,6 +133,7 @@ recorded number moves.
 | 2026-11-22 | 1 | `examples/os_filterbank/fidelity.py` (lab machine, Vitis / xsim 2025.1; the bank's system flow traced in `work/osfb_fidelity/`). Reproduces Section 1: RTL 1,067 / 2,424 (each channel's last status 821 / 1,067 / 888 and 2,349 / 2,371 / 2,424, as `test_rtl_timing_is_exact` pins); untimed pysim 885 / 1,766; the arbiter timed 901 / 1,800. |
 | 2026-11-22 | 2 | `fidelity.py --timeline`: a CSV per backend and scenario, a row a frame and link (`ch, tx_id, blk, npass, link, first, last`, write-side beats), every link of the bank and its outputs; the same 246 (`test`) and 664 (`long`) frame-links at RTL, untimed and timed pysim, each once. RTL beats are put on the recordings' origin: the waveform runs 15 cycles ahead on every output port, both scenarios. Tooling gaps met (worked around in the script, not the framework; Section 5). |
 | 2026-11-22 | 3 | `fidelity.py --attribute`: the gap along the RTL's critical path, every hop charged to a cause; the causes sum to the gap exactly (166 and 624 with the arbiter timed, 182 and 658 untimed). **Cause A, `SsrFft`'s interval after a gap, is 92-103% of it**: `SsrFft` alone at RTL, frames a gap `g` apart, runs a frame every 16 cycles at `g = 0` and every **32** at every `g` from 1 to 16 (40 at 24) -- `max(2L/R, L/R + g)` -- where its pysim runs `L/R + g`; the same with a fixed direction (`fidelity.py --fft-gaps runtime fixed`; every frame bit-exact). In the bank `pre` leaves a cycle or more between frames, so the RTL's FFT runs at 32 throughout: 72 frames x 32 plus the fill is the `long` scenario's 2,424. Section 5 has the table and the rest (B-H, each under 25%). **Stopped before Step 4**: cause A's fix is in `SsrFft`'s model. |
+| 2026-11-22 | 4 (A, rule first) | The user approved cause A's fix, the rule confirmed first (Section 6). `fidelity.py --fft-gaps 64 16 256 1024` (`SsrFft` alone, constant and random gaps, a traced run; Vitis / xsim 2025.1; every frame bit-exact): **exact and deterministic at `L = 64, 256, 1024`** -- every constant gap and 23 of 23 random intervals follow `max(2L/R, L/R + g)` -- set by the last transposer commutator (`tp1`, `tp2`, `tp3`). **At `L = 16` the intervals spread**: 16 of 23 random intervals, off by -4 to -1; there the FFT loses no throughput (its intervals sum to `L/R + g`, which today's pysim matches in total) but each frame's latency moves 40-43 cycles with the gaps before and after it, an arrival-phase effect. **Stopped before modelling**, as the approval says, for the user (proposal in Section 6). Two open questions noted (Section 7). |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -195,3 +197,59 @@ after a few cycles' decision.
   net ending `_U<k>_<channel>_<role>`.
 - `waveflow.utils.vcd.split_framed_word` unpacks only whole-64-bit payloads, so a framed 184-bit channel
   (`ans`) has no burst view; its beats are split by count (`Resp` + 12 words a frame).
+
+## 6. Cause A: the rule, confirmed first (2026-11-22, lab machine, Vitis / xsim 2025.1)
+
+The user approved the fix with three conditions: confirm the rule at `L = 16, 256, 1024`; check it is
+deterministic with random per-frame gaps (if the intervals spread, report before modelling); trace which task
+sets it. `python -m examples.os_filterbank.fidelity --fft-gaps 64 16 256 1024`: `SsrFft` alone, ping-pong,
+runtime direction, its own system flow (`ssr_fft.rtl`), every frame of every run bit-exact; results in
+`work/osfb_fidelity/fft_rule_L<L>_runtime.json`.
+
+**Constant gaps** (12 frames; the RTL's interval against `max(2L/R, L/R + g)`, `L/R` at `g = 0`):
+
+| L | gaps measured | rule holds | pysim today |
+|---|---|---|---|
+| 16 | 0, 1, 2, 3, 4, 6, 8 | at 0, 4, 6, 8; **not at 1-3**: intervals alternate 4 and 8 (8, 8, 8, 4 at 3) | `L/R + g` |
+| 64 | 0, 1, 2, 4, 8, 15, 16, 24, 32 | every gap | `L/R + g` |
+| 256 | 0, 1, 2, 4, 32, 63, 64, 96, 128 | every gap | `L/R + g` |
+| 1024 | 0, 1, 2, 4, 128, 255, 256, 384, 512 | every gap | `L/R + g` |
+
+**Random gaps** (24 frames; a third of the gaps 0, the rest uniform in 1 .. `2L/R`), frame by frame:
+
+| L | rule, interval by interval | rule, total of 23 | pysim today (`L/R + g`), total |
+|---|---|---|---|
+| 16 | exact on 16 of 23; off by -4, -2, -1 | +17 over the RTL's 156 | **156: exact**; per interval within 3 |
+| 64 | exact on 23 of 23 | exact (636) | -47 (up to 14 an interval) |
+| 256 | exact on 23 of 23 | exact (2,198) | -262 (up to 59) |
+| 1024 | exact on 23 of 23 | exact (9,587) | -1,288 (up to 222) |
+
+**Which task** (`fft_tasks`: a traced run, frames 1 cycle apart): at `L = 64, 256, 1024` it is the **last
+transposer commutator**, `tp{S-2}` (`tp1`, `tp2`, `tp3`; block size `L/16`): its input stream is full and
+each frame on it spans `2L/R - L/16` cycles (28, 112, 448), while its output and every stream after it carry
+each frame as `L/R` consecutive words, exactly `2L/R` apart. The streams before it stretch less (`tp0`:
+28 / 124 / 508; `in_reg` 31 / 127 / 511), all full.
+
+**`L = 16` is different** (there the last transposer commutator is also the first, `tp0`, block size 1): the
+FFT never stalls its input (every frame accepted in 4 cycles) and loses no throughput -- its intervals sum to
+`L/R + g` exactly -- but each frame's latency is 40 to 43 cycles, depending on the gaps before *and after* it
+(a frame after a 1-cycle gap takes 43 when the next comes 3-6 cycles later, 40 when the next follows back to
+back): an arrival-phase effect, like `VitisFft`'s vendor core (`docs/guide/vitis_l1/fft/timing.md`). So no
+single exact rule covers every length.
+
+**For the user, before modelling** (the approval's condition): the measured picture suggests applying the rule
+on the last transposer commutator where its block size `L/16` is 4 or more (`L >= 64`, exact on every
+frame measured), and leaving `L = 16` as today (exact in total; within 3 cycles a frame, stated as its
+error), rather than a mean with an error for every length. `L = 4096` is not measured (a long csynth).
+
+## 7. Open questions for the user
+
+1. **`SsrFft`'s half-rate interval after a gap is a real throughput loss in its HLS**, not only a pysim
+   error (`tp1` at `L = 64`, Section 5). A shared FFT rarely gets its frames back to back -- in os_filterbank
+   `pre` always leaves a cycle -- so at RTL it runs at half its rate there. Worth fixing in the HLS
+   separately from this plan (the pysim would then model the fixed hardware). The user's call.
+2. **The os_filterbank page's claim that `post` is why the FFT is under half busy** (`docs/examples/
+   os_filterbank/index.md`, "the FFT is busy under half the time, and `post` is why") should be re-checked
+   against cause A. A first look (Step 3): on the RTL's critical path the binding hop is the FFT's own
+   32-cycle rhythm (71 of 149 hops on `long`), and `post` averages about 31 cycles a frame (about 43 on a
+   forward pass, about 20 on an inverse), under the FFT's 32. Not yet re-measured as the page would need.

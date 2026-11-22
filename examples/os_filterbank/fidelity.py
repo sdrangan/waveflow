@@ -543,35 +543,122 @@ def print_attribution(a: dict) -> None:
 # --- cause A's evidence: SsrFft alone, frames a gap apart -------------------------------------------------------
 
 
-def fft_gaps(direction: str = "runtime", gaps=(0, 1, 2, 3, 4, 8, 12, 16, 24), n_frames: int = 12) -> dict:
-    """``SsrFft`` alone at the bank's configuration (``L = 64``, ping-pong; *direction*), its input frames
-    *g* cycles apart: each frame's interval at RTL (XSI, the FFT's own system flow: ``ssr_fft.rtl``) and in
-    pysim, every frame checked bit-exact.  Vitis / xsim; ``work/osfb_fidelity/fft_gaps_<direction>``."""
+FFT_DIRS = (0, 1, 1, 0, 1)
+
+
+def gap_rule(nw: int, g: int) -> int:
+    """The interval the RTL keeps after an input gap of *g* cycles (cause A): ``L/R`` back to back,
+    else ``max(2L/R, L/R + g)``."""
+    return nw if g == 0 else max(2 * nw, nw + g)
+
+
+def _fft_root(length: int, direction: str) -> Path:
+    return WORK / f"fft_L{length}_{direction}"
+
+
+def _fft_run(length: int, direction: str, gaps: list[int], *, synth: bool = False, trace: bool = False,
+             pysim: bool = True) -> dict:
+    """One RTL run of ``SsrFft`` alone (ping-pong, *direction*), input frames separated by *gaps*: each
+    frame's RTL output interval, input span and bits; pysim's intervals on the same gaps."""
     from waveflow.dsp.ssr_fft import rtl as fft_rtl
     from waveflow.dsp.ssr_fft.testbench import pysim_frame_cycles, run_pysim
 
-    dirs = (0, 1, 1, 0, 1)
-    root = WORK / f"fft_gaps_{direction}"
+    root = _fft_root(length, direction)
     root.mkdir(parents=True, exist_ok=True)
+    n = len(gaps) + 1
+    fft_rtl.generate(root, length, n_frames=n, burst_gaps=gaps, reorder="pingpong", direction=direction,
+                     dirs=FFT_DIRS)
+    if synth:
+        fft_rtl.synth(root)
+    fft_rtl.run_xsi(root, trace=trace)
+    ok = fft_rtl.check_bits(root, length, n, dirs=list(FFT_DIRS) if direction == "runtime" else None)
+    ft = fft_rtl.frame_times(root, length)
+    out = {"bits_exact": bool(all(ok) and len(ok) == n),
+           "rtl_interval": [int(x) for x in np.diff([f["done"] for f in ft])],
+           "rtl_input_span": [f["last_in"] - f["in"] + 1 for f in ft]}
+    if pysim:
+        tb = run_pysim(root / "pysim", length=length, n_frames=n, burst_gaps=gaps, reorder="pingpong",
+                       direction=direction, dirs=list(FFT_DIRS))
+        out["pysim_interval"] = [int(x) for x in np.diff([round(x) for x in pysim_frame_cycles(tb)])]
+    return out
+
+
+def fft_gaps(length: int = 64, direction: str = "runtime", gaps=None, n_frames: int = 12) -> dict:
+    """``SsrFft`` alone at the bank's configuration but for *length* (ping-pong, *direction*), its input
+    frames *g* cycles apart, for each *g* of *gaps* (by default 0 to ``2L/R`` and past it): each frame's
+    interval at RTL (XSI, the FFT's own system flow: ``ssr_fft.rtl``) and in pysim, every frame checked
+    bit-exact, and whether the RTL's intervals are :func:`gap_rule`'s.  Vitis / xsim."""
+    nw = length // 4
+    gaps = sorted(set(gaps if gaps is not None else (0, 1, 2, 4, nw // 2, nw - 1, nw, nw + nw // 2, 2 * nw)))
     out = {}
     for i, g in enumerate(gaps):
-        bg = [int(g)] * (n_frames - 1)
-        fft_rtl.generate(root, fb.L, n_frames=n_frames, burst_gaps=bg, reorder="pingpong", direction=direction,
-                         dirs=dirs)
-        if i == 0:
-            fft_rtl.synth(root)
-        fft_rtl.run_xsi(root)
-        ok = fft_rtl.check_bits(root, fb.L, n_frames, dirs=list(dirs) if direction == "runtime" else None)
-        ft = fft_rtl.frame_times(root, fb.L)
-        tb = run_pysim(root / "pysim", length=fb.L, n_frames=n_frames, burst_gaps=bg, reorder="pingpong",
-                       direction=direction, dirs=list(dirs))
-        p = [round(x) for x in pysim_frame_cycles(tb)]
-        out[int(g)] = {"bits_exact": bool(all(ok) and len(ok) == n_frames),
-                       "rtl_interval": sorted({int(x) for x in np.diff([f["done"] for f in ft])}),
-                       "rtl_input_span": sorted({f["last_in"] - f["in"] + 1 for f in ft[1:]}),
-                       "pysim_interval": sorted({int(x) for x in np.diff(p)})}
-        print(f"gap {g:3d}: RTL interval {out[int(g)]['rtl_interval']}, pysim {out[int(g)]['pysim_interval']}, "
-              f"RTL input frame over {out[int(g)]['rtl_input_span']} cycles, bit-exact {out[int(g)]['bits_exact']}")
+        r = _fft_run(length, direction, [int(g)] * (n_frames - 1), synth=(i == 0))
+        r["rule"] = gap_rule(nw, int(g))
+        r["rule_holds"] = all(x == r["rule"] for x in r["rtl_interval"])
+        out[int(g)] = r
+        print(f"L {length:4d} gap {g:4d}: RTL interval {sorted(set(r['rtl_interval']))}, rule {r['rule']} "
+              f"({'holds' if r['rule_holds'] else 'FAILS'}), pysim {sorted(set(r['pysim_interval']))}, "
+              f"bit-exact {r['bits_exact']}", flush=True)
+    return out
+
+
+def fft_random(length: int = 64, direction: str = "runtime", n_frames: int = 24, seed: int = 0) -> dict:
+    """Random per-frame gaps from 0 to ``2L/R`` -- a third of them 0, so back-to-back frames follow gapped
+    ones -- and, frame by frame, the RTL's interval against :func:`gap_rule`: exact, or how it spreads."""
+    nw = length // 4
+    rng = np.random.default_rng(1000 + length + seed)
+    gaps = [0 if rng.random() < 1 / 3 else int(rng.integers(1, 2 * nw + 1)) for _ in range(n_frames - 1)]
+    r = _fft_run(length, direction, gaps, pysim=False)
+    rule = [gap_rule(nw, g) for g in gaps]
+    off = [m - p for m, p in zip(r["rtl_interval"], rule)]
+    r.update(gaps=gaps, rule=rule, off=off, exact=all(x == 0 for x in off))
+    print(f"L {length:4d} random gaps ({n_frames} frames): rule exact on {sum(x == 0 for x in off)} of "
+          f"{len(off)} intervals; RTL - rule seen {sorted(set(off))}; bit-exact {r['bits_exact']}", flush=True)
+    return r
+
+
+def fft_tasks(length: int = 64, direction: str = "runtime", gap: int = 1, n_frames: int = 8) -> dict:
+    """A traced run of ``SsrFft`` alone, frames *gap* apart: for each internal stream, each frame's write
+    span and the cycles from one frame's first word to the next's, and the most words it held.  The task
+    setting the rhythm is the first whose output frames are compact (``L/R`` cycles) at the ``2L/R``
+    cadence while its input stream is full."""
+    import json as _json
+
+    from vcdvcd import VCDVCD  # type: ignore[import-untyped]
+
+    from waveflow.build.composite_gen import composite_top_spec
+    from waveflow.dsp.ssr_fft import rtl as fft_rtl
+    from waveflow.utils.trace import load_trace
+
+    _fft_run(length, direction, [int(gap)] * (n_frames - 1), trace=True, pysim=False)
+    root = _fft_root(length, direction)
+    scen = _json.loads((root / fft_rtl.SCENARIO_JSON).read_text(encoding="utf-8"))
+    dut = fft_rtl.SsrFftSystem(**scen).tb.dut
+    widths = {name: int(ep.bitwidth) for name, ep in dut.boundary}
+    spec = composite_top_spec(dut, width=next(iter(widths.values())), port_widths=widths)
+    manifest = spec.trace_manifest()
+    (vcd,) = sorted((root / fft_rtl.SYSTEM_DIR / fft_rtl.SYSTEM_TOP).glob("*_trace.vcd"))
+    first = manifest["channels"][0]
+    net = first["write"]["full_n"]
+    names = [s for s in VCDVCD(str(vcd), only_sigs=True).signals if s.endswith("." + net)]
+    bt = load_trace(manifest, vcd, scope=names[0].rsplit(".", 1)[0])
+    nw = length // 4
+    out = {}
+    for c in manifest["channels"]:
+        if c["kind"] == "sob":
+            continue
+        w = bt.fifo_beats(c["id"], "write").astype(int)
+        r = bt.fifo_beats(c["id"], "read").astype(int)
+        k = 1 if c["width"] <= 8 else nw            # a direction word a frame, else a frame of words
+        fr = [(int(w[i]), int(w[i + k - 1])) for i in range(0, len(w) - k + 1, k)]
+        occ = max((int(np.searchsorted(w, x, side="right") - np.searchsorted(r, x, side="right")) for x in w),
+                  default=0)
+        out[c["id"]] = {"producer": c["producer"], "consumer": c["consumer"],
+                        "span": sorted({b - a + 1 for a, b in fr[1:]}),
+                        "period": sorted({fr[i + 1][0] - fr[i][0] for i in range(len(fr) - 1)}),
+                        "max_held": occ}
+        print(f"L {length:4d} gap {gap}: {c['id']:10s} span {out[c['id']]['span']} period "
+              f"{out[c['id']]['period']} held <= {occ}  ({c['producer']} -> {c['consumer']})", flush=True)
     return out
 
 
@@ -584,13 +671,18 @@ def main(argv=None) -> int:
     ap.add_argument("--rtl", action="store_true", help="run the traced RTL first (Vitis / xsim)")
     ap.add_argument("--timeline", action="store_true", help="write the per-frame timelines (Step 2)")
     ap.add_argument("--attribute", action="store_true", help="attribute the end-cycle gap (Step 3)")
-    ap.add_argument("--fft-gaps", nargs="*", metavar="DIRECTION",
-                    help="only SsrFft alone, frames a gap apart (cause A; Vitis / xsim): runtime and/or fixed")
+    ap.add_argument("--fft-gaps", nargs="*", type=int, metavar="L",
+                    help="only SsrFft alone (cause A; Vitis / xsim): at each L, frames a constant gap apart, "
+                         "random gaps frame by frame, and a traced run's per-task rhythm")
+    ap.add_argument("--direction", default="runtime", choices=("runtime", "fixed"))
     a = ap.parse_args(argv)
     if a.fft_gaps is not None:
-        res = {d: fft_gaps(d) for d in (a.fft_gaps or ["runtime"])}
         WORK.mkdir(parents=True, exist_ok=True)
-        (WORK / "fft_gaps.json").write_text(json.dumps(res, indent=1) + "\n", encoding="utf-8")
+        for length in a.fft_gaps or [fb.L]:
+            res = {"gaps": fft_gaps(length, a.direction), "random": fft_random(length, a.direction),
+                   "tasks": fft_tasks(length, a.direction)}
+            (WORK / f"fft_rule_L{length}_{a.direction}.json").write_text(json.dumps(res, indent=1) + "\n",
+                                                                       encoding="utf-8")
         return 0
     if a.rtl:
         run_rtl(a.kind)
