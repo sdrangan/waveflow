@@ -1,6 +1,6 @@
 # Plan: Agentic Architecture Exploration by Composition (dse_arch)
 
-**Status: DRAFT for discussion, written 2026-11-05.** Follows `plans/dse_cg.md` and reuses its service, ledger,
+**Status: DRAFT for discussion, written 2026-11-05. STALE as of 2026-11-22:** see `plans/dse_matrix_sched.md` Section 11 D for what to fix (retired primitives, missing blocks, V1/V2), and that plan for the first concrete study, which supersedes E0/E1 here. Follows `plans/dse_cg.md` and reuses its service, ledger,
 identity, budget and submit machinery. Takes up the architecture exploration that
 `plans/paper_cg_dse_vision.md` scoped out ("The fixed architecture"), and the agent split builds on
 `plans/multi_agent_flows.md` ("Encapsulation, for agents", "The device as the unit"). Nothing here is built yet.
