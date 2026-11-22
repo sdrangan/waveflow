@@ -134,7 +134,15 @@ def test_run_vitis_hls_result_runtime_error(monkeypatch, tmp_path):
     }
 
 
-def test_subprocess_result_passed(monkeypatch, tmp_path):
+@pytest.fixture
+def vivado_named(monkeypatch):
+    """An environment that already names its Vivado, so _tool_env has nothing to add for the XSI
+    runner (_xsi_runner_vars) -- what the tests below assume, on a machine whose detection finds one
+    or not."""
+    monkeypatch.setenv("VIV", "/opt/Xilinx/Vivado")
+
+
+def test_subprocess_result_passed(monkeypatch, tmp_path, vivado_named):
     expected = subprocess.CompletedProcess(
         args=["echo", "hello"],
         returncode=0,
@@ -163,7 +171,7 @@ def test_subprocess_result_passed(monkeypatch, tmp_path):
     }
 
 
-def test_subprocess_result_writes_report_and_forces_capture(monkeypatch, tmp_path):
+def test_subprocess_result_writes_report_and_forces_capture(monkeypatch, tmp_path, vivado_named):
     expected = subprocess.CompletedProcess(
         args=["echo", "hello"],
         returncode=0,
@@ -196,7 +204,7 @@ def test_subprocess_result_writes_report_and_forces_capture(monkeypatch, tmp_pat
     assert "stdout\nok\n" in content
 
 
-def test_run_vitis_hls_uses_shared_command_builder(monkeypatch, tmp_path):
+def test_run_vitis_hls_uses_shared_command_builder(monkeypatch, tmp_path, vivado_named):
     expected = subprocess.CompletedProcess(
         args=["echo", "hello"],
         returncode=0,
@@ -298,7 +306,7 @@ def test_tool_env_drops_msystem_on_windows(monkeypatch):
     assert "MSYSTEM" not in env and env["STAGE"] == "cosim"
 
 
-def test_tool_env_inherits_unchanged_when_nothing_to_do(monkeypatch):
+def test_tool_env_inherits_unchanged_when_nothing_to_do(monkeypatch, vivado_named):
     monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
     monkeypatch.delenv("MSYSTEM", raising=False)
     assert toolchain._tool_env(None) is None
@@ -343,6 +351,81 @@ def test_run_xsi_launches_without_msystem(monkeypatch, tmp_path):
 
     trace_steps.run_xsi(["run.bat"], cwd=tmp_path, capture_output=True, text=True)
     assert seen["env"] is not None and "MSYSTEM" not in seen["env"]
+
+
+def _fake_vivado(root: Path) -> Path:
+    """A Vivado install tree as run.sh checks it: ``bin/vivado`` and an executable ``bin/xelab``."""
+    (root / "bin").mkdir(parents=True)
+    for name in ("vivado", "xelab"):
+        (root / "bin" / name).write_text("#!/bin/sh\n")
+        (root / "bin" / name).chmod(0o755)
+    return root / "bin" / "vivado"
+
+
+@pytest.fixture
+def linux_without_vivado_on_path(monkeypatch, tmp_path):
+    """Linux, nothing naming Vivado in the environment or on PATH, and Waveflow's detection finding
+    one in a standard root: the lab machine's setup, where run.sh used to stop at "cannot locate
+    Vivado" although every -m xsi gate's find_vivado_path() check had passed."""
+    for var in ("VIV", "XILINX_VIVADO"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    real_which = shutil.which
+    monkeypatch.setattr(toolchain.shutil, "which",
+                        lambda name, *a, **k: None if name == "vivado" else real_which(name, *a, **k))
+    exe = _fake_vivado(tmp_path / "2025.1" / "Vivado")
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: str(exe))
+    return exe.parent.parent
+
+
+def test_the_xsi_runner_is_given_the_vivado_waveflow_found(linux_without_vivado_on_path, monkeypatch):
+    """run.sh finds Vivado only through VIV, XILINX_VIVADO or PATH; _tool_env hands it the one
+    find_vivado_path() found, so an XSI run works wherever the gates' own prerequisite check does."""
+    from waveflow.build import trace_steps
+
+    root = linux_without_vivado_on_path
+    assert toolchain._tool_env(None)["VIV"] == str(root)
+    assert toolchain._tool_env({"STAGE": "x"})["VIV"] == str(root)
+    assert toolchain._tool_env({"VIV": "/mine"})["VIV"] == "/mine"           # the caller's own wins
+
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="XSI_EXITCODE=0", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    trace_steps.run_xsi(["bash", "run.sh"], cwd=root, capture_output=True, text=True)
+    assert seen["env"]["VIV"] == str(root)
+
+
+@pytest.mark.parametrize("named", ["VIV", "XILINX_VIVADO", "PATH"])
+def test_an_environment_that_names_a_vivado_is_left_alone(linux_without_vivado_on_path, monkeypatch,
+                                                          tmp_path, named):
+    """Only the case run.sh would fail in is filled: a VIV, an XILINX_VIVADO or a vivado on PATH
+    already names the install it uses, and _tool_env adds nothing (None: inherit unchanged)."""
+    if named == "PATH":
+        monkeypatch.setattr(toolchain.shutil, "which", lambda name, *a, **k: "/opt/v/bin/vivado")
+    else:
+        monkeypatch.setenv(named, str(tmp_path / "other"))
+    assert toolchain._xsi_runner_vars() == {}
+    assert toolchain._tool_env(None) is None
+
+
+def test_no_vivado_found_or_not_an_install_adds_nothing(linux_without_vivado_on_path, monkeypatch, tmp_path):
+    """Nothing detected, or a hit without bin/xelab: run.sh's own error still says what is missing."""
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: None)
+    assert toolchain._xsi_runner_vars() == {}
+    (tmp_path / "bare" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(toolchain, "find_vivado_path",
+                        lambda top_dir=None: str(tmp_path / "bare" / "bin" / "vivado"))
+    assert toolchain._xsi_runner_vars() == {}
+
+
+def test_windows_runner_needs_no_viv(linux_without_vivado_on_path, monkeypatch):
+    """run.bat names its own Vivado path; nothing is added on Windows."""
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    assert toolchain._xsi_runner_vars() == {}
 
 
 # Get the directory where this test file lives

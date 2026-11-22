@@ -266,7 +266,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: delayed -- the XSI AxisMaster's start_gap_cycles (tests/examples/test_ring_stub.py).  280 + 1 -> 281:
 #: the arbiter-demux pair at 4 inputs on the long workload, the case the arbiter hung on before its
 #: copy_frame was INLINE (tests/streams/test_arbiter_demux.py; plans/shared_kernel_rfsoc_timing.md).
-WANT_XSI_GATES = 281
+#: 281 + 1 -> 282 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes at RTL): the late scenario's
+#: timing pinned -- its last status at cycle 1231, its first word accepted after the 300-cycle start gap
+#: (tests/examples/test_ring_stub.py::test_rtl_loop_timing_is_exact[late]).
+WANT_XSI_GATES = 282
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

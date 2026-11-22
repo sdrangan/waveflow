@@ -616,6 +616,63 @@ Pending a machine with Vitis 2025.1 / Vivado: `pytest tests/streams/test_framer.
 cycles: the `AxisMaster`'s `start_gap_cycles`), and, since `xsi_bfm.h` changed, a full `pytest -m xsi`
 to confirm no other gate moved (`WANT_XSI_GATES` is now 280).
 
+### At RTL (2026-11-22, Vitis HLS / Vivado 2025.1, the lab machine, Linux)
+
+Branch `claude/stage7-fixes-rtl` from `main` at 36192451. Every number below is Vitis HLS / xsim 2025.1;
+the ring stub's part is the generator's default, xc7z020 at 100 MHz.
+
+**The three gate files:** `pytest tests/streams/test_framer.py tests/examples/test_ring_stub.py
+tests/streams/test_arbiter_demux.py -m xsi`: **13 passed, 0 skipped** (60 s, csynth cached).
+
+- **`StreamFramer`** (32 bits, `frame_words` 16): RTL equal to pysim, TLAST for TLAST: 64 words in 4
+  frames, the last at cycle 67 (Vitis 2025.1).
+- **The 4-input arbiter-demux pair, long workload, priority** (the case that hung before `copy_frame`
+  was INLINE): every output equal to pysim, 96 words in 12 frames on each of `m_out_0..3`, the last at
+  cycles 162, 318, 474 and 630 (Vitis 2025.1). No hang.
+- **The ring stub's `late` scenario** (jobs 0 and 4 late by 300 and 200 cycles): recordings equal to
+  pysim (206 `m_out`, 10 `m_status`). The generated harness sets `s_in_if.start_gap_cycles = 300` and
+  the 200 in `burst_gaps`. At the driver, the first `s_in` word is accepted at **cycle 301** (the
+  `test` scenario's at cycle 2): TVALID low for exactly the 300 cycles. Job 4's header waits 201 cycles
+  after the word before it. **The last status leaves at cycle 1231** (Vitis 2025.1); the statuses at
+  345, 501, 647, 659, 993, 1033, 1051, 1187, 1221, 1231. Stable: the full run below re-elaborated and
+  re-simulated it from an empty work directory and gave 1231 and 301 again. Both are now pinned in
+  `test_rtl_loop_timing_is_exact[late]` (`WANT_XSI_GATES` 281 -> 282). The `test` and `long` pins
+  (934, 6282) did not move.
+
+**A framework fix the gates needed: the Linux XSI runner did not get the Vivado Waveflow found.**
+On this machine nothing is on PATH. Every gate's `find_vivado_path()` check passed, then `run.sh`
+stopped at "cannot locate Vivado": it looks only at `VIV`, `XILINX_VIVADO` and PATH. All 13 failed this
+way before any RTL ran (earlier lab runs exported `VIV` by hand). `_tool_env`
+(`waveflow/toolchain/toolchain.py`) now adds `VIV` from `find_vivado_path()` when none of the three
+names a Vivado (`_xsi_runner_vars`), so an environment that names one is untouched. Windows is
+unchanged: `run.bat` names its own path. Tests are in `tests/toolchain/test_toolchain.py` (given, left
+alone, nothing found, Windows). Four existing tests there assumed `_tool_env` had nothing to add and
+now say so (`vivado_named`). The two gates that launched the runner with `subprocess.run`
+(`tests/examples/test_xsi_bfm.py`, `test_rt_sounder_xsi.py`) now go through `run_xsi`. Not changed:
+the quarantined `tests/linalg/legacy/_*unit_bench.py`, `examples/mimo_cg/hw/build.py`, and the hand-run
+`examples/interleaver/measure_compute_spans.py` and `examples/dse_cg/grid.py`, which still need `VIV`
+or a `vivado` on PATH. The install guide's Linux paragraph says so. Every run here, the full one
+included, had nothing exported.
+
+**The full `pytest -m xsi`: not a full run.** 2026-11-22, 44 min, no `VIV` set: 265 collected (282
+with the 17 quarantined), **60 passed, 24 failed, 144 errors, 38 skipped**.
+- **Every one of the 60 that reached RTL passed, every pinned cycle count unchanged:** the ring stub
+  (8), `os_filterbank` (6), the arbiter-demux pair and demux (5), the framer, broadcast (2), SSR FFT
+  (12), the systolic engine (4), vecunit (7), simdcore (2), the AXI crossbar and mm adaptors (7),
+  `rf_shot_*_abs` (4), `test_markov_units`, `test_robustness_xsi`. So the `xsi_bfm.h` change is inert at
+  `start_gap_cycles = 0` on everything that ran.
+- **Every failure, error and skip is a missing prerequisite, not a gate that ran and got a wrong
+  answer.** This checkout has no build products for most examples: no csynth RTL (markov, mm_fir,
+  mem_copy, mem_r_stream / mem_w_stream, bram_access, block_eq, interleaver_inband, rf_pass_through,
+  rf_relayout, stream_kernel_mm, vitis_fft), no generated `include/` (rf_shot_tx / rx, rf_blk_delay,
+  rf_repeat_play, rf_samp_buf_tx / rx, fir_block, state_toy), no `examples/ltbf_cg_mem_dse/data/drops`,
+  no `examples/mem_copy/results/mem_copy_timing.json`. Plus one `claude_agent_sdk` import skip.
+- **Still pending:** the full run on a checkout with those products. On 2026-11-05 this machine
+  passed 232 of 233 with `pytest -m vitis` run first (`plans/calib_2025_1.md` Stage 1). Here, rebuild
+  first (`pytest -m vitis`, each example's build through csynth, the ltbf drops), then `pytest -m xsi`.
+  Expect a few hours of Vitis on the shared machine. Until then, the BFM's inertness is shown on 60 of
+  the 265 gates.
+
 ## Docs pass and the resource sweep (2026-11-22)
 
 **The resource sweep** was run by the lab machine (`plans/shared_kernel_rfsoc_timing.md`, *Sharing against
