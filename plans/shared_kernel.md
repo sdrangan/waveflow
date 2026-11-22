@@ -616,3 +616,35 @@ Pending a machine with Vitis 2025.1 / Vivado: `pytest tests/streams/test_framer.
 cycles: the `AxisMaster`'s `start_gap_cycles`), and, since `xsi_bfm.h` changed, a full `pytest -m xsi`
 to confirm no other gate moved (`WANT_XSI_GATES` is now 280).
 
+## Docs pass and the resource sweep (2026-11-22)
+
+**The resource sweep** was run by the lab machine (`plans/shared_kernel_rfsoc_timing.md`, *Sharing against
+replicating*, merged here): 48 csynth records for `StreamArbiter` and `StreamDemux` at 2 and 4 ports,
+32/64/128 bits, 1-2 bursts, both policies and routes, filed in the packaged `xczu48dr_250mhz_vitis2025_1`
+(lookup `EXACT`); post-route spot checks to 16 ports x 128 bits, all meeting 4 ns; the arbiter's idle
+cycles between frames at RTL (3-8 by `n_in`, pysim 1); and an **RTL hang in the arbiter**, from 3 inputs
+alone and 4 in the pair, fixed with `#pragma HLS INLINE` on `copy_frame` (one shared copy module hung once
+input 0 ran dry). Also the filter bank on the RFSoC: WNS +0.904 ns routed; the FFT is half the bank; the
+sharing logic is about half an FFT and replaces five.
+
+**The docs pass:** the arbiter page (the INLINE fix and why, its cost a frame with the advice to feed long
+frames, its resources), the demux page (its resources), the shared-kernels page (the RFSoC lessons, and
+sharing against replicating in numbers), the filter bank's page (post-route, and the FFT's share and the
+overhead), `systems/library.md` (rows for `StreamArbiter`, `StreamDemux`, `StreamFramer`). The RFSoC
+timing tables from the first probe were added to the arbiter, demux and SSR FFT pages earlier (221f4c7).
+
+**A gate added:** the arbiter-demux pair at 4 inputs on the long workload, the case that hung
+(`tests/streams/test_arbiter_demux.py`, `WANT_XSI_GATES` 281). Not run here.
+
+**Proposed, not built** (from the lab's record):
+1. **Resource attribution from 8 ports up.** Vitis names those tasks' RTL plainly (`stream_arbiter_task`),
+   so `InspectSynthStep` finds no row; the filter bank's 4-input arbiter already has a plain name. Fix in
+   `waveflow/calib/synth_report.py` `_classify`: fall back to the bare function name when exactly one row
+   has it, and give helper rows (`write_boundary_word_*`) to it. Then re-run the sweep at 8 and 16.
+2. **Fitting across a body choice.** `policy` and `route` are `build_fields`, not `HwParam`s, so a fit
+   cannot tell their records apart. Record `build_fields` in the module identity and the corpus.
+3. **The arbiter's decision cost in pysim**, a timing model through `timed_delay`, calibrated at the
+   platform's clock (the 100 MHz gaps are likely a cycle short at 4 ns).
+4. **`#pragma HLS INLINE` in `streamutils::write_boundary_word`**, which Vitis stops inlining from 8 ports,
+   deepening every copy pipeline. It touches every kernel, so it needs a full `-m xsi` re-run first.
+

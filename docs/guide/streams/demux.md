@@ -85,6 +85,23 @@ On the RFSoC at 250 MHz (xczu48dr-ffvg1517-2-e, 4 ns; Vitis HLS / Vivado 2025.1,
 and routes slower than the other: a csynth estimate well under budget does not rank the routed result
 (`plans/shared_kernel_rfsoc_timing.md`).
 
+## Its resources
+
+Records for 2 and 4 outputs -- 32, 64 and 128 bits, 1- and 2-burst frames, both routes -- are filed in the
+packaged platform `xczu48dr_250mhz_vitis2025_1` (csynth at 4 ns, Vitis HLS 2025.1; rebuilt by
+`python -m waveflow.streams.calib demux`). No DSP, no BRAM:
+
+| outputs, route | LUT at 32 / 64 / 128 bits, 1 burst | FF at 32 / 64 / 128 bits, 1 burst |
+|---|---|---|
+| 2, by `s_sel` | 447 / 479 / 543 | 213 / 397 / 765 |
+| 2, by header | 397 / 397 / 397 | 219 / 403 / 771 |
+| 4, by `s_sel` | 520 / 552 / 616 | 293 / 557 / 1,085 |
+| 4, by header | 470 / 470 / 470 | 303 / 567 / 1,095 |
+
+A second burst a frame adds about 20 LUT. Routing by header costs the fewest LUT, and they do not grow
+with the width. At 16 outputs and 128 bits, by `s_sel`, it routes at 2,835 LUT and 7,436 FF (a standalone
+top, its port slices included) and meets 4 ns with WNS +0.874 ns (Vivado 2025.1).
+
 ## See also
 
 - [`StreamArbiter`](arbiter.md) -- the merging half, and the pair's gate.

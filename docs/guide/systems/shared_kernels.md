@@ -204,6 +204,21 @@ those runs hold beyond these blocks:
 - **csynth counts FIFOs as BRAM that Vivado puts in LUTs**: the ring stub's 14 BRAM_18K became one
   RAMB36 and 216 LUTRAMs. A share-or-replicate decision that weighs memory takes Vivado's numbers.
 
+### Sharing against replicating, in numbers
+
+The [filter bank](../../examples/os_filterbank/index.md) measures the trade on the RFSoC (routed, Vivado
+2025.1). Its sharing logic -- arbiter, demuxes, the stage in front of the FFT and the loop's links -- costs
+about half an L = 64 FFT and no DSP; it replaces five more FFTs. So replicate a unit only when it is small
+next to an arbiter and a demux (a few hundred LUT each at 2-4 clients; [StreamArbiter's
+resources](../streams/arbiter.md#its-resources), [StreamDemux's](../streams/demux.md#its-resources)), or
+when one copy's interval cannot serve every client. That second question is throughput, and two things
+eat into the shared unit's interval:
+
+- **the arbiter's decision between frames**, 3 to 8 idle cycles depending on `n_in`
+  ([What it costs a frame](../streams/arbiter.md#what-it-costs-a-frame)) -- so feed it long frames;
+- **the stage after the unit**, if it stores and forwards serially (the return path, above) -- the
+  filter bank's FFT is busy 39-48% because its post stage takes 43 cycles a frame against the FFT's 16.
+
 ## Why not AMD's blocks
 
 Two vendor blocks merge streams. Neither fits between the tasks of one composite:

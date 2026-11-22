@@ -114,6 +114,21 @@ csynth (estimates) for the bank: 40 DSP (24 in the FFT, 16 in `post`'s multiply)
 loop's FIFOs, the feedback link's 102 words the largest), 16193 FF, 19243 LUT. Every loop at II = 1,
 worst slack 0.00 ns at 250 MHz: met, with no margin.
 
+**After place and route** (out of context, Vivado 2025.1, the same part at 4 ns), the margin is real: the
+critical path is 3.096 ns, WNS +0.904 ns, and it is inside the FFT, not in the sharing logic. The bank
+routes at 12,424 LUT (2,297 of them LUTRAM), 15,553 FF and 40 DSP, and **no BRAM**: csynth's 80 BRAM_18K
+all land in distributed RAM.
+
+**What sharing the FFT costs, and saves.** The FFT is half the bank: 50% of its routed LUT, 49% of its FF,
+60% of its DSP. The sharing logic -- the arbiter, the demuxes, `pre` and the loop's links -- routes at
+3,074 LUT and 4,679 FF with no DSP, about half an L = 64 FFT (38% / 45% leaving out the bank's own
+output-port register slices). The arbiter itself is small (325 LUT, 550 FF); the 184-bit answer demux and
+the feedback link are the largest pieces. Without sharing, each block's two passes need two fixed FFTs a
+channel -- six -- about 37,200 LUT, 47,700 FF and 144 DSP at the standalone fixed size, against 9,343 LUT,
+12,236 FF and 24 DSP for the one shared FFT and its overhead. The overhead's share at larger `L` is not
+measured: the FFT grows faster than the arbiter, but the feedback link grows with the frame
+(`plans/shared_kernel_rfsoc_timing.md`).
+
 ## Building it
 
 ```bash

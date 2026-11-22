@@ -96,6 +96,15 @@ Keep its copy loop's shape, the count of TLASTs tested at the head (`while (b < 
 rewrites meant to shorten its path passed pysim and **hung at RTL** after an input's last frame (Vitis
 2025.1): a `for (;;)` with a `break` after the read, and a `done` flag computed a burst ahead.
 
+Keep `copy_frame`'s `#pragma HLS INLINE` too. Without it, Vitis HLS 2025.1 keeps **one** `copy_frame`
+module for three or more inputs, the input stream muxed into it per call, and that module hangs on the
+first frame it copies from another input once input 0 has run dry: the lone arbiter delivered 12 of 36
+bursts at 3 inputs, and the arbiter-demux pair stalled from 4 inputs. The 3-input pair of the first gates
+had already been given a pipeline per input, which is why they passed. With the pragma every input has
+its own `COPY` pipeline; it costs about +40% routed LUT and +25-85% routed FF where it changes the RTL,
+and nothing at 3 inputs in the pair, which builds the same RTL as before
+(`plans/shared_kernel_rfsoc_timing.md`, *The hang, and the fix*).
+
 In a composite, add the step beside the design's other codegen steps:
 
 ```python
@@ -134,6 +143,46 @@ demux's index test, the round-robin pointer's update -- are not the routed worst
 the register slices Vitis puts on the top's AXI-Stream ports and are 80-93% routing, so the spread
 between equal designs (about 1 ns) is placement, not logic depth. Only 3 inputs were measured; the
 search grows with `n_in` (`plans/shared_kernel_rfsoc_timing.md`).
+
+## What it costs a frame
+
+Between consecutive frames the arbiter spends a few idle cycles deciding: a firing tests every input,
+searches, writes `m_sel`, and only then starts the copy. With every input backlogged, at RTL (the default
+part at 100 MHz, 8-word frames, Vitis HLS / xsim 2025.1):
+
+| `n_in` | idle cycles between frames, priority / round-robin | port rate used, 8-word frames |
+|---|---|---|
+| 2 | 3 / 3 | 73% |
+| 4 | 3 / 4 | 73% / 67% |
+| 8 | 7 / 8 | 53% / 50% |
+| 16 | 8 / 7 | 50% / 53% |
+
+The step at 8 inputs is Vitis no longer inlining `streamutils::write_boundary_word`, which deepens every
+`COPY` pipeline. **Feed a kernel shared through an arbiter frames long enough that these cycles are small
+next to them**: at 256-word frames, 8 cycles are 3%.
+
+pysim does not model this yet: its frames are 1 cycle apart. Until the arbiter carries a calibrated
+timing model (`FreeRunMod.add_timing_model` and `timed_delay`, the gap as a function of `n_in` and the
+policy), a pysim run of a design whose frames are short overstates the shared unit's rate.
+
+## Its resources
+
+Records for 2 and 4 inputs -- 32, 64 and 128 bits, 1- and 2-burst frames, both policies -- are filed in
+the packaged platform `xczu48dr_250mhz_vitis2025_1` (csynth at 4 ns, Vitis HLS 2025.1), so the platform's
+resource lookup answers `EXACT` for them (`python -m waveflow.streams.calib arbiter` rebuilds them). No
+DSP, no BRAM; LUTs do not grow with the width:
+
+| inputs, policy | LUT, 1 / 2 bursts | FF at 64 bits, 1 / 2 bursts |
+|---|---|---|
+| 2, priority | 251 / 343 | 93 / 231 |
+| 2, round-robin | 357 / 449 | 104 / 242 |
+| 4, priority | 458 / 642 | 100 / 376 |
+| 4, round-robin | 677 / 861 | 140 / 416 |
+
+These are the block's own logic, what a composite pays. A standalone top also gets an AXI-Stream
+register slice on every port, which roughly doubles its routed FF. 8 and 16 inputs are not filed: Vitis
+names their RTL differently and the filing cannot attribute it yet. At 16 inputs and 128 bits,
+round-robin, it routes at 5,319 LUT and 9,252 FF and still meets 4 ns (WNS +0.342 ns, Vivado 2025.1).
 
 ## Why not AMD's
 

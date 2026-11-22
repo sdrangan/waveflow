@@ -202,19 +202,22 @@ def test_the_pair_top_has_both_tasks_and_both_links(tmp_path):
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("kind,n,frame_bursts,policy", [
-    ("demux", 3, 2, "priority"),
-    ("demux_hdr", 3, 1, "priority"),
-    ("pair", 3, 2, "priority"),
-    ("pair", 3, 1, "round_robin"),
-], ids=["demux", "demux_hdr", "pair_priority", "pair_rr"])
-def test_rtl_outputs_match_pysim(kind, n, frame_bursts, policy):
+@pytest.mark.parametrize("kind,n,frame_bursts,policy,workload", [
+    ("demux", 3, 2, "priority", "test"),
+    ("demux_hdr", 3, 1, "priority", "test"),
+    ("pair", 3, 2, "priority", "test"),
+    ("pair", 3, 1, "round_robin", "test"),
+    # Four inputs, input 0 running dry first: the case that hung before copy_frame was INLINE (Vitis
+    # 2025.1 kept one copy_frame module for every input; plans/shared_kernel_rfsoc_timing.md).
+    ("pair", 4, 1, "priority", "long"),
+], ids=["demux", "demux_hdr", "pair_priority", "pair_rr", "pair4_long"])
+def test_rtl_outputs_match_pysim(kind, n, frame_bursts, policy, workload):
     """THE gates: every output's recording at RTL equal to pysim's, and none empty."""
     if not (find_vivado_path() and find_vitis_path()):
         pytest.skip("XSI gate prerequisite missing: Vitis HLS + Vivado")
-    root = ROOT / f"{kind[:5]}{n}{frame_bursts}{policy[0]}"
+    root = ROOT / f"{kind[:5]}{n}{frame_bursts}{policy[0]}{workload[0]}"
     root.mkdir(parents=True, exist_ok=True)
-    dag, top = rtl.build_block_dag(root / "xw", kind, n, 32, frame_bursts, policy)
+    dag, top = rtl.build_block_dag(root / "xw", kind, n, 32, frame_bursts, policy, workload=workload)
     res = dag.run(BuildConfig(root_dir=root, params={"synth": "build"}), through="compare")
     bad = {k: r.message for k, r in res.items() if not r.success}
     assert not bad, bad
