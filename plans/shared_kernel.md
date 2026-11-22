@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64 (records at the end). Next: Stage 4.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21 (records at the end). Next: Stage 5.**
 
 ## Why
 
@@ -394,6 +394,20 @@ structure, refusals); `tests/dsp/ssr_fft/test_xsi.py` gains `pingpong-runtime` (
 (`s_dir`), `synthesis.md` (the stage body, the resource table), `timing.md`, `systems/library.md`.
 
 Not done: only L = 64 at RTL; lengths 256-4096 are pysim-only for the runtime build.
+
+## Stage 4 record (2026-11-21): the concept page
+
+`docs/guide/systems/shared_kernels.md` (*Sharing a kernel*, under *Waveflow Architecture*, between
+*Command-response* and *Library blocks*): replicate first; the four questions; the six options; the five
+return-path rules; the blocks (`StreamArbiter`, `StreamDemux`, `SsrFft(direction="runtime")`, `wait_any`) and
+the tag beside K; a cycle inside a composite, from the ring stub's findings (the generator needs nothing,
+end-to-end credit vs `CreditStreamIF`, depths from the credit, feedback first, output order independent of
+timing, a deadlock looks like success, its pinned RTL numbers); modelling a polling stage with `wait_any`;
+why not AMD's switch or `streamNToOne` (D6); and the extension rule. Linked from `kernels.md` (a composite
+need not be a line), `streams.md` (*Between kernels*), `command_response.md` (one kernel, several clients),
+`dsp/ssr_fft/parameters.md`. Glossary: a *Sharing a kernel* table -- shared kernel, client, arbiter, demux,
+tag, credit (end to end), slot, feedback frame. `waveflow kb search` returns the page first for "one FFT
+shared by several channels with feedback". The example section waits for Stage 5.
 
 ## Hand-off: continuing on the lab machine (2026-11-21)
 

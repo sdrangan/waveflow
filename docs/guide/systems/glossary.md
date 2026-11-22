@@ -3,8 +3,8 @@ title: Glossary
 parent: Waveflow Architecture
 nav_order: 9
 audience: python
-api: [Simulation, SimObj, HwSystem, DutTop, harness, HwModule, FreeRunMod, HostActivated, KernelTask, MmSlaveDevice, build_mm_device, MemSlaveAdaptor, QueueIn, QueueOut, RegBank, BramWindow, CreditIn, MemRStream, MemWStream, MemoryMod, AXIMMCrossBarIF, Interface, StreamIF, CreditStreamIF, BramIF, IrqIF, SwHost, DataSchema]
-summary: "Every term the guide uses for what Waveflow builds and simulates, with its class and the page that defines it: what is simulated (golden, simulation, SimObj, system, DUT, testbench, twin, harness, workload, host), what is built (module, free-running and host-activated modules, leaf, composite, kernel, HLS body, plain module, adaptor, slave adaptor, view, front, device, bus writer, memory reader and writer, memory, crossbar), what joins them and what travels (interface, port, stream, credit stream, BRAM, interrupt, schema, command / response / status), and the words used loosely (module vs kernel, device vs composite, adaptor vs view)."
+api: [Simulation, SimObj, HwSystem, DutTop, harness, HwModule, FreeRunMod, HostActivated, KernelTask, MmSlaveDevice, build_mm_device, MemSlaveAdaptor, QueueIn, QueueOut, RegBank, BramWindow, CreditIn, MemRStream, MemWStream, MemoryMod, AXIMMCrossBarIF, Interface, StreamIF, CreditStreamIF, BramIF, IrqIF, SwHost, DataSchema, StreamArbiter, StreamDemux]
+summary: "Every term the guide uses for what Waveflow builds and simulates, with its class and the page that defines it: what is simulated (golden, simulation, SimObj, system, DUT, testbench, twin, harness, workload, host), what is built (module, free-running and host-activated modules, leaf, composite, kernel, HLS body, plain module, adaptor, slave adaptor, view, front, device, bus writer, memory reader and writer, memory, crossbar), what joins them and what travels (interface, port, stream, credit stream, BRAM, interrupt, schema, command / response / status), sharing a kernel (shared kernel, client, arbiter, demux, tag, end-to-end credit, slot, feedback frame), and the words used loosely (module vs kernel, device vs composite, adaptor vs view)."
 ---
 
 # Glossary
@@ -66,6 +66,19 @@ tree -- is [Waveflow Architecture](index.md).
 | **interrupt** | "something is ready", from a view to a host | `IrqIF` | [Interrupts](../interface/axi_mm/slave.md#interrupts) |
 | **schema** | a message's fields, once, in Python; generated C++ packs every word on both sides | `DataSchema`, `DataList`, `DataArray` | [Data schemas](../schema/index.md) |
 | **command, response, status** | the default protocol: a command carrying `tx_id` and `n`, the results headed by a response echoing them, one status per command on its own stream | -- | [Command-response](command_response.md) |
+
+## Sharing a kernel
+
+| term | what it is | class | defined on |
+|---|---|---|---|
+| **shared kernel** | a kernel used by several clients, or whose output comes back to its own input; the expensive unit kept busy with independent jobs | -- | [Sharing a kernel](shared_kernels.md) |
+| **client** | a stream of jobs that a shared kernel serves: another kernel, a channel, or the kernel's own feedback | -- | [Sharing a kernel](shared_kernels.md#the-four-questions) |
+| **arbiter** | the block that merges several clients' frames into one stream, a whole frame at a time, by strict priority or round-robin; it names the winner on a side stream | `StreamArbiter` | [StreamArbiter](../streams/arbiter.md) |
+| **demux** | the block that returns each frame to its client, by the arbiter's index or a header field | `StreamDemux` | [StreamDemux](../streams/demux.md) |
+| **tag** | what says whose a frame is: one word a frame on a side stream beside the kernel (the arbiter's index, a job id and pass), or a field in the frame's header | -- | [Sharing a kernel](shared_kernels.md#the-blocks) |
+| **credit** (end to end) | a token that admits one job into a loop; the stage where a job leaves returns it. Bounds what each link of the loop must hold. Not a `CreditStreamIF`, which is a window on one bus link | -- | [Sharing a kernel](shared_kernels.md#a-cycle-inside-a-composite) |
+| **slot** | storage at the shared kernel holding data loaded once (a filter, a matrix), so only commands naming the slot travel | -- | [Sharing a kernel](shared_kernels.md#six-ways-to-share-it) |
+| **feedback frame** | a frame a later stage sends back into the shared kernel for another pass; announced only once complete | -- | [Sharing a kernel](shared_kernels.md#the-return-path) |
 
 ## Words used loosely
 

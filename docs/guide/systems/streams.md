@@ -174,5 +174,10 @@ A pipeline of kernels needs a few more rules, and a few framework pieces:
   credit instead -- a [credit stream](../interface/derived/credit_stream.md), as markov's generator does.
   In the HLS body the chunk's writes are guarded on the credit wait
   ([the guard](../interface/axi_mm/credit_streams_hls.md#the-guard)).
+- **Several clients into one kernel, and back.** A [`StreamArbiter`](../streams/arbiter.md) merges
+  whole frames into the kernel, and a [`StreamDemux`](../streams/demux.md) after it returns each frame to
+  its client, by the arbiter's index carried beside the kernel. With feedback, the composite has a
+  cycle, and its credit and link depths decide whether it can deadlock
+  ([Sharing a kernel](shared_kernels.md)).
 
 Next: [Defining the kernel in Python and HLS](hwmodule.md) -- a leaf kernel, written twice.
