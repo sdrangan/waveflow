@@ -3,7 +3,8 @@
 **Status: DONE 2026-11-21, on the lab machine, Vitis HLS / Vivado 2025.1.** It
 answers the item `plans/shared_kernel.md` leaves open in its Stage 2 record: "the 7.82 ns case is open ...
 the real target (250 MHz, xczu48dr) has not been tried". That plan is not edited here (another agent owns
-it); its Stage 2 record should link this page when it is next touched.
+it); its Stage 2 record should link this page when it is next touched. Two parts: the stream blocks and
+the ring stub (below), then `SsrFft` with the direction chosen per frame against its fixed builds.
 
 ## The question
 
@@ -184,5 +185,114 @@ arbiter, the two in this machine's gate builds:
   and `SEARCH` grow with `n`) was not tried.
 - Out of context: no I/O timing, and no placement against neighbours. In a full RF design the ports join
   other logic, and the boundary paths above change.
-- The ring stub's K is the stub `Inc`, not `SsrFft`. `SsrFft` at 250 MHz on this part is in its own
-  record (`docs/guide/dsp/ssr_fft/synthesis.md`).
+- The ring stub's K is the stub `Inc`, not `SsrFft`. `SsrFft` on this part, the direction per frame
+  against the fixed builds, is the next section.
+
+## `SsrFft` with the direction chosen per frame (Vitis HLS / Vivado 2025.1, xczu48dr at 4 ns)
+
+Asked by the planning session (2026-11-21): what does `SsrFft(direction="runtime")` (`plans/shared_kernel.md`
+Stage 3) cost in timing and resources against the fixed builds, forward and `inverse=True`? Measured at
+L = 64, the one length Stage 3 gated, and at L = 1024. All six use the ping-pong reorder, the `RadixWord`
+boundary, `ap_fixed<16, 2>` input and `<18, 2>` twiddles, as in Stage 3's table.
+
+**The answer: no timing cost, and about 10% more FF and LUT in csynth (Vitis HLS 2025.1), 2-6% routed
+(Vivado 2025.1). No DSP, no BRAM.** Every build meets 4 ns after place and route. The worst slack is
++0.399 ns, on the *fixed* inverse at L = 1024, a placement outcome. The runtime builds have +0.962 ns
+(L = 64) and +0.886 ns (L = 1024) (Vivado 2025.1). csynth's estimate is the fixed builds' at both
+lengths, and every loop is II = 1 (Vitis HLS 2025.1). The cost in time is latency: one pipeline stage
+more in the input register and in one or two butterfly stages.
+
+**How.** The probe gained six tops (`fft64_fwd`, `fft64_inv`, `fft64_rt`, `fft1024_*`), built by
+`waveflow.dsp.ssr_fft.rtl.generate` with `reorder="pingpong"`. That function already takes keyword
+`part` / `period_ns`, and its defaults are already `RFSOC4X2_PART` at 4 ns, so `waveflow/dsp/ssr_fft/` is
+unchanged. At L = 64 the probe's TCL and generated top are byte for byte those of
+`tests/dsp/ssr_fft/test_xsi.py` (checked, and kept by `tests/streams/test_rfsoc_probe.py`). The probe's
+csynth equals that gate's own build on this machine, number for number (Vitis HLS 2025.1). Re-run:
+`pytest tests/dsp/ssr_fft -m "not vitis and not xsi"`, 133 pass; `pytest tests/dsp/ssr_fft/test_xsi.py
+-m xsi`, 12 pass. Those 12 cover every frame bit-exact, the interval 16 and csynth slack >= 0, for the
+forward, SOB, inverse and runtime builds.
+
+### csynth (Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns: budget 2.92 ns)
+
+| build | estimate, Vitis 2025.1 | slowest state, Vitis 2025.1 | DSP, Vitis 2025.1 | BRAM_18K, Vitis 2025.1 | FF, Vitis 2025.1 | LUT, Vitis 2025.1 |
+|---|---|---|---|---|---|---|
+| L = 64, forward | 2.855 ns | `st2` S3, 2.855 ns | 24 | 6 | 8,306 | 10,396 |
+| L = 64, inverse | 2.855 ns | `inv_st2` S3, 2.855 ns | 24 | 6 | 8,303 | 10,396 |
+| L = 64, runtime | 2.855 ns | `rt_st2` S3, 2.855 ns | 24 | 6 | 9,168 (+10.4%) | 11,531 (+10.9%) |
+| L = 1024, forward | 2.901 ns | `st3` S3, 2.901 ns | 48 | 50 | 24,713 | 21,400 |
+| L = 1024, inverse | 2.901 ns | `inv_st3` S3, 2.901 ns | 48 | 50 | 24,704 | 21,400 |
+| L = 1024, runtime | 2.901 ns | `rt_st3` S4, 2.901 ns | 48 | 50 | 26,236 (+6.2%) | 23,513 (+9.9%) |
+
+Percentages are against the forward build. The forward rows reproduce `examples/ssr_fft/measured.json`
+exactly: 2.855 ns, 24 / 6 / 8,306 / 10,396 at L = 64; 2.901 ns, 48 / 50 / 24,713 / 21,400 at L = 1024.
+Those are the numbers `docs/guide/dsp/ssr_fft/synthesis.md` and `docs/examples/ssr_fft/resource.md`
+quote, filed 2026-10-06 with no tool version recorded. They are now confirmed at Vitis HLS 2025.1.
+Stage 3's table gives 10,402 and 11,537 LUTs for L = 64 forward and runtime: those are `csynth.rpt`'s text
+table, which reads 6 LUTs above `csynth.xml` in the same run (Vitis HLS 2025.1). The FF agree.
+
+**Where the extra goes** (per module, L = 64, forward -> runtime, Vitis HLS 2025.1). The commutators,
+transposers and the reorder are identical, module for module. Only the input register and the stages
+change:
+
+| module | FF, Vitis 2025.1 | LUT, Vitis 2025.1 | pipeline depth, Vitis 2025.1 | estimate, Vitis 2025.1 |
+|---|---|---|---|---|
+| `in_reg` (runtime: the direction's input register) | 133 -> 148 | 53 -> 141 | 2 -> 3 | 1.460 -> 1.664 ns |
+| `st0` | 774 -> 967 | 2,134 -> 2,448 | 4 -> 4 | 2.732 -> 2.813 ns |
+| `st1` | 848 -> 1,195 | 1,734 -> 2,125 | 4 -> 5 | 2.810 -> 2.810 ns |
+| `st2` (no multiply) | 393 -> 403 | 1,142 -> 1,285 | 3 -> 3 | 2.855 -> 2.855 ns |
+
+At L = 1024 the same pattern holds: `in_reg` depth 2 -> 3, `st2` 4 -> 5, `st3` 5 -> 6, the other stages
+unchanged in depth, and every other module identical (Vitis HLS 2025.1). The modules account for 565 of
+the 862 extra FF and 936 of the 1,135 extra LUT at L = 64, and for 1,028 of 1,523 FF at L = 1024. The rest,
+297 FF / 199 LUT and 495 FF, is in the top itself: its channels, the direction FIFOs among them.
+
+**The chains** (`.verbose.sched.rpt`, Vitis HLS 2025.1). The slowest state is the same in all three
+builds: the twiddle product's subtract feeding the butterfly's two adds. At L = 64 that is
+1.027 + 0.914 + 0.914 = 2.855 ns in `st2`; at L = 1024, 1.032 + 0.934 + 0.934 = 2.901 ns in `st3`. The one
+chain the runtime build lengthens is `st0`'s: a select (the direction's swap or sign) before the twiddle
+multiply, 0.360 + 2.453 = 2.813 ns, where the fixed `st0` is 2.732 ns. It stays under the slowest stage,
+so the estimate does not move.
+
+**Latency.** Every loop is II = 1, so the interval does not change (16 at L = 64, the XSI gate). The
+extra depth is latency: at L = 64, `in_reg` and `st1` add one stage each. Stage 3's XSI run measured the
+first frame done at 111 (fixed) and 112 (runtime), one cycle, not two. So the depths alone do not account
+for Stage 3's untraced extra cycle; they say where to look (Vitis HLS 2025.1).
+
+### Post-route (Vivado 2025.1, out of context, xczu48dr-ffvg1517-2-e at 4 ns)
+
+| build | CP routed, Vivado 2025.1 | WNS / WHS, Vivado 2025.1 | LUT (of which LUTRAM), Vivado 2025.1 | FF, Vivado 2025.1 | BRAM, Vivado 2025.1 | worst routed path, Vivado 2025.1 |
+|---|---|---|---|---|---|---|
+| L = 64, forward | 3.005 ns | +0.995 / +0.015 ns | 6,204 (619) | 7,943 | 0 | `st1` register -> DSP `A` input; 5 CARRY8, 57% route |
+| L = 64, inverse | 3.084 ns | +0.916 / +0.024 ns | 6,207 (619) | 7,943 | 0 | `inv_st0` register -> DSP pre-adder; 9 levels, 54% route |
+| L = 64, runtime | 3.038 ns | +0.962 / +0.036 ns | 6,605 (619), +6.5% | 8,218, +3.5% | 0 | `rt_st0`'s direction register `iv` -> through the DSP to its ALU output; 6 levels, 46% route |
+| L = 1024, forward | 3.084 ns | +0.916 / +0.018 ns | 22,795 (2,406) | 22,164 | 3 RAMB36 + 8 RAMB18 | `st2` register -> DSP `A` input; 5 CARRY8, 65% route |
+| L = 1024, inverse | **3.601 ns** | **+0.399** / +0.004 ns | 22,800 (2,406) | 22,164 | 3 RAMB36 + 8 RAMB18 | `inv_rc` (the reorder) register -> register, 1 LUT, 94% route |
+| L = 1024, runtime | 3.114 ns | +0.886 / +0.006 ns | 23,424 (2,406), +2.8% | 22,490, +1.5% | 3 RAMB36 + 8 RAMB18 | `rt_cm0`'s LUTRAM read mux (MUXF7/F8), 87% route |
+
+Every build: timing met, no failing endpoint, setup or hold. 24 and 48 DSPs, as csynth said. Each run
+took 8-17 minutes, four at a time.
+
+What the post-route numbers add (Vivado / Vitis HLS 2025.1):
+
+- **The runtime build's routed cost is about half its csynth cost.** At L = 64, +275 FF and +401 LUT
+  routed, against +862 and +1,135 in csynth. At L = 1024, +326 FF and +629 LUT, against +1,523 and
+  +2,113.
+- **The runtime's critical path at L = 64 is the one csynth flagged.** It runs from the direction register
+  `iv` in `st0` into the multiplier, the select-before-multiply chain, with +0.962 ns to spare. At
+  L = 1024 its worst path is elsewhere, in a commutator's memory read.
+- **The worst of the six is a fixed build.** At L = 1024 the inverse, the same logic as the forward with
+  other ROMs, routes 0.52 ns slower on a 1-LUT path that is almost all routing. The ~0.5 ns spread is
+  placement, as the stream blocks' ~1 ns was.
+- **csynth's BRAM is not what Vivado builds.** At L = 64, csynth's 6 BRAM_18K become 619 LUTs of
+  distributed RAM, and no BRAM at all. At L = 1024, its 50 become 3 RAMB36 and 8 RAMB18 (14 x 18K) plus
+  2,406 LUTRAMs, the same in all three builds. So csynth overstates LUT at L = 64 (10,396 against 6,204
+  routed) and understates it at L = 1024 (21,400 against 22,795): the memories it counts as BRAM land in
+  LUTs.
+
+### Not done (SsrFft)
+
+- L = 1024 is synthesized and routed, not simulated: the runtime build stays pysim-only at 256-4096, as in
+  Stage 3. Only L = 64 runs under XSI.
+- The extra latency cycle at L = 64 is located to two modules' depths but not traced to the one cycle the
+  XSI run sees.
+- Out of context, as for the stream blocks: no I/O timing, no neighbours.

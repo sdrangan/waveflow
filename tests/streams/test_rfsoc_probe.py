@@ -31,6 +31,19 @@ def test_the_ring_stub_probe_carries_its_bodies(tmp_path):
     assert _target(tcl_path(tmp_path, top).read_text())[0] == f"set part {{{RFSOC4X2_PART}}}"
 
 
+def test_the_fft_probe_builds_the_fft_gates_top(tmp_path):
+    """``SsrFft``'s gates already target the RFSoC at 4 ns: the probe's L = 64 builds are theirs, byte for
+    byte (``tests/dsp/ssr_fft/test_xsi.py``)."""
+    from waveflow.dsp.ssr_fft import rtl as fft_rtl
+    for tag, inverse, direction in (("fwd", False, "fixed"), ("inv", True, "fixed"), ("rt", False, "runtime")):
+        gate = fft_rtl.generate(tmp_path / f"gate_{tag}", 64, n_frames=8, reorder="pingpong", inverse=inverse,
+                                direction=direction, dirs=[0, 1, 1, 0, 1])
+        top = rfsoc_probe.generate(tmp_path / f"probe_{tag}", rfsoc_probe.PROBES[f"fft64_{tag}"])
+        assert top == gate
+        for rel in (f"gen/{top}.tcl", f"gen/{top}.cpp"):
+            assert (tmp_path / f"probe_{tag}" / rel).read_text() == (tmp_path / f"gate_{tag}" / rel).read_text()
+
+
 _RPT = """\
 ============================================================
 + Verbose Summary: Timing violations

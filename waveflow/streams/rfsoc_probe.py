@@ -1,4 +1,6 @@
-"""rfsoc_probe.py -- the stream blocks and the ring stub on the RFSoC part at 250 MHz: a timing probe.
+"""rfsoc_probe.py -- the shared-kernel blocks on the RFSoC part at 250 MHz: a timing probe.
+
+The stream blocks, the ring stub and ``SsrFft(direction="runtime")`` against its fixed builds.
 
     python -m waveflow.streams.rfsoc_probe <root>                      # generate and csynth every top
     python -m waveflow.streams.rfsoc_probe <root> --steps impl         # place and route those csynths
@@ -39,17 +41,24 @@ from waveflow.build.composite_gen import RFSOC4X2_PART, RFSOC4X2_PERIOD_NS, tcl_
 
 @dataclass(frozen=True)
 class Probe:
-    """One top: a stream block as its RTL gate builds it (:func:`waveflow.streams.rtl.make`), or the ring
-    stub's composite (``kind="ring_stub"``)."""
+    """One top: a stream block as its RTL gate builds it (:func:`waveflow.streams.rtl.make`), the ring
+    stub's composite (``kind="ring_stub"``), or ``SsrFft`` with the ping-pong reorder as
+    :func:`waveflow.dsp.ssr_fft.rtl.generate` builds it (``kind="ssr_fft"``: *length*, *inverse*,
+    *direction*)."""
 
     kind: str
     n: int = 3
     frame_bursts: int = 1
     policy: str = "priority"
+    length: int = 0
+    inverse: bool = False
+    direction: str = "fixed"
 
 
 #: The probes: the pair under both policies at 1- and 2-burst frames, the demux both ways as gated
-#: (``test_rtl_outputs_match_pysim``), and the ring stub's composite.  All 32-bit.
+#: (``test_rtl_outputs_match_pysim``), and the ring stub's composite, all 32-bit; ``SsrFft``'s direction
+#: chosen per frame (``plans/shared_kernel.md`` Stage 3) against the two fixed directions, at the
+#: length its gates build (64) and at 1024.
 PROBES: dict[str, Probe] = {
     "pair_p_f1": Probe("pair", 3, 1, "priority"),
     "pair_p_f2": Probe("pair", 3, 2, "priority"),
@@ -58,6 +67,9 @@ PROBES: dict[str, Probe] = {
     "demux_sel": Probe("demux", 3, 2),
     "demux_hdr": Probe("demux_hdr", 3, 1),
     "ring_stub": Probe("ring_stub"),
+    **{f"fft{L}_{tag}": Probe("ssr_fft", length=L, inverse=inv, direction=d)
+       for L in (64, 1024)
+       for tag, inv, d in (("fwd", False, "fixed"), ("inv", True, "fixed"), ("rt", False, "runtime"))},
 }
 
 
@@ -72,6 +84,10 @@ def generate(work: Path, probe: Probe) -> str:
         shutil.copytree(rb.HERE / "src", work / "src", dirs_exist_ok=True)   # the hand-written bodies
         rb.gen_headers(work)
         return rb.gen_top(RingStub, work, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
+    if probe.kind == "ssr_fft":
+        from waveflow.dsp.ssr_fft import rtl as fft_rtl
+        return fft_rtl.generate(work, probe.length, reorder="pingpong", inverse=probe.inverse,
+                                direction=probe.direction, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
     from waveflow.streams import rtl
     mod, _gate_top = rtl.make(probe.kind, probe.n, 32, probe.frame_bursts, probe.policy)
     return rtl.generate_for(work, mod, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
