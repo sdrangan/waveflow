@@ -49,12 +49,13 @@ Answer these, in order, briefly:
    memory check -- each number with its source.
 2. **The kernels.** Each stage a leaf kernel, or several stages fused into one when they are simple and
    at the same rate. Stages that must run concurrently at different rates, or that both need one input,
-   make a **composite** (`waveflow-pipeline`). Use a library kernel only where it is hard to build well
+   make a **composite** (`waveflow-pipeline`). One expensive kernel used by several channels, jobs or
+   passes -- or fed back its own output -- is a **shared kernel**: an arbiter, a tag, credits, a cycle
+   (`waveflow-shared-kernel`). Use a library kernel only where it is hard to build well
    -- an FFT (`SsrFft`), a large complex matrix product (`SystolicEngine`) -- and write simple ones
    (element-wise, magnitude, peak search, reductions) yourself (`systems/library.md`). If the best map
-   needs a block or an option Waveflow does not have yet (a stream arbiter, an FFT whose direction
-   changes per frame), name it as an extension to build -- Waveflow is early and meant to grow --
-   rather than bending the map around the gap.
+   needs a block or an option Waveflow does not have yet, name it as an extension to build --
+   Waveflow is early and meant to grow -- rather than bending the map around the gap.
 3. **What each kernel talks to**, and so its adaptors: samples from the ADC (`Rfdc`) or from a buffer in
    memory (a memory reader); results to memory (a memory writer, "done" when it echoes) or to a host
    (a queue out, an interrupt); configuration from a host (a register bank, or a queue in for commands);
@@ -66,7 +67,8 @@ Answer these, in order, briefly:
    closest worked example.
 6. **The order to build it, and the skill for each piece**: the messages (`waveflow-schema`), each
    kernel in Python and its harness test (`waveflow-kernel`), its HLS body (`waveflow-kernel-hls`), a
-   composite (`waveflow-pipeline`), a device's adaptors (`waveflow-device`), the system and its tests
+   composite (`waveflow-pipeline`), a kernel shared or on a cycle (`waveflow-shared-kernel`), a device's
+   adaptors (`waveflow-device`), the system and its tests
    (`waveflow-system`). Bottom-up: the golden first, each module alone, then the whole.
 
 End with two or three open questions that change the map (the rate, what feeds it, who configures it).
