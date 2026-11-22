@@ -129,6 +129,59 @@ def test_a_frame_announced_before_it_is_all_there_holds_the_others():
     assert got["m_out"][0][0] >= 200 and got["m_out"][1][0] > got["m_out"][0][0]
 
 
+@pytest.mark.parametrize("route", ["sel", "header"])
+def test_the_demux_commits_on_a_first_word_and_copies_as_words_arrive(route):
+    """As its body (``plans/osfb_pysim_fidelity.md``, cause H): a frame begun at cycle 0 and held open until
+    200 is routed at its first word and its output starts then -- begun on the output's link long before
+    it is all there; the next frame, for another output and written whole at cycle 5, waits behind it."""
+    sim = Simulation()
+    clk = Clock(freq=1 / PER)
+    dmx = StreamDemux(name="dmx", sim=sim, n_out=2, bitwidth=32, route=route, sel_lsb=16, sel_bits=8, clk=clk)
+    tx = {}
+    for port in ("s_in", "s_sel") if route == "sel" else ("s_in",):
+        tx[port] = StreamIFMaster(name=f"d_{port}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"in_{port}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", tx[port])
+        link.bind("slave", getattr(dmx, port))
+    rx, got = [], []
+    for k in range(2):
+        r = StreamIFSlave(name=f"r{k}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"o{k}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", dmx.m_out[k])
+        link.bind("slave", r)
+        rx.append(r)
+    seen = {}
+
+    def frame(k, f):
+        w = [f << 24 | j for j in range(3)]
+        return np.asarray([w[0] | (k << 16)] + w[1:] if route == "header" else w, dtype=np.uint32)
+
+    def source():
+        if route == "sel":
+            yield from tx["s_sel"].write(np.asarray([0, 1], dtype=np.uint32)[:1])
+        x = yield from tx["s_in"].begin(frame(0, 0))                   # to output 0, held open
+        yield sim.env.timeout(5 * PER)
+        seen["5"] = rx[0].pending_burst is not None                      # routed and begun already
+        yield sim.env.timeout(195 * PER)
+        yield from tx["s_in"].end(x)
+        if route == "sel":
+            yield from tx["s_sel"].write(np.asarray([1], dtype=np.uint32))
+        yield from tx["s_in"].write(frame(1, 1))                          # then to output 1
+
+    def read(k):
+        while True:
+            words = yield from rx[k].get()
+            got.append((round(sim.env.now / PER), k, int(words[0]) >> 24))
+
+    for p in (source(), read(0), read(1)):
+        sim.env.process(p)
+    sim.run_sim()
+    assert seen["5"]
+    first, second = sorted(got)
+    assert [(k, f) for _, k, f in (first, second)] == [(0, 0), (1, 1)]
+    assert first[0] >= 200 and second[0] > first[0]
+
+
 def test_strict_priority_drains_the_lowest_input_first():
     sel, _ = _backlogged("priority")
     assert sel[1:] == [0] * 3 + [1] * 4 + [2] * 4         # the first grant went before the backlog

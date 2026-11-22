@@ -8,8 +8,8 @@
 * **RTL**: the bank's system flow on both scenarios, its XSI run traced (``add_system_steps(...,
   trace=True)``), in ``work/osfb_fidelity/``; the end cycle is the last word on any output port, from the
   flow's recordings, and each channel's last status.  The csynth is the example's own (its ``*_proj``).
-* **pysim**: the same harness, untimed and with the arbiter timed on the packaged platform (``OsFilterBank``
-  has no ``platform_dir``: it is set on the bank's ``StreamArbiter`` here, the only block with a table).
+* **pysim**: the same harness, untimed and with the stream blocks timed on the packaged platform -- the
+  ``StreamArbiter`` and the three ``StreamDemux``, the blocks with a decision table (set on them here).
   The end cycle is the run's last event (``pysim.json``'s ``cycles``), each output's last word its delivery.
 * **The timeline** (``--timeline``): for every frame, keyed by its tag ``(ch, tx_id, blk, npass)``, the
   cycle of its first and last word on each of the bank's links -- the write side, a word a beat, at RTL from
@@ -101,7 +101,9 @@ def pysim_run(kind: str, timed: bool = False) -> dict:
         from waveflow.calib.platform import packaged_platforms_dir
         from waveflow.streams.timing import PLATFORM
 
-        dut.arb.platform_dir = packaged_platforms_dir() / PLATFORM
+        # The stream blocks with a decision table: the arbiter, and (since cause F) the three demuxes.
+        for blk in (dut.arb, dut.dmx_ans, dut.dmx_st, dut.dmx_crd):
+            blk.platform_dir = packaged_platforms_dir() / PLATFORM
     per = dut.clk.period
     xfers: dict[str, list] = {}
 
@@ -125,7 +127,7 @@ def pysim_run(kind: str, timed: bool = False) -> dict:
         observe(dut.dmx_st.m_out[c].interface, f"m_status_{c}")
     sysm.run()
     if timed and dut.arb.timing_model is None:
-        raise RuntimeError("the arbiter's platform model did not attach")
+        raise RuntimeError("the stream blocks' platform models did not attach")
     last = {}
     for c in range(fb.C):
         for port, link in ((f"m_out_{c}", f"m_out_{c}"), (f"m_status_{c}", f"m_status_{c}")):
@@ -355,7 +357,7 @@ def end_table(kinds=KINDS) -> dict:
 
 
 def print_end_table(rows: dict) -> None:
-    print("| scenario | RTL end | untimed pysim | arbiter timed | RTL last status, ch 0 / 1 / 2 |")
+    print("| scenario | RTL end | untimed pysim | blocks timed | RTL last status, ch 0 / 1 / 2 |")
     print("|---|---|---|---|---|")
     for kind, r in rows.items():
         rtl = r["rtl"]["end"]
@@ -383,10 +385,10 @@ CAUSE = {
     "pre": "B. pre: pysim waits for the whole frame, the RTL copies it through",
     "post": "C. post: its loops' overheads, and pass 1 copied through at RTL",
     "front": "D. front: the block read after the credit (RTL 12 words, pysim already delivered)",
-    "arb": "E. the arbiter's decision at 128 bits, 2-burst frames (table: 32 bits, 1 burst)",
-    "dmx_st": "F. the demuxes' decision cycles (untimed in pysim)",
-    "dmx_crd": "F. the demuxes' decision cycles (untimed in pysim)",
-    "dmx_ans": "F. the demuxes' decision cycles (untimed in pysim)",
+    "arb": "E. the arbiter's decision cycles (its table at the bank's 128 bits, 2-burst frames, since E)",
+    "dmx_st": "F. the demuxes' decision cycles (a table since F; untimed before)",
+    "dmx_crd": "F. the demuxes' decision cycles (a table since F; untimed before)",
+    "dmx_ans": "F. the demuxes' decision cycles (a table since F; untimed before)",
 }
 
 
@@ -486,7 +488,7 @@ def _times(rows) -> dict:
 
 
 def attribute(kind: str, timed: bool = True) -> dict:
-    """The end-cycle gap on *kind*, RTL against pysim (the arbiter timed, or not), along the RTL's
+    """The end-cycle gap on *kind*, RTL against pysim (the stream blocks timed, or not), along the RTL's
     critical path: ``{"causes": {cause: cycles}, "hops": [...], ...}``; the causes sum to the gap."""
     R, P = _times(rtl_timeline(kind)), _times(pysim_timeline(kind, timed))
     run = pysim_run(kind, timed)
@@ -530,7 +532,7 @@ def attribute(kind: str, timed: bool = True) -> dict:
 
 
 def print_attribution(a: dict) -> None:
-    print(f"\n`{a['kind']}`, arbiter {'timed' if a['timed'] else 'untimed'}: RTL {a['rtl_end']:,}, pysim "
+    print(f"\n`{a['kind']}`, stream blocks {'timed' if a['timed'] else 'untimed'}: RTL {a['rtl_end']:,}, pysim "
           f"{a['pysim_end']:,.0f}, gap {a['gap']:,.0f}; critical path {a['hops']} hops from "
           f"{a['end_event']}\n")
     print("| cause | cycles | share |")

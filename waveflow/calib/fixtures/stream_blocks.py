@@ -45,12 +45,19 @@ from waveflow.streams import timing as st
 
 #: The worker / input counts the shipped calibration covers.
 NS = (2, 4, 8, 16)
-POLICIES = {"arbiter": ("priority", "round_robin"), "dispatch": ("first_free", "round_robin")}
+POLICIES = {"arbiter": ("priority", "round_robin"), "dispatch": ("first_free", "round_robin"),
+            "demux": ("sel", "header")}
 #: Points past the default width and frame (32 bits, 1-burst frames) that a design needs, as
 #: ``(n, policy, bitwidth, frame_bursts)``: the arbiter's basis carries its width and frame, and a design
 #: calibrates at its own (``plans/stream_dispatch.md`` open question 7).  ``examples/os_filterbank``'s
 #: arbiter: 4 inputs, 128 bits, 2-burst frames (``plans/osfb_pysim_fidelity.md``, cause E).
-EXTRA = {"arbiter": ((4, "priority", 128, 2), (4, "round_robin", 128, 2)), "dispatch": ()}
+EXTRA = {"arbiter": ((4, "priority", 128, 2), (4, "round_robin", 128, 2)), "dispatch": (),
+         # os_filterbank's demuxes, routed by a header field: three outputs at 32 bits, 1-burst frames
+         # (statuses, credits) and at 184 bits, 2-burst frames (answers).
+         "demux": ((3, "header", 32, 1), (3, "header", 184, 2))}
+#: The demux's scenario: frames of 8 words a burst, to each output in turn, its index at bits 16-23 of
+#: a header-routed frame's first word (``rtl.make("demux_hdr")``'s field); a frame's id at bits 24 up.
+DEMUX_FRAMES, DEMUX_LSB = 40, 16
 #: The dispatcher's scenario: jobs of 8 words, and credits a worker so none is waited for.
 JOBS, WORDS = 40, 8
 #: When the credits arrive (cycle, how many), all naming worker 0.
@@ -62,7 +69,7 @@ N_CYCLES = 20000
 
 
 def _tag(policy: str) -> str:
-    return {"round_robin": "rr", "priority": "p", "first_free": "ff"}[policy]
+    return {"round_robin": "rr", "priority": "p", "first_free": "ff", "sel": "sel", "header": "hdr"}[policy]
 
 
 def _label(n: int, policy: str, kind: str | None = None, extra: str = "", *, w: int = 32, fb: int = 1) -> str:
@@ -87,6 +94,24 @@ def credit_bursts(word: int = 0):
                                    gap_before=(at - t) if j == 0 else 0))
             t = at + j + 1 if j == 0 else t + 1
     return out
+
+
+def demux_stimulus(n: int, frame_bursts: int, header: bool):
+    """The demux's scenario: :data:`DEMUX_FRAMES` frames, frame ``f`` to output ``f mod n``, ``frame_bursts``
+    bursts of 8 words (``f << 24 | b << 8 | j``), the index in the first word's field for a header-routed
+    demux; ``(s_in bursts, s_sel bursts)``."""
+    from waveflow.utils.burst_io import StreamBurst
+
+    frames, sel = [], []
+    for f in range(DEMUX_FRAMES):
+        k = f % n
+        for b in range(frame_bursts):
+            words = [(f << 24) | (b << 8) | j for j in range(8)]
+            if header and b == 0:
+                words[0] |= k << DEMUX_LSB
+            frames.append(StreamBurst(np.asarray(words, dtype=np.uint64), True))
+        sel.append(StreamBurst(np.asarray([k], dtype=np.uint64), True))
+    return frames, sel
 
 
 # --- what a run's spans are ------------------------------------------------------------------------
@@ -171,6 +196,14 @@ def rtl_spans(block: str, n: int, policy: str, root: Path, platform_dir, *, bitw
                                        workload=workload, credits=JOBS, part=part, period_ns=1e9 / hz,
                                        n_cycles=N_CYCLES)
         outs = [f"m_out_{k}" for k in range(n)]
+    elif block == "demux":
+        header = policy == "header"
+        frames, sel = demux_stimulus(n, frame_bursts, header)
+        workload = {"s_in": widen(frames, bitwidth), **({} if header else {"s_sel": widen(sel, bitwidth)})}
+        dag, top = rtl.build_block_dag(root / "xw", "demux_hdr" if header else "demux", n, bitwidth,
+                                       frame_bursts, workload=workload, part=part, period_ns=1e9 / hz,
+                                       n_cycles=N_CYCLES)
+        outs = [f"m_out_{k}" for k in range(n)]
     else:
         workload = {f"s_in_{k}": widen(frames_of(k, frame_bursts, "long"), bitwidth) for k in range(n)}
         dag, top = rtl.build_block_dag(root / "xw", "arbiter", n, bitwidth, frame_bursts, policy,
@@ -182,16 +215,17 @@ def rtl_spans(block: str, n: int, policy: str, root: Path, platform_dir, *, bitw
         raise RuntimeError(f"{block} n={n} {policy}: {bad}")
     spans = [s for p in outs for s in _burst_spans(root / "xw" / top / "traces" / p)]
     if frame_bursts > 1:                                  # a frame's bursts are one span
-        spans = _merge_frames(spans, frame_bursts)
+        spans = _merge_frames(spans, frame_bursts, shift=24 if block == "demux" else 12)
     return spans
 
 
-def _merge_frames(spans, frame_bursts: int):
+def _merge_frames(spans, frame_bursts: int, shift: int = 12):
     """Bursts on one output to frames: consecutive groups of *frame_bursts*, per output (by first word's
-    job / input field, bits 12 and up)."""
+    job / input field, bits *shift* and up: 12 for the arbiter's and the dispatcher's scenarios, 24 for the
+    demux's, whose index sits at bits 16-23)."""
     by_owner: dict = {}
     for s in sorted(spans):
-        by_owner.setdefault(s[2] >> 12, []).append(s)
+        by_owner.setdefault(s[2] >> shift, []).append(s)
     out = []
     for group in by_owner.values():
         for i in range(0, len(group), frame_bursts):
@@ -207,16 +241,18 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk, *, bitwidth: int = 32,
                 frame_bursts: int = 1) -> list[tuple[int, int, int]]:
     """The same scenario in pysim, the block timed by *tm* (the platform's current model: zero before
     the first fit), each output read as it comes; bursts timed at their last word (one word a cycle).
-    The arbiter at *bitwidth* and *frame_bursts* (a frame's bursts merged into one span, as at RTL)."""
+    The arbiter and the demux at *bitwidth* and *frame_bursts* (a frame's bursts merged into one span,
+    as at RTL)."""
     from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
     from waveflow.simulation.simulation import Simulation
     from waveflow.streams.arbiter import StreamArbiter, frames_of
+    from waveflow.streams.demux import StreamDemux
     from waveflow.streams.dispatch import StreamDispatch, jobs_of
 
     sim = Simulation()
     per = clk.period
 
-    bw = int(bitwidth) if block == "arbiter" else 32
+    bw = int(bitwidth) if block in ("arbiter", "demux") else 32
 
     def link(name, master, slave):
         lk = StreamIF(name=name, sim=sim, clk=clk, bitwidth=bw, framed=True, depth=4096)
@@ -232,6 +268,15 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk, *, bitwidth: int = 32,
             cr.append((t, b.words))
             t += 1
         feeds["s_free"] = (mod.s_free, cr)
+        outs = mod.m_out
+    elif block == "demux":
+        header = policy == "header"
+        mod = StreamDemux(name="dmx", sim=sim, n_out=n, bitwidth=bw, frame_bursts=int(frame_bursts),
+                          route="header" if header else "sel", sel_lsb=DEMUX_LSB, sel_bits=8, clk=clk)
+        frames, sel = demux_stimulus(n, int(frame_bursts), header)
+        feeds = {"s_in": (mod.s_in, [(0, b.words) for b in widen(frames, bw)])}
+        if not header:
+            feeds["s_sel"] = (mod.s_sel, [(0, b.words) for b in widen(sel, bw)])
         outs = mod.m_out
     else:
         mod = StreamArbiter(name="arb", sim=sim, n_in=n, bitwidth=bw, frame_bursts=int(frame_bursts),
@@ -268,8 +313,8 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk, *, bitwidth: int = 32,
         link(f"o{k}", ep, rx)
         sim.env.process(read(rx))
     sim.run_sim()
-    if block == "arbiter" and int(frame_bursts) > 1:                 # a frame's bursts are one span
-        got = _merge_frames(got, int(frame_bursts))
+    if block in ("arbiter", "demux") and int(frame_bursts) > 1:      # a frame's bursts are one span
+        got = _merge_frames(got, int(frame_bursts), shift=24 if block == "demux" else 12)
     return got
 
 
@@ -288,12 +333,15 @@ class _StreamBlockFixture:
 
     def points(self) -> list[tuple[int, str, int, int]]:
         """Every point calibrated, ``(n, policy, bitwidth, frame_bursts)``: each count under each policy at
-        32 bits and 1-burst frames, and the block's :data:`EXTRA` points whose count is swept."""
-        return ([(n, p, 32, 1) for n in self.ns for p in POLICIES[self.block]]
-                + [x for x in EXTRA[self.block] if x[0] in self.ns])
+        32 bits and 1-burst frames, and the block's :data:`EXTRA` points (only those whose count is swept,
+        when ``--n`` narrows the sweep)."""
+        extra = EXTRA[self.block] if self.ns == tuple(NS) else [x for x in EXTRA[self.block] if x[0] in self.ns]
+        return [(n, p, 32, 1) for n in self.ns for p in POLICIES[self.block]] + list(extra)
 
     def feat(self, n: int, policy: str, code=None, w: int = 32, fb: int = 1) -> dict[str, float]:
         """A point's features: the arbiter's carry its width and frame (``timing.BASIS``)."""
+        if self.block == "demux":
+            return st.demux_features(n, policy == "header", w, fb)
         wf = {"w": w, "fb": fb} if "w" in st.BASIS[self.block] else {}
         return st.features(n, policy == "round_robin", code, **wf)
 
@@ -417,10 +465,21 @@ class DispatchFixture(_StreamBlockFixture, ComponentFixture):
     run_pysim = _no_run_pysim
 
 
+class DemuxFixture(_StreamBlockFixture, ComponentFixture):
+    """``StreamDemux`` alone, both its bodies (``route``: by ``s_sel``, by a header field): a span is the
+    idle cycles between consecutive frames across its outputs, every output read as it comes."""
+    component = st.COMPONENTS["demux"]
+    basis = list(st.BASIS["demux"])  # noqa: RUF012  (ComponentFixture's contract: a class attribute)
+    block = "demux"
+    run_pysim = _no_run_pysim
+
+
 # Registered on package import.  Under `python -m` this module runs a SECOND time as __main__ (the
 # package import already registered it), and the registry rightly refuses a duplicate.
-FIXTURES = ({"arbiter": register(ArbiterFixture()), "dispatch": register(DispatchFixture())}
-            if __name__ != "__main__" else {"arbiter": ArbiterFixture(), "dispatch": DispatchFixture()})
+FIXTURES = ({"arbiter": register(ArbiterFixture()), "dispatch": register(DispatchFixture()),
+             "demux": register(DemuxFixture())}
+            if __name__ != "__main__" else {"arbiter": ArbiterFixture(), "dispatch": DispatchFixture(),
+                                            "demux": DemuxFixture()})
 
 
 def main(argv=None) -> None:
@@ -436,7 +495,7 @@ def main(argv=None) -> None:
     ap.add_argument("--spot", action="store_true", help="the width / burst / stray-credit spot checks")
     a = ap.parse_args(argv)
     for b in a.blocks:
-        fx = (ArbiterFixture if b == "arbiter" else DispatchFixture)(ns=a.n)
+        fx = {"arbiter": ArbiterFixture, "dispatch": DispatchFixture, "demux": DemuxFixture}[b](ns=a.n)
         if a.spot:
             print(json.dumps({b: fx.spot(a.platform_dir, a.work)}, indent=1))
         else:

@@ -15,7 +15,7 @@ from waveflow.calib.platform import packaged_platforms_dir
 from waveflow.hw.clock import Clock
 from waveflow.hw.harness import harness
 from waveflow.simulation.simulation import Simulation
-from waveflow.streams import StreamArbiter, StreamDispatch
+from waveflow.streams import StreamArbiter, StreamDemux, StreamDispatch
 from waveflow.streams import timing as st
 from waveflow.streams.rtl import DispatchPool, sorted_frames
 from waveflow.toolchain.toolchain import find_vitis_path, find_vivado_path
@@ -33,7 +33,7 @@ def test_every_point_of_the_sweep_is_calibrated():
     """Both blocks at 2, 4, 8 and 16 ports under both policies -- the dispatcher's two firings, and the
     arbiter also at 4 inputs, 128 bits and 2-burst frames (``sb.EXTRA``, ``examples/os_filterbank``'s) --
     are on the platform, each a lookup row whose pysim span equals the RTL's."""
-    for block, kinds in (("arbiter", [None]), ("dispatch", [st.JOB, st.CREDIT])):
+    for block, kinds in (("arbiter", [None]), ("dispatch", [st.JOB, st.CREDIT]), ("demux", [None])):
         fx = sb.FIXTURES[block]
         tm = st.model(block, PLATFORM, CLK)
         df = _corpus(block)
@@ -54,14 +54,17 @@ def test_the_arbiter_is_refused_at_a_width_or_frame_not_measured():
             StreamArbiter(name="a", sim=Simulation(), n_in=4, clk=CLK, platform_dir=PLATFORM, **kw)
 
 
-@pytest.mark.parametrize("block", ["arbiter", "dispatch"])
+@pytest.mark.parametrize("block", ["arbiter", "dispatch", "demux"])
 def test_pysim_reproduces_the_rtl_at_every_calibrated_point(block):
     """The fixture's own scenario, in pysim on the platform's model: the spans it measures are the
     RTL's, row by row (``corpus.csv``)."""
     tm = st.model(block, PLATFORM, CLK)
     for row in _corpus(block).to_dict("records"):
-        n, rr = int(row["n"]), bool(row["rr"])
-        pol = "round_robin" if rr else sb.POLICIES[block][0]
+        n = int(row["n"])
+        if block == "demux":
+            pol = "header" if row["hdr"] else "sel"
+        else:
+            pol = "round_robin" if row["rr"] else sb.POLICIES[block][0]
         wf = {"bitwidth": int(row["w"]), "frame_bursts": int(row["fb"])} if "w" in row else {}
         spans = [(s, e) for s, e, _ in sb.pysim_spans(block, n, pol, tm, CLK, **wf)]
         if block == "dispatch":
@@ -75,7 +78,8 @@ def test_pysim_reproduces_the_rtl_at_every_calibrated_point(block):
 
 def test_a_block_is_untimed_unless_it_names_a_platform():
     """No platform, no model; a platform, the model attached as the simulation starts (``pre_sim``)."""
-    for m in (StreamDispatch(name="d", sim=Simulation()), StreamArbiter(name="a", sim=Simulation())):
+    for m in (StreamDispatch(name="d", sim=Simulation()), StreamArbiter(name="a", sim=Simulation()),
+              StreamDemux(name="x", sim=Simulation())):
         m.pre_sim()
         assert m.timing_model is None
     d = StreamDispatch(name="d", sim=Simulation(), n_out=4, clk=CLK, platform_dir=PLATFORM)
@@ -92,6 +96,24 @@ def test_the_platform_refuses_another_clock_and_an_unmeasured_point():
     d = StreamDispatch(name="d", sim=Simulation(), n_out=4, platform_dir=PLATFORM)          # 100 MHz
     with pytest.raises(ValueError, match="250 MHz"):
         d.pre_sim()
+
+
+def test_the_demux_is_timed_at_its_measured_points_and_refused_off_them():
+    """``StreamDemux`` on the platform: os_filterbank's demuxes (3 outputs by a header field, at 32 bits
+    with 1-burst frames and at 184 bits with 2-burst frames) and the swept counts are measured; the same
+    at 64 bits, or 5 outputs, is refused at build; and a timed demux's frames come its measured gap
+    apart."""
+    for kw in ({"bitwidth": 32, "frame_bursts": 1}, {"bitwidth": 184, "frame_bursts": 2}):
+        d = StreamDemux(name="x", sim=Simulation(), n_out=3, route="header", clk=CLK, platform_dir=PLATFORM, **kw)
+        d.pre_sim()
+        assert d.timing_model.component == "stream_demux_task.decision"
+    for kw in ({"n_out": 3, "bitwidth": 64}, {"n_out": 5}):
+        with pytest.raises(ValueError, match="no measurement"):
+            StreamDemux(name="x", sim=Simulation(), route="header", clk=CLK, platform_dir=PLATFORM, **kw)
+    tm = st.model("demux", PLATFORM, CLK)
+    want = _corpus("demux").query("n == 4 and hdr == 1 and w == 32")["span_rtl"].item()
+    spans = [(s, e) for s, e, _ in sb.pysim_spans("demux", 4, "header", tm, CLK)]
+    assert set(sb.frame_gaps(spans, 4)) == {want}
 
 
 def test_naming_a_platform_does_not_change_a_module_key():
@@ -139,8 +161,9 @@ def test_a_timed_dispatcher_is_slower_by_its_decision_cycles():
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("block,n,policy", [("dispatch", 4, "round_robin"), ("arbiter", 4, "round_robin")],
-                         ids=["dispatch4_rr", "arbiter4_rr"])
+@pytest.mark.parametrize("block,n,policy", [("dispatch", 4, "round_robin"), ("arbiter", 4, "round_robin"),
+                                            ("demux", 4, "header")],
+                         ids=["dispatch4_rr", "arbiter4_rr", "demux4_hdr"])
 def test_rtl_decision_cost_is_the_platforms(block, n, policy):
     """The gate: the block re-measured at RTL at the platform's target (xczu48dr, 4 ns) gives the spans
     its committed table holds, and pysim on that table gives them too.  A Vitis version or body change

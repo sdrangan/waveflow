@@ -8,9 +8,12 @@ firing through :meth:`~waveflow.hw.hw_freerun.FreeRunMod.timed_delay`; a block g
 as before, so nothing that names no platform changes.
 
 * **One model a block**, keyed by its task body on the platform (``components/<id>/``):
-  ``stream_arbiter_task.decision`` on the basis ``(n, rr)``, and ``stream_dispatch_task.decision`` on
+  ``stream_arbiter_task.decision`` on the basis ``(n, rr, w, fb)``, ``stream_dispatch_task.decision`` on
   ``(n, rr, kind)`` -- ``kind`` 0 a job sent, 1 a credit taken back, for a credit firing is a firing of
-  its own.  ``n`` is the block's ports a side, ``rr`` 1 for round-robin.
+  its own -- and ``stream_demux_task.decision`` (``StreamDemux``, both its bodies) on ``(n, hdr, w, fb)``.
+  ``n`` is the block's ports a side, ``rr`` 1 for round-robin, ``hdr`` 1 for a demux routed by a header
+  field, ``w`` the width and ``fb`` the TLAST bursts a frame (``plans/osfb_pysim_fidelity.md``, causes E
+  and F).
 * **A lookup, not a law.**  The cost steps where Vitis reschedules the search (round-robin's gap at
   100 MHz goes 4, 5, 10, 20 from 2 to 16 workers), so between two measured points the truth can be
   anywhere: an unmeasured ``(n, rr)`` is ``UNCALIBRATED`` and :func:`attach` refuses it.
@@ -49,8 +52,10 @@ PLATFORM = "xczu48dr_250mhz_vitis2025_1"
 #: Each block's component on the platform, and its basis.  The arbiter's carries its width (``w``, bits)
 #: and frame (``fb``, TLAST bursts a frame) -- a design calibrates at its own (``plans/stream_dispatch.md``
 #: open question 7; ``plans/osfb_pysim_fidelity.md`` cause E); the dispatcher's is still keyed by function.
-COMPONENTS = {"arbiter": "stream_arbiter_task.decision", "dispatch": "stream_dispatch_task.decision"}
-BASIS = {"arbiter": ["n", "rr", "w", "fb"], "dispatch": ["n", "rr", "kind"]}
+COMPONENTS = {"arbiter": "stream_arbiter_task.decision", "dispatch": "stream_dispatch_task.decision",
+              "demux": "stream_demux_task.decision"}
+#: The demux's ``hdr``: 1 for ``route="header"`` (``stream_demux_hdr_task``), 0 by ``s_sel``.
+BASIS = {"arbiter": ["n", "rr", "w", "fb"], "dispatch": ["n", "rr", "kind"], "demux": ["n", "hdr", "w", "fb"]}
 
 #: The dispatcher's two firings.
 JOB, CREDIT = 0, 1
@@ -93,6 +98,11 @@ def features(n: int, round_robin: bool, kind: int | None = None, *, w: int | Non
     if fb is not None:
         out["fb"] = float(fb)
     return out
+
+
+def demux_features(n: int, header: bool, w: int, fb: int) -> dict[str, float]:
+    """A demux firing's point: its outputs, its route (``hdr``), width and frame."""
+    return {"n": float(n), "hdr": float(bool(header)), "w": float(w), "fb": float(fb)}
 
 
 def require_points(mod, block: str, points: list[dict]) -> None:

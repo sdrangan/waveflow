@@ -47,8 +47,30 @@ its siblings.
 
 ## In pysim
 
-`run_iter` is one frame: its index (an `s_sel` burst, or the first burst's field), then its bursts to that
-output. Output order per output is the input's, so pysim and RTL record the same words on every output.
+`run_iter` is one frame, as the body: its index (an `s_sel` word, or the frame's first word's field),
+then its bursts to that output, copied as their words arrive. It commits on the frame's **first word**
+(`begin_read(pending_ok=True)`, as `StreamArbiter` does) and copies with `copy_burst`: the output starts
+then and ends no earlier than the input's last word -- not once the whole frame is in, as it did before
+(`plans/osfb_pysim_fidelity.md`, cause H). Output order per output is the input's, so pysim and RTL record
+the same words on every output.
+
+**Its decision cycles, on a calibrated platform.** By default pysim decides at once. Name a calibrated
+platform and each frame first spends the cycles the RTL does deciding (`waveflow.streams.timing`, cause F):
+
+```python
+dmx = StreamDemux(name="dmx", sim=sim, n_out=3, bitwidth=184, frame_bursts=2, route="header",
+                  clk=Clock(freq=250e6),
+                  platform_dir=packaged_platforms_dir() / "xczu48dr_250mhz_vitis2025_1")
+```
+
+The table is keyed by the outputs, the route, the width and the frame (`n, hdr, w, fb`). Measured with the
+demux alone at 4 ns on `xczu48dr` (Vitis HLS / xsim 2025.1, a backlog of 8-word bursts to each output in
+turn; `python -m waveflow.calib.fixtures.stream_blocks --blocks demux`): **3 idle cycles between frames at
+every point** -- 2, 4, 8 and 16 outputs by `s_sel` and by a header field at 32 bits with 1-burst frames, and
+`examples/os_filterbank`'s three-output demuxes by a header field at 32 bits with 1-burst frames and at 184
+bits with 2-burst frames. pysim reproduces each (`tests/streams/test_stream_timing.py`; at RTL, `-m xsi`). A
+point not measured (5 outputs, or 64 bits) is refused when the block is built, and another clock when the
+simulation starts.
 
 ## In HLS
 
