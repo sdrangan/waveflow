@@ -18,12 +18,14 @@ as before, so nothing that names no platform changes.
   cycles between consecutive frames or jobs (or what one credit firing adds to them), and the model
   stores ``rtl - pysim + current``, so ``run_iter`` adds only what the channels do not already charge
   (the arbiter's frames are a cycle apart in pysim before any model; the dispatcher's, none).
-* **Keyed by function, measured at one width and frame.**  The calibration builds every block at 32
-  bits and 1-burst frames.  The spot check (``--spot`` of :mod:`waveflow.calib.fixtures.stream_blocks`,
-  4 ports) at 128 bits and 2-burst frames found every frame or job gap one cycle longer, both blocks
-  and both policies, the credit firing unchanged -- not yet separated into width and bursts.  So a
-  block at another width or frame is predicted to within about a cycle a frame, and the models say so
-  (``config_specific=False``) rather than imply a match.
+* **The arbiter keyed by its width and frame too; the dispatcher by function.**  The calibration builds
+  every block at 32 bits and 1-burst frames, and the arbiter also where a design needs it (at 4 inputs,
+  128 bits and 2-burst frames: ``examples/os_filterbank``); the arbiter's basis carries ``w`` and ``fb``,
+  so an arbiter at an unmeasured width or frame is refused, as an unmeasured ``n`` is -- a design
+  calibrates at its own (``plans/stream_dispatch.md`` open question 7).  The dispatcher's basis has
+  neither: the spot check (``--spot``, 4 ports) found every job gap one cycle longer at 128 bits and
+  2-burst jobs, the credit firing unchanged, so a dispatcher at another width or frame is predicted to
+  within about a cycle a job, and its model says so (``config_specific=False``).
 * **Measured with every port at the top.**  Each block is calibrated alone, every port a top-level
   AXI-Stream port.  Inside a composite its ports are FIFOs, and a firing can cost less: in the
   dispatcher pool at 250 MHz a credit firing adds 2 cycles to a job gap at 2 workers (4 alone) and 4 at
@@ -44,9 +46,11 @@ from waveflow.calib.timing_model import RESIDUAL, TimingModel
 #: The platform the blocks' decision cost is calibrated on: xczu48dr at 250 MHz, Vitis / Vivado 2025.1.
 PLATFORM = "xczu48dr_250mhz_vitis2025_1"
 
-#: Each block's component on the platform, and its basis.
+#: Each block's component on the platform, and its basis.  The arbiter's carries its width (``w``, bits)
+#: and frame (``fb``, TLAST bursts a frame) -- a design calibrates at its own (``plans/stream_dispatch.md``
+#: open question 7; ``plans/osfb_pysim_fidelity.md`` cause E); the dispatcher's is still keyed by function.
 COMPONENTS = {"arbiter": "stream_arbiter_task.decision", "dispatch": "stream_dispatch_task.decision"}
-BASIS = {"arbiter": ["n", "rr"], "dispatch": ["n", "rr", "kind"]}
+BASIS = {"arbiter": ["n", "rr", "w", "fb"], "dispatch": ["n", "rr", "kind"]}
 
 #: The dispatcher's two firings.
 JOB, CREDIT = 0, 1
@@ -77,11 +81,17 @@ def model(block: str, platform_dir, clk=None) -> StreamBlockTimingModel:
                                   features=list(BASIS[block]), clk=clk, config_specific=False)
 
 
-def features(n: int, round_robin: bool, kind: int | None = None) -> dict[str, float]:
-    """A firing's point on the basis: ``kind`` only for the dispatcher."""
+def features(n: int, round_robin: bool, kind: int | None = None, *, w: int | None = None,
+             fb: int | None = None) -> dict[str, float]:
+    """A firing's point on the basis: ``kind`` only for the dispatcher, ``w`` and ``fb`` (the width and the
+    TLAST bursts a frame) only for the arbiter."""
     out = {"n": float(n), "rr": float(bool(round_robin))}
     if kind is not None:
         out["kind"] = float(kind)
+    if w is not None:
+        out["w"] = float(w)
+    if fb is not None:
+        out["fb"] = float(fb)
     return out
 
 

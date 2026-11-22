@@ -30,18 +30,28 @@ def _corpus(block: str) -> pd.DataFrame:
 
 
 def test_every_point_of_the_sweep_is_calibrated():
-    """Both blocks at 2, 4, 8 and 16 ports under both policies -- and the dispatcher's two firings --
+    """Both blocks at 2, 4, 8 and 16 ports under both policies -- the dispatcher's two firings, and the
+    arbiter also at 4 inputs, 128 bits and 2-burst frames (``sb.EXTRA``, ``examples/os_filterbank``'s) --
     are on the platform, each a lookup row whose pysim span equals the RTL's."""
     for block, kinds in (("arbiter", [None]), ("dispatch", [st.JOB, st.CREDIT])):
+        fx = sb.FIXTURES[block]
         tm = st.model(block, PLATFORM, CLK)
         df = _corpus(block)
-        assert len(df) == len(sb.NS) * 2 * len(kinds)
+        assert len(df) == len(fx.points()) * len(kinds)
         assert np.allclose(df["span_pysim"], df["span_rtl"]), df
-        for n in sb.NS:
-            for rr in (False, True):
-                for kind in kinds:
-                    feat = st.features(n, rr, kind)
-                    assert tm.confidence_feat(feat).level.value == "EXACT", feat
+        for n, p, w, fb in fx.points():
+            for kind in kinds:
+                feat = fx.feat(n, p, kind, w, fb)
+                assert tm.confidence_feat(feat).level.value == "EXACT", feat
+
+
+def test_the_arbiter_is_refused_at_a_width_or_frame_not_measured():
+    """The arbiter's basis carries its width and frame: os_filterbank's (4 inputs, 128 bits, 2-burst
+    frames) is on the platform, the same at 64 bits or 3-burst frames is not, and is refused at build."""
+    StreamArbiter(name="a", sim=Simulation(), n_in=4, bitwidth=128, frame_bursts=2, clk=CLK, platform_dir=PLATFORM)
+    for kw in ({"bitwidth": 64}, {"bitwidth": 128, "frame_bursts": 3}):
+        with pytest.raises(ValueError, match="no measurement"):
+            StreamArbiter(name="a", sim=Simulation(), n_in=4, clk=CLK, platform_dir=PLATFORM, **kw)
 
 
 @pytest.mark.parametrize("block", ["arbiter", "dispatch"])
@@ -52,7 +62,8 @@ def test_pysim_reproduces_the_rtl_at_every_calibrated_point(block):
     for row in _corpus(block).to_dict("records"):
         n, rr = int(row["n"]), bool(row["rr"])
         pol = "round_robin" if rr else sb.POLICIES[block][0]
-        spans = [(s, e) for s, e, _ in sb.pysim_spans(block, n, pol, tm, CLK)]
+        wf = {"bitwidth": int(row["w"]), "frame_bursts": int(row["fb"])} if "w" in row else {}
+        spans = [(s, e) for s, e, _ in sb.pysim_spans(block, n, pol, tm, CLK, **wf)]
         if block == "dispatch":
             got = sb.job_and_credit(spans)["credit" if row["kind"] == st.CREDIT else "job"]
         else:

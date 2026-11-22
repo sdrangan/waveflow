@@ -48,7 +48,7 @@ from waveflow.streams.body_step import StreamBodyStep
 from waveflow.streams.timing import attach, decide, features, require_points
 from waveflow.utils.burst_io import StreamBurst
 
-__all__ = ["StreamArbiter", "StreamArbiterStep", "POLICIES", "copy_burst"]
+__all__ = ["POLICIES", "StreamArbiter", "StreamArbiterStep", "copy_burst"]
 
 #: The policies and their code in the HLS body's ``RR`` template argument.
 POLICIES = {"priority": 0, "round_robin": 1}
@@ -140,7 +140,8 @@ class StreamArbiter(FreeRunMod):
 
     def firing(self) -> dict:
         """A firing's point on the decision model's basis (:mod:`waveflow.streams.timing`)."""
-        return features(int(self.n_in), self.policy == "round_robin")
+        return features(int(self.n_in), self.policy == "round_robin", w=int(self.bitwidth),
+                        fb=int(self.frame_bursts))
 
     def run_iter(self):
         """Wait for any input to hold a frame's first word; the first in :meth:`search_order` wins.  Its

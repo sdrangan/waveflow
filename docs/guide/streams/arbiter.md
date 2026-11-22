@@ -184,10 +184,13 @@ arb = StreamArbiter(name="arb", sim=sim, n_in=4, policy="round_robin", clk=Clock
 The platform's table, the arbiter alone at 4 ns on `xczu48dr` (Vitis HLS / xsim 2025.1, 8-word frames;
 `python -m waveflow.calib.fixtures.stream_blocks`), idle cycles between frames, priority / round-robin:
 3 / 3 at 2 inputs, 3 / 4 at 4, 7 / 8 at 8 and 8 / 8 at 16 -- the 100 MHz figures above but for
-round-robin at 16, a cycle more. pysim reproduces each. A point not measured (3 inputs) is refused when
-the block is built, and another clock when the simulation starts. Two limits:
+round-robin at 16, a cycle more. pysim reproduces each. The table is keyed by the width and the frame too
+(`w`, `fb`): at 4 inputs, 128 bits and 2-burst frames (`examples/os_filterbank`'s arbiter) every gap is a
+cycle longer -- 4 under priority, 5 under round-robin -- and a design calibrates at its own width and frame
+(`python -m waveflow.calib.fixtures.stream_blocks --work <dir> --blocks arbiter` measures the points in its
+`EXTRA` the platform lacks). A point not measured (3 inputs, or 4 at 64 bits) is refused when the block is
+built, and another clock when the simulation starts. One limit:
 
-- At 128 bits with 2-burst frames every gap is a cycle longer than the table's (4 inputs, both policies).
 - The table is the arbiter alone, every port at the top. Inside a composite its ports are FIFOs and a
   firing may cost less; in the dispatcher's pool that was so of the dispatcher's credit firing
   ([StreamDispatch](dispatch.md#in-pysim-on-a-calibrated-platform)).

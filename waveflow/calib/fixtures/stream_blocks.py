@@ -46,6 +46,11 @@ from waveflow.streams import timing as st
 #: The worker / input counts the shipped calibration covers.
 NS = (2, 4, 8, 16)
 POLICIES = {"arbiter": ("priority", "round_robin"), "dispatch": ("first_free", "round_robin")}
+#: Points past the default width and frame (32 bits, 1-burst frames) that a design needs, as
+#: ``(n, policy, bitwidth, frame_bursts)``: the arbiter's basis carries its width and frame, and a design
+#: calibrates at its own (``plans/stream_dispatch.md`` open question 7).  ``examples/os_filterbank``'s
+#: arbiter: 4 inputs, 128 bits, 2-burst frames (``plans/osfb_pysim_fidelity.md``, cause E).
+EXTRA = {"arbiter": ((4, "priority", 128, 2), (4, "round_robin", 128, 2)), "dispatch": ()}
 #: The dispatcher's scenario: jobs of 8 words, and credits a worker so none is waited for.
 JOBS, WORDS = 40, 8
 #: When the credits arrive (cycle, how many), all naming worker 0.
@@ -60,8 +65,9 @@ def _tag(policy: str) -> str:
     return {"round_robin": "rr", "priority": "p", "first_free": "ff"}[policy]
 
 
-def _label(n: int, policy: str, kind: str | None = None, extra: str = "") -> str:
-    return f"n{n}_{_tag(policy)}" + (f"_{kind}" if kind else "") + extra
+def _label(n: int, policy: str, kind: str | None = None, extra: str = "", *, w: int = 32, fb: int = 1) -> str:
+    return (f"n{n}_{_tag(policy)}" + (f"_w{w}f{fb}" if (w, fb) != (32, 1) else "")
+            + (f"_{kind}" if kind else "") + extra)
 
 
 def _target(platform_dir) -> tuple[str, float]:
@@ -197,9 +203,11 @@ def _merge_frames(spans, frame_bursts: int):
 # --- pysim ---------------------------------------------------------------------------------------------
 
 
-def pysim_spans(block: str, n: int, policy: str, tm, clk) -> list[tuple[int, int, int]]:
+def pysim_spans(block: str, n: int, policy: str, tm, clk, *, bitwidth: int = 32,
+                frame_bursts: int = 1) -> list[tuple[int, int, int]]:
     """The same scenario in pysim, the block timed by *tm* (the platform's current model: zero before
-    the first fit), each output read as it comes; bursts timed at their last word (one word a cycle)."""
+    the first fit), each output read as it comes; bursts timed at their last word (one word a cycle).
+    The arbiter at *bitwidth* and *frame_bursts* (a frame's bursts merged into one span, as at RTL)."""
     from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
     from waveflow.simulation.simulation import Simulation
     from waveflow.streams.arbiter import StreamArbiter, frames_of
@@ -208,8 +216,10 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk) -> list[tuple[int, int
     sim = Simulation()
     per = clk.period
 
+    bw = int(bitwidth) if block == "arbiter" else 32
+
     def link(name, master, slave):
-        lk = StreamIF(name=name, sim=sim, clk=clk, bitwidth=32, framed=True, depth=4096)
+        lk = StreamIF(name=name, sim=sim, clk=clk, bitwidth=bw, framed=True, depth=4096)
         lk.bind("master", master)
         lk.bind("slave", slave)
 
@@ -224,9 +234,12 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk) -> list[tuple[int, int
         feeds["s_free"] = (mod.s_free, cr)
         outs = mod.m_out
     else:
-        mod = StreamArbiter(name="arb", sim=sim, n_in=n, bitwidth=32, policy=policy, clk=clk)
-        feeds = {f"s_in_{k}": (mod.s_in[k], [(0, b.words) for b in frames_of(k, 1, "long")]) for k in range(n)}
-        sel = StreamIFSlave(name="r_sel", sim=sim, bitwidth=32)
+        mod = StreamArbiter(name="arb", sim=sim, n_in=n, bitwidth=bw, frame_bursts=int(frame_bursts),
+                            policy=policy, clk=clk)
+        feeds = {f"s_in_{k}": (mod.s_in[k], [(0, b.words) for b in widen(frames_of(k, int(frame_bursts), "long"),
+                                                                          bw)])
+                 for k in range(n)}
+        sel = StreamIFSlave(name="r_sel", sim=sim, bitwidth=bw)
         link("o_sel", mod.m_sel, sel)
         outs = [mod.m_out]
     mod.add_timing_model(tm)
@@ -237,23 +250,26 @@ def pysim_spans(block: str, n: int, policy: str, tm, clk) -> list[tuple[int, int
             wait = at * per - sim.env.now
             if wait > 0:
                 yield sim.env.timeout(wait)
-            yield from tx.write(np.asarray(words, dtype=np.uint32))
+            yield from tx.write(np.asarray(words, dtype=np.uint64 if bw > 32 else np.uint32))
 
     def read(rx):
         while True:
             words = yield from rx.get()
             end = round(sim.env.now / per)
-            got.append((end - len(words) + 1, end, int(words[0])))
+            first = np.asarray(words, dtype=np.uint64).reshape(len(words), -1)[0, 0]   # a wide word's low chunk
+            got.append((end - len(words) + 1, end, int(first)))
 
     for port, (ep, items) in feeds.items():
-        tx = StreamIFMaster(name=f"t_{port}", sim=sim, bitwidth=32)
+        tx = StreamIFMaster(name=f"t_{port}", sim=sim, bitwidth=bw)
         link(f"l_{port}", tx, ep)
         sim.env.process(drive(tx, items))
     for k, ep in enumerate(outs):
-        rx = StreamIFSlave(name=f"r{k}", sim=sim, bitwidth=32)
+        rx = StreamIFSlave(name=f"r{k}", sim=sim, bitwidth=bw)
         link(f"o{k}", ep, rx)
         sim.env.process(read(rx))
     sim.run_sim()
+    if block == "arbiter" and int(frame_bursts) > 1:                 # a frame's bursts are one span
+        got = _merge_frames(got, int(frame_bursts))
     return got
 
 
@@ -270,22 +286,34 @@ class _StreamBlockFixture:
     def __init__(self, ns=NS) -> None:
         self.ns = tuple(ns)
 
+    def points(self) -> list[tuple[int, str, int, int]]:
+        """Every point calibrated, ``(n, policy, bitwidth, frame_bursts)``: each count under each policy at
+        32 bits and 1-burst frames, and the block's :data:`EXTRA` points whose count is swept."""
+        return ([(n, p, 32, 1) for n in self.ns for p in POLICIES[self.block]]
+                + [x for x in EXTRA[self.block] if x[0] in self.ns])
+
+    def feat(self, n: int, policy: str, code=None, w: int = 32, fb: int = 1) -> dict[str, float]:
+        """A point's features: the arbiter's carry its width and frame (``timing.BASIS``)."""
+        wf = {"w": w, "fb": fb} if "w" in st.BASIS[self.block] else {}
+        return st.features(n, policy == "round_robin", code, **wf)
+
     def sweep(self) -> list[SweepPoint]:
-        return [SweepPoint(label=_label(n, p), features=st.features(n, p == "round_robin"))
-                for n in self.ns for p in POLICIES[self.block]]
+        return [SweepPoint(label=_label(n, p, w=w, fb=fb), features=self.feat(n, p, None, w, fb))
+                for n, p, w, fb in self.points()]
 
     # -- one point, both sides --------------------------------------------------------------------
-    def rtl_rows(self, n: int, policy: str, work_dir) -> dict[str, list[dict]]:
-        """Measure ``(n, policy)`` at RTL: ``{run label: firing rows}`` (spans in cycles)."""
-        spans = rtl_spans(self.block, n, policy, Path(work_dir) / f"{self.block}_{_label(n, policy)}",
-                          self._platform_dir)
-        return self._rows(n, policy, spans, rtl=True)
+    def rtl_rows(self, n: int, policy: str, work_dir, w: int = 32, fb: int = 1) -> dict[str, list[dict]]:
+        """Measure ``(n, policy, w, fb)`` at RTL: ``{run label: firing rows}`` (spans in cycles)."""
+        spans = rtl_spans(self.block, n, policy, Path(work_dir) / f"{self.block}_{_label(n, policy, w=w, fb=fb)}",
+                          self._platform_dir, bitwidth=w, frame_bursts=fb)
+        return self._rows(n, policy, spans, rtl=True, w=w, fb=fb)
 
-    def pysim_rows(self, n: int, policy: str, tm, clk) -> dict[str, list[dict]]:
-        return self._rows(n, policy, pysim_spans(self.block, n, policy, tm, clk), rtl=False, tm=tm, clk=clk)
+    def pysim_rows(self, n: int, policy: str, tm, clk, w: int = 32, fb: int = 1) -> dict[str, list[dict]]:
+        spans = pysim_spans(self.block, n, policy, tm, clk, bitwidth=w, frame_bursts=fb)
+        return self._rows(n, policy, spans, rtl=False, tm=tm, clk=clk, w=w, fb=fb)
 
-    def _rows(self, n, policy, spans, *, rtl: bool, tm=None, clk=None) -> dict[str, list[dict]]:
-        rr = policy == "round_robin"
+    def _rows(self, n, policy, spans, *, rtl: bool, tm=None, clk=None, w: int = 32,
+              fb: int = 1) -> dict[str, list[dict]]:
         cid = st.COMPONENTS[self.block]
         out = {}
         if self.block == "dispatch":
@@ -294,7 +322,7 @@ class _StreamBlockFixture:
         else:
             parts = {None: (None, frame_gaps([(s, e) for s, e, _ in spans], n))}
         for kind, (code, values) in parts.items():
-            feat = st.features(n, rr, code)
+            feat = self.feat(n, policy, code, w, fb)
             if not values:
                 raise RuntimeError(f"{self.block} n={n} {policy} {kind}: no span measured")
             if rtl:
@@ -303,7 +331,7 @@ class _StreamBlockFixture:
             else:
                 cur = tm.predict_feat(feat)[0]
                 rows = [{**feat, "span": float(v) * clk.period, "current_dly": cur} for v in values]
-            out[_label(n, policy, kind)] = rows
+            out[_label(n, policy, kind, w=w, fb=fb)] = rows
         return out
 
     # -- the whole calibration -----------------------------------------------------------------------
@@ -317,22 +345,23 @@ class _StreamBlockFixture:
         _part, hz = _target(platform_dir)
         clk = Clock(freq=hz)
         tm = st.model(self.block, platform_dir, clk)
-        points = [(n, p) for n in self.ns for p in POLICIES[self.block]]
+        points = self.points()
         kinds = ("job", "credit") if self.block == "dispatch" else (None,)
-        todo = [(n, p) for n, p in points
-                if remeasure or not all((tm.calib_dir / "rtl" / _label(n, p, k) / "firings.csv").is_file()
+        todo = [(n, p, w, fb) for n, p, w, fb in points
+                if remeasure or not all((tm.calib_dir / "rtl" / _label(n, p, k, w=w, fb=fb) / "firings.csv").is_file()
                                         for k in kinds)]
         if todo and work_dir is None:
             raise ValueError(f"{todo} not measured on {platform_dir}: pass work_dir (a SHORT path) to measure "
                              f"them with Vitis + Vivado")
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-            for rows in pool.map(lambda np_: self.rtl_rows(*np_, work_dir), todo):
+            for rows in pool.map(lambda pt: self.rtl_rows(pt[0], pt[1], work_dir, pt[2], pt[3]), todo):
                 for label, rs in rows.items():
                     tm.collect_rtl({"firings": rs}, run_id=label)
-        report: dict = {"component": tm.component, "measured_now": [_label(n, p) for n, p in todo], "passes": 0}
+        report: dict = {"component": tm.component,
+                        "measured_now": [_label(n, p, w=w, fb=fb) for n, p, w, fb in todo], "passes": 0}
         for _ in range(max_passes):
-            for n, p in points:
-                for label, rs in self.pysim_rows(n, p, tm, clk).items():
+            for n, p, w, fb in points:
+                for label, rs in self.pysim_rows(n, p, tm, clk, w, fb).items():
                     tm.collect_pysim(rs, run_id=label)
             df = tm.gen_data_frame()
             worst = float((df["span_pysim"] - df["span_rtl"]).abs().max())
