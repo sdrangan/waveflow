@@ -188,7 +188,10 @@ A consumer polling **several** inputs -- an HLS body that tests each with `empty
 can -- waits in pysim with `wait_any(*slaves)` (`waveflow.hw.interface`, also `FreeRunMod.wait_any`), then
 reads with `get_nb` in its own priority order. It blocks until one of them holds a delivered burst and
 takes nothing. Wait only on the inputs the firing can act on: it returns at once while any of them holds a
-burst. [`StreamArbiter`](../../streams/arbiter.md) is the worked case.
+burst. With `begun=True` a burst counts from its first word's arrival, before it is delivered -- for a body
+that commits on a frame's first word and copies the words as they arrive, reading with
+`begin_read(pending_ok=True)` then `end_read`. [`StreamArbiter`](../../streams/arbiter.md) is the worked
+case of both.
 
 `_nb` says *the caller chose not to wait*, so a short answer is that caller's business to retry.
 `offer` says *the producer had no choice*, so there is no retry and the loss is a fact about the run

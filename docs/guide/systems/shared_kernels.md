@@ -165,7 +165,10 @@ its forty-job one at 6282; `tests/examples/test_ring_stub.py` pins both.
 The stage in front of K polls: it checks which inputs hold a frame (`empty()`), feedback first, and
 takes one. Its pysim model must not spin: a simulation runs until no event is left, so a model that
 polls every cycle never ends. `wait_any` blocks until one of the inputs it can act on holds a burst;
-the firing then takes them in the HLS body's order. From the ring stub's `Mux`:
+the firing then takes them in the HLS body's order. A stage that, like `StreamArbiter`, commits on a
+frame's first word and copies the rest as it arrives waits with `wait_any(..., begun=True)`, so a frame
+counts from its first word, as `empty()` sees it ([StreamArbiter](../streams/arbiter.md#in-pysim)). From
+the ring stub's `Mux`, which reads each frame whole:
 
 ```python
 def run_iter(self):

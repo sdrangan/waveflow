@@ -81,7 +81,8 @@ dispatcher blocks mid-job and stops reading `s_free`: a cycle of waits, and a ha
 
 **Announce a job only when it is all there.** The block commits to a job on its first word and then waits
 for the rest, so a job still being produced stalls every other job meanwhile -- the arbiter's first rule,
-for the same reason.
+for the same reason. pysim shows the stall: a job begun and held open keeps the block, a returned credit
+waiting on `s_free` until the job is all there (`tests/streams/test_dispatch.py`).
 
 **A credit is room for a whole job.** A worker with `credits` credits must accept that many jobs without
 anything after the dispatcher moving first: its input link and its own buffering hold them, or it drains
@@ -93,13 +94,13 @@ the worker can hold breaks this rule.
 
 A pysim run (`tests/streams/test_dispatch.py`): 18 jobs on three workers whose time is 20 cycles a word,
 every third job 16 words long and the rest 2. With first-free and one credit a worker, the last result
-leaves at cycle 1,012; with a fixed split (round-robin, credits deep enough never to wait), at 2,065,
+leaves at cycle 969; with a fixed split (round-robin, credits deep enough never to wait), at 2,035,
 because the worker holding the long jobs finishes last. First-free sent 8, 5 and 5 jobs; the fixed split
 6, 6 and 6.
 
 The same with both blocks timed on the platform (below) needs a calibrated worker count, so four workers
-and 24 jobs, every fourth 16 words, at 250 MHz: first-free's last result leaves at cycle 974 and the fixed
-split's at 2,073, 2.1 times later (untimed, 908 and 2,065: 2.3 times). The decision cycles take a little of
+and 24 jobs, every fourth 16 words, at 250 MHz: first-free's last result leaves at cycle 928 and the fixed
+split's at 2,043, 2.2 times later (untimed, 872 and 2,035: 2.3 times). The decision cycles take a little of
 the gain, not the conclusion.
 
 ## Its HLS body
@@ -119,9 +120,12 @@ packed in one register (so its `#pragma HLS reset` is a scalar's), and the round
 `static` with `#pragma HLS reset`. The copy loop is the arbiter's, in the shape its page records, and
 `INLINE` so each output has its own copy pipeline.
 
-The model waits as the body polls: `wait_any(s_free, s_in)` while some worker holds a credit, and
-`wait_any(s_free)` alone while none does, so it never spins on a job it cannot send
-([Modelling a polling stage](../systems/shared_kernels.md#modelling-a-polling-stage)). The body's logic
+The model waits as the body polls: `wait_any(s_free, s_in, begun=True)` while some worker holds a credit,
+and `wait_any(s_free, begun=True)` alone while none does, so it never spins on a job it cannot send
+([Modelling a polling stage](../systems/shared_kernels.md#modelling-a-polling-stage)). `begun=True` makes
+an input count from its burst's first word, as `empty()` does, and the job is copied as its words arrive
+(`copy_burst`, shared with the arbiter): taken begun, the output started at once and finished no earlier
+than the input's last word. So the model commits where the body does -- on a word, not a burst. The body's logic
 is checked against the model's decision rules under g++ with stand-in headers
 (`tests/streams/cpp_mock/`): logic only, not csim, and nothing about timing.
 
@@ -173,12 +177,14 @@ send. A one-credit worker whose result is taken the moment it is done idles that
 its own path to the arbiter; a second credit, with room for the second job, hides it. Under round-robin the
 next job to a worker also waits its turn behind the others' (27 cycles at 2 workers, 64 at 4).
 
-**First-free at RTL is not first-free in pysim.** In that pool at RTL, first-free sent all 40 jobs to worker
-0: the arbiter returns a credit as it starts copying a job (it commits on the first word), so worker 0 is
-free again by the dispatcher's next decision. pysim, which decides at once, spread them 20 / 20 and
-13 / 12 / 9 / 6. The gate allows this (which worker takes a job is timing's), and with real workers a
-credit comes back only when a result is taken; but links, or workers that drain their input at once, get
-no spread from first-free.
+**First-free in that pool sends every job to worker 0.** At RTL all 40 jobs went to worker 0: the arbiter
+returns a credit as it starts copying a job (it commits on the first word), so worker 0 is free again by
+the dispatcher's next decision. pysim on the calibrated platform (below) does the same, at 2 and 4 workers,
+since both models commit on a frame's first word too. Untimed pysim spreads them (24 / 16, 18 / 11 / 7 / 4):
+there the arbiter spends a cycle a frame on `m_sel` and the dispatcher none, so the arbiter falls behind and
+the credits come back late -- a fact of that timing, not of the model's grain. The gate allows any of these
+(which worker takes a job is timing's), and with real workers a credit comes back only when a result is
+taken; but links, or workers that drain their input at once, get no spread from first-free.
 
 ### In pysim, on a calibrated platform
 
@@ -208,20 +214,26 @@ pysim reproduces every row (`tests/streams/test_stream_timing.py`; at RTL, `-m x
 platform has not measured (3 workers, say) is refused when the block is built, and a clock other than the
 platform's when the simulation starts. The same `platform_dir` on `DispatchPool` times both of its blocks.
 The model adds one `timeout` a firing: pysim's cost stays a few events a burst, whatever the burst's length.
+Committing on a burst's first word adds a wake at that word: the 4-worker pool at one credit, 40 jobs,
+untimed, runs in 312 SimPy events at 8 words a job and 313 at 512, against 271 and 237 when the blocks
+waited for whole bursts; 3.3 and 5.2 ms of wall time against 2.5 and 4.3.
 
 **Where it is not yet exact.**
 
 - **Inside a composite.** The table is each block alone, every port a top-level AXI-Stream port. In the
   pool at 250 MHz, `s_free` an internal FIFO, a credit firing adds 2 cycles to a job gap at 2 workers
-  first-free and 4 at 4 round-robin, against the table's 4 and 5. So the timed pool runs 7 to 17% long
-  (40 jobs at one credit: 611 cycles against the RTL's 524 at 2 workers), where the untimed one ran 28 to
-  45% short (376).
+  first-free and 4 at 4 round-robin, against the table's 4 and 5. So the timed pool runs 6 to 15% long
+  (40 jobs at one credit: 601 cycles against the RTL's 524 at 2 workers, 721 against 682 at 4
+  round-robin), where the untimed one runs 31 to 47% short (362). A design that needs it exact calibrates
+  the cost in context, by tracing its composite.
 - **Another width or frame.** At 128 bits with 2-burst frames every job gap is a cycle longer than the
   table's, and the credit firing the same (4 workers).
-- **Which worker takes a job.** The RTL commits to a frame on its first word; pysim moves a burst whole.
-  In the pool the arbiter returns a credit while the dispatcher is still copying, so first-free sends
-  every job to worker 0 at RTL. Timed or not, pysim spreads them (20 / 20). No delay fixes this: it is the
-  model's grain, word against burst.
+
+Which worker takes a job is now the RTL's in that pool (above): pysim commits to a frame on its first
+word, as the RTL does, so the arbiter's credit comes back during the copy (`plans/stream_dispatch.md`,
+Stage 8; before it, pysim moved a burst whole and spread first-free's jobs 20 / 20). The decision tables
+did not move with it: each block alone, on a backlog, is limited by its decisions, so its pysim gaps are
+the same either way, and a refit from the committed RTL spans reproduces them exactly.
 
 ## Its resources
 
