@@ -118,6 +118,23 @@ Measured (Vitis 2025.1, xc7z020 at 100 MHz, 3 inputs, 32 bits): every loop at II
 burst and round-robin, 7.26 ns estimated, 494 FF and 1000 LUT; 2 frame bursts and priority, 7.82 ns --
 over the 7.3 ns the 2.7 ns uncertainty leaves -- 581 FF and 995 LUT.
 
+**On the RFSoC at 250 MHz** (xczu48dr-ffvg1517-2-e, 4 ns; csynth Vitis HLS 2025.1, out-of-context place
+and route Vivado 2025.1; 3 inputs, 32 bits, the pair): every case meets 4 ns after routing, and the
+100 MHz estimate does not carry over.
+
+| pair | csynth estimate | routed critical path | WNS | LUT / FF routed |
+|---|---|---|---|---|
+| priority, 1 burst | 2.655 ns | 2.609 ns | +1.391 ns | 519 / 766 |
+| priority, 2 bursts | 2.655 ns | 2.613 ns | +1.387 ns | 537 / 883 |
+| round-robin, 1 burst | 2.787 ns | 3.112 ns | **+0.888 ns** | 555 / 787 |
+| round-robin, 2 bursts | 2.787 ns | 2.109 ns | +1.891 ns | 569 / 904 |
+
+The schedule is the 100 MHz one (the same states, II and depths). csynth's slowest chains -- the
+demux's index test, the round-robin pointer's update -- are not the routed worst paths: those end on
+the register slices Vitis puts on the top's AXI-Stream ports and are 80-93% routing, so the spread
+between equal designs (about 1 ns) is placement, not logic depth. Only 3 inputs were measured; the
+search grows with `n_in` (`plans/shared_kernel_rfsoc_timing.md`).
+
 ## Why not AMD's
 
 - The **AXI4-Stream Switch / Interconnect** (PG085) arbitrates on TLAST, a whole packet a grant, with fixed

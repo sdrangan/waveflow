@@ -79,6 +79,12 @@ python -m waveflow.streams.rtl C:/wfb/dmxh --block demux_hdr --n 3
 Measured (Vitis 2025.1, xc7z020 at 100 MHz, 3 outputs, 32 bits): by `s_sel` with 2-burst frames, 5.73 ns
 estimated, 253 FF and 492 LUT; by a header field, 3.18 ns, 261 FF and 422 LUT.
 
+On the RFSoC at 250 MHz (xczu48dr-ffvg1517-2-e, 4 ns; Vitis HLS / Vivado 2025.1, out of context): by
+`s_sel`, 1.822 ns estimated, 2.474 ns routed, WNS +1.526 ns, 399 LUT / 669 FF; by a header field,
+0.854 ns estimated, 2.792 ns routed, WNS +1.208 ns, 344 LUT / 588 FF. The header demux is csynth's fastest
+and routes slower than the other: a csynth estimate well under budget does not rank the routed result
+(`plans/shared_kernel_rfsoc_timing.md`).
+
 ## See also
 
 - [`StreamArbiter`](arbiter.md) -- the merging half, and the pair's gate.

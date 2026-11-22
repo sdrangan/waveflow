@@ -137,6 +137,14 @@ a forward frame reads ap_fixed<27,13>, an inverse one ap_fixed<27,3>
   the tag that travels beside it.
 - **The timing is the fixed build's.** A frame still leaves every `L/R` cycles, with the ping-pong
   reorder, in both directions and when they alternate. See [Timing](timing.md).
+- **What it costs** (xczu48dr at 250 MHz, csynth Vitis HLS 2025.1, out-of-context place and route
+  Vivado 2025.1, against the forward build): no timing -- csynth's estimate is the fixed build's
+  (2.855 ns at L = 64, 2.901 ns at L = 1024), every build meets 4 ns routed (WNS +0.962 ns and
+  +0.886 ns for the runtime builds), and the worst of the six is a *fixed* inverse, +0.399 ns, a
+  placement outcome. Resources: about 10% more FF and LUT in csynth, 1.5-6.5% routed (L = 64: +275 FF,
+  +401 LUT; L = 1024: +326 FF, +629 LUT); the same DSPs and BRAM. The extra goes to the input register
+  and one or two butterfly stages, each a pipeline stage deeper: latency, not rate
+  (`plans/shared_kernel_rfsoc_timing.md`).
 - **Inside, the input register reads the direction** at each frame's first word and hands a copy to
   every stage on its own small FIFO. Each stage reads its copy when that frame's first word arrives.
   The FIFOs are sized for the frames the chain holds, so the register never waits on them.

@@ -186,6 +186,24 @@ and comes back through it inverse. It uses every part above once:
 Its channels finish out of order, but each channel's own outputs do not depend on timing, so each gets
 its own port and the RTL recordings equal pysim's.
 
+## What the blocks cost on the RFSoC
+
+At 250 MHz on the xczu48dr (Vitis HLS / Vivado 2025.1, out of context), every block and the ring stub
+meet 4 ns after place and route, the worst slack +0.888 ns (the round-robin arbiter-demux pair), and
+`SsrFft`'s per-frame direction costs no timing and a few percent of its logic
+([StreamArbiter](../streams/arbiter.md#its-gate), [StreamDemux](../streams/demux.md#its-gates),
+[SSR FFT parameters](../dsp/ssr_fft/parameters.md#the-direction-chosen-per-frame)). Three things from
+those runs hold beyond these blocks:
+
+- **Each read or write of an internal FIFO costs csynth 1.46 ns on this part**, so a state that reads
+  one FIFO and writes another is 2.92 ns -- the whole budget once the 27% clock uncertainty is taken
+  off. Keep such states free of other logic.
+- **csynth's slowest chain is not the routed critical path.** The routed worst paths end on the
+  register slices on the top's AXI-Stream ports and are mostly routing; equal designs route about 1 ns
+  apart. Use post-route timing to decide, not the estimate.
+- **csynth counts FIFOs as BRAM that Vivado puts in LUTs**: the ring stub's 14 BRAM_18K became one
+  RAMB36 and 216 LUTRAMs. A share-or-replicate decision that weighs memory takes Vivado's numbers.
+
 ## Why not AMD's blocks
 
 Two vendor blocks merge streams. Neither fits between the tasks of one composite:
