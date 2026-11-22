@@ -1,10 +1,10 @@
 # Plan: why os_filterbank's pysim runs 17-27% short of its RTL, and a gate so it cannot drift again
 
 **Status: ACCEPTED 2026-11-22 (the user), for a lab machine with Vitis / Vivado 2025.1. Steps 1-3 DONE
-(`examples/os_filterbank/fidelity.py`; Section 5). Step 4: cause A modelled in `SsrFft` (Section 6, exact
-against every driver measurement at `L = 64 .. 4096`), B, C, D done in the example's stages, open question 2
-re-measured and the page corrected; STOPPED for the user on two decisions (Section 8): how `SsrFft`'s rule
-counts a gap (the bank lands at -2.6% / +0.0% one way, +19.9% / +17.2% the other), and E, F, H (framework).**
+(`examples/os_filterbank/fidelity.py`; Section 5). Step 4 DONE: cause A modelled in `SsrFft` (Section 6),
+counted from the arrivals (the user's option (a), Section 8); B, C, D in the example's stages; E, F, H in the
+stream blocks (approved). Every stream block timed, the bank is at -2.0% (`test`) and exact (`long`). Step 5:
+the gate written and passing; its tolerance PROPOSED and STOPPED for the user to confirm (Section 9).**
 Written by the cloud planning session from `plans/stream_dispatch.md` Stage 8's record (commits `4552413`,
 `03a9b4f`). Branch `ccr-62d70dbe-679k63`; pull first, commit and push after each step.
 
@@ -144,6 +144,7 @@ recorded number moves.
 | 2026-11-22 | 4 (E) | Approved by the user. The arbiter's decision table gains its width and frame (`timing.BASIS["arbiter"]` = `n, rr, w, fb`; the dispatcher's unchanged); the 16 committed firing files carry `w = 32, fb = 1`, the configuration they were measured at (values unchanged); the fixture's points carry them (`stream_blocks.EXTRA`). Measured at RTL (Vitis HLS / xsim 2025.1, xczu48dr at 4 ns): the arbiter alone at 4 inputs, 128 bits, 2-burst frames: 4 idle cycles between frames under priority, 5 under round-robin (3 / 4 at 32 bits); converged in 2 passes, every point exact. An arbiter at an unmeasured width or frame is refused at build. The bank (the arbiter timed): `test` 1,045 (-2.1%), `long` 2,428 (+0.2%); E +5 -> +2 (`test`), +1 -> 0 (`long`). Ledger row 17 closed. |
 | 2026-11-22 | 4 (F, H) | Approved by the user. `StreamDemux` gets Stages 8 and 7: it commits on a frame's first word (`begin_read(pending_ok=True)`) and copies as words arrive (`copy_burst`), and with `platform_dir` each frame spends its measured decision cycles (`timing.COMPONENTS["demux"]`, basis `n, hdr, w, fb`). Measured at RTL (the demux alone, xczu48dr at 4 ns, Vitis HLS / xsim 2025.1; `stream_blocks --blocks demux`, 10 points): **3 idle cycles between frames at every point** -- 2, 4, 8, 16 outputs by `s_sel` and by a header field at 32 bits, and the bank's three-output header demuxes at 32 bits / 1 burst and 184 bits / 2 bursts; converged in 2 passes, exact. Tests: the demux commits on a first word (fails on the previous model), timed at its points and refused off them, one new `-m xsi` gate (`demux4_hdr`; `WANT_XSI_GATES` 288 -> 289). `fidelity.py` times the demuxes too. **The bank, every stream block timed: `test` 1,038 (-2.7%), `long` 2,421 (-0.1%)**; each channel's last status, RTL / pysim: `test` 821 / 797, 1,067 / 1,037, 888 / 884; `long` 2,349 / 2,332, 2,371 / 2,356, 2,424 / 2,420. Attribution: `test` (gap +29) A 0, A2 +2, B +9, C +16, D +3, E +2, F -2, G +1, H -2; `long` (gap +3) A 0, A2 +1, B +3, C 0, E 0, F 0, G +1, H -2. Ledger row 16 closed. |
 | 2026-11-22 | 3 again (after E, F, H) and B refined | B's residual (+9 on `test`) was `pre`'s `COPY` loop entry: 6 cycles at RTL from a frame's tag word to its first word into the FFT, 3 in pysim; `STAGE_CYC["pre_copy"]` = 3. **Every stream block timed: `test` 1,046 (-2.0%), `long` 2,424 (exact)**; untimed 1,035 / 2,418. Attribution (timed): `test` (gap +21) A 0, A2 +3, B 0, C +16, D +3, E +2, F -2, G +1, H -2; `long` (gap 0) A 0, A2 +1, B 0, C 0, E 0, F 0, G +1, H -2. Each channel's last status, RTL / pysim (beats): `test` 821 / 799 (-2.7%), 1,067 / 1,044 (-2.2%), 888 / 886 (-0.2%); `long` 2,349 / 2,334 (-0.6%), 2,371 / 2,358 (-0.5%), 2,424 / 2,422 (-0.1%). Of C's +16 on `test`, 14 are one hop: `post` begins an inverse frame 38 cycles after the FFT's first word of it at RTL, 24 in pysim -- a wait behind its previous frame not yet explained. |
+| 2026-11-22 | 5 (proposed) | The gate written (a fast test: each channel's last status, every stream block timed, against `LAST_STATUS`), passing at the proposed 3%; the untimed bank fails it. Worst 2.68% (`test` channel 0), mean 1.05%. Tolerance proposed in Section 9; stopped for the user. Ledger rows 20 (`pre_copy`, closed) and 21 (`post`'s 14-cycle wait, open) added. |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -308,3 +309,37 @@ lands on its RTL.
   calibration machinery, so asked first.
 
 G is D's (the first block's read, fixed with it). After these, Step 5 (the gate and its tolerance).
+
+## 9. Step 5: the gate, and the tolerance proposed (2026-11-22)
+
+**The gate** (`tests/examples/test_os_filterbank.py::test_pysim_timing_is_within_tolerance_of_the_rtl`, a fast
+test, no vendor tools; written, passing, **not committed** until the tolerance is confirmed): the bank in pysim
+on each scenario, every stream block timed on the packaged platform (the arbiter and the three demuxes); for each
+channel, the cycle of its last status -- the burst's last beat, as `fidelity.py` compares it -- against the RTL
+cycle `test_rtl_timing_is_exact` pins (`LAST_STATUS`), in either direction. It also checks every job's status
+arrived and every block's model attached.
+
+**The result it gates** (pysim at HEAD `b5c65bc7`; RTL Vitis HLS / xsim 2025.1, xczu48dr at 250 MHz):
+
+| scenario, channel | RTL | pysim, blocks timed | error | pysim, untimed |
+|---|---|---|---|---|
+| `test`, 0 | 821 | 799 | -22 (-2.68%) | 793 (-3.41%) |
+| `test`, 1 | 1,067 | 1,044 | -23 (-2.16%) | 1,033 (-3.19%) |
+| `test`, 2 | 888 | 886 | -2 (-0.23%) | 880 (-0.90%) |
+| `long`, 0 | 2,349 | 2,334 | -15 (-0.64%) | 2,328 (-0.89%) |
+| `long`, 1 | 2,371 | 2,358 | -13 (-0.55%) | 2,352 (-0.80%) |
+| `long`, 2 | 2,424 | 2,422 | -2 (-0.08%) | 2,416 (-0.33%) |
+
+Timed: worst 2.68%, mean |error| 1.05% (`dse_cg`'s whole system: 1.44% mean). pysim is short on every
+channel; what is left on `test`'s end event (23 cycles) is `post`'s wait on one inverse frame (+14, ledger
+#21, not yet explained), `front`'s block read (D, +3), the FFT's latency (A2, +3), the arbiter (E, +2), the
+boundary (+1), the demux (-2).
+
+**Proposed: each channel's last status within 3% of the RTL's** (`PYSIM_TOL = 0.03`). It is the smallest
+round bound the result meets (the worst is 2.68%, 22 cycles on `test`'s channel 0), and it fails the untimed
+bank (`test` channel 0 at -3.41%), so dropping the stream blocks' tables fails it. Its weakness: on `long` it
+allows about 70 cycles, where the error now is 15 at most. A tighter alternative is per scenario: 3% on `test`,
+1% on `long` (worst 0.64%).
+
+What it does not close: #21, written up as open; the gate records the gap that remains (pysim short by up to
+2.7%), so it cannot grow unnoticed.
