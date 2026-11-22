@@ -15,7 +15,7 @@ The tests here measure whether an agent follows a pattern; their specs and answe
 repository, because a blind run works in an empty folder and a run whose transcript reads this folder is
 discarded. A **held-out design problem** is different: every agent that develops Waveflow works in this
 repository and would read it. So held-out problems -- their specifications, rubrics, transcripts and
-scores -- are kept in a separate, private evaluation repository, and only their outline and results are
+scores -- are kept in a separate, private evaluation repository (`sdrangan/waveflow-eval`), and only their outline and results are
 described here (`docs/evaluation/agent_skills/shared_kernel.md`). Do not copy a held-out problem into
 this repository. Researchers who want the material can ask the maintainer for read access (open an
 issue on the Waveflow repository).

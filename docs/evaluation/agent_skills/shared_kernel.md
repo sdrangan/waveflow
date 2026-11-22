@@ -12,7 +12,7 @@ summary: "Can an agent design an accelerator in which one expensive kernel is sh
 > problem's specification is kept outside the repository, so that `waveflow kb` and a grep cannot find it.
 
 **Held-out problems are not in this repository.** Their specifications, rubrics, run transcripts and
-scores are kept in a separate, private evaluation repository, so that no agent working in this
+scores are kept in a separate, private evaluation repository (`sdrangan/waveflow-eval`), so that no agent working in this
 repository -- an agent under test, or one developing Waveflow -- can read them, and the problems stay
 unseen for later runs. This repository holds only the method and the results in outline. Researchers
 who want the full material for a held-out study can ask the maintainer for read access (open an
