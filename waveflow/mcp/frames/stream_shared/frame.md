@@ -30,7 +30,7 @@ references are `os_filterbank` (one FFT shared by three channels, forward then i
 
 ## Decided by the spec
 
-- K, the clients, and why K is shared rather than replicated; which of the six ways
+- K, the clients, and why K is shared rather than replicated or pooled (M copies behind a `StreamDispatch`); which of the six ways
   (`shared_kernels.md`) and why;
 - the tag's fields; each link's width and depth, with the credit that bounds it;
 - the policy (priority or round-robin), and for a feedback path its priority;

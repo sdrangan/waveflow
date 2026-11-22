@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 10.6
 has_children: true
 audience: python
-summary: "Waveflow's own stream blocks: small, general free-running modules that move framed streams between a design's kernels, so a stream-only design does not rewrite them. Each is framework code -- a Python model, an HLS body templated on its ports' word types (so one body serves the block at a top, at a composite's boundary and inside one), a build step that copies the body, and an RTL gate in its own harness. Today: StreamBroadcast (one stream in, n copies out), StreamArbiter (n streams into one, a frame at a time, its winner on a side stream) and StreamDemux (one stream out to n, by a side stream or a header field)."
+summary: "Waveflow's own stream blocks: small, general free-running modules that move framed streams between a design's kernels, so a stream-only design does not rewrite them. Each is framework code -- a Python model, an HLS body templated on its ports' word types (so one body serves the block at a top, at a composite's boundary and inside one), a build step that copies the body, and an RTL gate in its own harness. Today: StreamBroadcast (one stream in, n copies out), StreamArbiter (n streams into one, a frame at a time, its winner on a side stream), StreamDemux (one stream out to n, by a side stream or a header field), StreamFramer (TLAST put back on a stream framed by count) and StreamDispatch (one job stream out to a pool of n workers, each job to a worker holding a credit)."
 ---
 
 # Stream Blocks
@@ -33,3 +33,4 @@ Every block here follows the same shape:
 | [`StreamArbiter`](arbiter.md) | `n_in` framed streams into one, a whole frame at a time, strict priority or round-robin; the winner's index on `m_sel` |
 | [`StreamDemux`](demux.md) | one framed stream out to `n_out`, a whole frame at a time, to the output `s_sel` or a header field names |
 | [`StreamFramer`](framer.md) | a stream framed by count alone into a framed one, TLAST every `frame_words` words: so a demux can sit after `SsrFft` |
+| [`StreamDispatch`](dispatch.md) | one framed job stream out to a pool of `n_out` identical workers, each job whole to a worker holding a credit, first-free or round-robin; credits back as a worker's index on `s_free` (an arbiter's `m_sel`) |
