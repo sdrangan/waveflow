@@ -205,6 +205,30 @@ At 16 workers and 128 bits (round-robin, 2-burst jobs, 4 credits) it routes at 6
 inside an output's register slice, 96% routing (Vivado 2025.1). 8 and 16 workers are not filed: at 8 and
 up Vitis names the task plainly (`stream_dispatch_task`), the attribution gap the arbiter's records have.
 
+## At 250 MHz on the RFSoC
+
+Out of context on `xczu48dr-ffvg1517-2-e` at 4 ns (`python -m waveflow.streams.rfsoc_probe <root> --only
+dsp2_ff dsp2_rr dsp4_ff dsp4_rr dsp16_w128_rr pool2_ff pool4_rr_c3 --steps csynth impl`; csynth Vitis HLS
+2025.1, its budget 4 ns less 1.08 ns uncertainty, 2.92 ns; place and route Vivado 2025.1). The dispatcher
+alone has 2-burst jobs and 4 credits a worker; the pool is as its gates build it. Every loop is II = 1 and
+every top meets timing:
+
+| top | csynth estimate | slowest state | routed LUT / FF | routed clock | WNS |
+|---|---|---|---|---|---|
+| dispatcher, 2 x 32, first-free | 2.699 ns | a count's add -> select -> compare | 363 / 579 | 2.416 ns | +1.584 ns |
+| dispatcher, 2 x 32, round-robin | 2.891 ns | `next_k + j`, its wrap, the free test -> `win` | 334 / 589 | 2.664 ns | +1.336 ns |
+| dispatcher, 4 x 32, first-free | 2.889 ns | a count's add -> select -> compare | 651 / 1,035 | 2.708 ns | +1.292 ns |
+| dispatcher, 4 x 32, round-robin | 2.883 ns | `s_free`'s read -> compare -> select | 671 / 1,128 | 3.306 ns | +0.694 ns |
+| dispatcher, 16 x 128, round-robin | 2.870 ns | the search's `found` chain | 6,611 / 14,098 | 3.776 ns | +0.224 ns |
+| pool, 2 x 32, first-free, 1 credit | 2.763 ns | `s_free`'s read -> compare | 284 / 317 | 1.812 ns | +2.188 ns |
+| pool, 4 x 32, round-robin, 3 credits | 2.877 ns | the count update's add -> select chain | 674 / 891 | 2.539 ns | +1.461 ns |
+
+The csynth estimates sit just under the budget: Vitis meets it by spreading a firing over more states,
+which is what the idle cycles between jobs are, so they are likely a cycle or more larger at 250 MHz than
+the 100 MHz figures above (not measured: XSI ran at the gates' 100 MHz). The routed worst paths are 76-96%
+routing, one to five LUTs deep; the 16-worker top's is inside an output's register slice. The routed
+figures include a standalone top's port register slices (the pools have two ports, so fewer).
+
 ## See also
 
 - [`StreamArbiter`](arbiter.md) -- the merging half, and the pool's other block.
