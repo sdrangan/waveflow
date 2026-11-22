@@ -116,7 +116,7 @@ N_BLK = 12
 #: **The floor scales with the sample rate**, which matters if this example's rate is ever raised: it
 #: is the loop's round trip expressed in *block periods*, and a block period is ``blksize /
 #: samp_rate``.  Measured at 400 MSa/s the floor is 6, not 4 — a delay carried across a rate change
-#: is a delay measured for a different design.
+#: is a delay measured for a different design.  ``test_rf_blk_delay.py`` pins that one too.
 #:
 #: Why a floor exists at all: the ADC and the DAC share one grid, so block *k* is only complete at
 #: the instant the DAC's period *k* comes due; the RX capture cannot serve it before then, the round
