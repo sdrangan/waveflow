@@ -71,7 +71,8 @@ class GapRhythm:
     (``prev_start + L/R`` back to back).  That is the FFT's behaviour at its input, and lands a design whose
     kernels feed the FFT when their data is ready on its RTL (``examples/os_filterbank``).  **Its limit:** at
     RTL a source the FFT stalls offers its next frame only its own gap after the FFT took its last word, and
-    pysim's links move a burst at a time, so they do not stall a source word by word (open:
+    pysim's links move a burst at a time, so they do not stall a source word by word (not modelled:
+    word-by-word back-pressure was rejected as too slow for pysim, 2026-11-22, the user;
     ``plans/osfb_pysim_fidelity.md`` Section 7).  A testbench driver that waits its gap after a stalled frame
     is therefore early in pysim: on random gaps up to ``2L/R`` its run is 6-8% short of the RTL's
     (``tests/dsp/ssr_fft/test_hw.py``); constant gaps and back-to-back frames stay exact."""

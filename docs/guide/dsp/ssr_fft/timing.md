@@ -124,8 +124,9 @@ Two choices make it track the hardware:
   interval. `tests/dsp/ssr_fft/test_hw.py` pins it so: pysim exactly the arrival counting, the RTL's record
   exactly the stall counting, the difference short only and within 8%. A source whose frames come when
   their data is ready -- a design's kernels -- is not early: in `examples/os_filterbank` the arrival
-  counting lands the bank on its RTL. Word-by-word back-pressure in pysim's links is open
-  (`plans/osfb_pysim_fidelity.md`, Section 7).
+  counting lands the bank on its RTL. Word-by-word back-pressure in pysim's links, which would close it, is
+  DECIDED (rejected, 2026-11-22, the user): too slow, it defeats the point of pysim. pysim keeps moving bursts, and the 6-8% stays a
+  named limit, not modelled (`plans/osfb_pysim_fidelity.md`, Section 7).
 
 `lat` per task is `latency_cycles`: `3D + 3` for a commutator, 3 for a stage, a frame plus one for the
 ping-pong reorder. The fixed terms were first csynth's pipeline depths, which put the first frame
