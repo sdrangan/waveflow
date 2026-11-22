@@ -16,7 +16,6 @@ absorb the first kind.
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,7 @@ from examples.interleaver.mem_stream_gen import (
     write_mem_w_xsi_bundles,
 )
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, run_xsi, xsi_runner_cmd
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -138,8 +137,8 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     # On Windows this is ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and
     # the bare form fails with "not recognized as an internal or external command" rather than
     # anything useful.  xsi_runner_cmd handles that and the Linux `bash run.sh` form.
-    r = subprocess.run(xsi_runner_cmd(top, tb), cwd=str(xsi),
-                       capture_output=True, text=True, timeout=1800)
+    r = run_xsi(xsi_runner_cmd(top, tb), cwd=str(xsi),
+                capture_output=True, text=True, timeout=1800)
     out = (r.stdout or "") + (r.stderr or "")
 
     if checker is not None:

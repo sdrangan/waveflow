@@ -108,13 +108,18 @@ def test_rtl_recordings_match_pysim(dag, prefix, top, outs):
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("prefix,kind,last", [("", "test", 934), ("long_", "long", 6282)],
-                         ids=["composite", "long"])
+@pytest.mark.parametrize("prefix,kind,last", [("", "test", 934), ("long_", "long", 6282),
+                                              ("late_", "test", 1231)],
+                         ids=["composite", "long", "late"])
 def test_rtl_loop_timing_is_exact(dag, prefix, kind, last):
     """The loop's timing, pinned: the cycle the last job's status leaves the composite at RTL (Vitis
     2025.1, xc7z020 at 100 MHz), every job answered.  A change to the mux, the credit or a loop depth
-    moves it."""
+    moves it.  ``late`` is the test jobs arriving late (``rs.LATE_GAPS``): its first word is accepted
+    only once the RTL driver's start gap has passed -- ``AxisMaster.start_gap_cycles`` at RTL."""
     work = system_run(dag, HERE, f"{prefix}{TOP}", through=f"{prefix}compare")
     cyc = np.fromfile(work / "traces" / "m_status" / "cycles.bin", dtype="<u8")
     assert len(cyc) == len(jobs(kind))
     assert int(cyc[-1]) == last
+    if prefix == "late_":                     # TVALID low for the gap's cycles, the word taken at once
+        acc = np.fromfile(work / "xsi_run" / "vectors" / "s_in_acc" / "cycles.bin", dtype="<u8")
+        assert int(acc[0]) == rs.LATE_GAPS[0] + 1

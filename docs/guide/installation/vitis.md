@@ -198,4 +198,5 @@ g++ --version      # any reasonably recent GCC will do
 
 The flow itself is driven by `run.bat` on Windows and `run.sh` on Linux. Both scripts take the same
 arguments and are copied into every design's `xsi/` workspace, so a workspace built on one platform
-can be simulated on the other.
+can be simulated on the other. On Linux, `run.sh` is given the Vivado Waveflow found (as `VIV`) unless
+`VIV`, `XILINX_VIVADO` or a `vivado` on your `PATH` already names one, so nothing need be on `PATH`.
