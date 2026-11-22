@@ -45,6 +45,56 @@ from .types import EdgeType, edge_types
 #: largest latency here to overlap the next frame's intake (lat < L/R for every block but none).
 MAX_INFLIGHT = 4
 
+#: The lengths whose interval after a gap (:class:`GapRhythm`) was measured at RTL -- exact on every frame,
+#: constant and random gaps (Vitis / xsim 2025.1, ``plans/osfb_pysim_fidelity.md`` Section 6).  Any other
+#: length the rule reaches gets it by structure, unmeasured; ``L = 16`` does not (see :class:`GapRhythm`).
+GAP_RULE_MEASURED = (64, 256, 1024, 4096)
+
+
+class GapRhythm:
+    """The interval after an input gap, set by the transposer's last commutator ``tp{S-2}``.
+
+    Measured at RTL (``L = 64, 256, 1024, 4096``; Vitis / xsim 2025.1): frames back to back leave every
+    ``L/R`` cycles, but a frame that follows its predecessor after **any** idle cycle starts no earlier
+    than ``max(2L/R, L/R + g)`` after it -- every frame of a run of constant gaps and of random ones,
+    exactly.  ``tp{S-2}`` (block size ``L/16``) is the task: its input stream fills and stretches, its
+    output carries each frame as ``L/R`` consecutive words, ``2L/R`` apart.  Not at ``L = 16`` (there
+    the transposer has one commutator, block size 1): each frame's latency moves by up to 3 cycles with
+    the gaps before and after it, an arrival-phase effect as ``VitisFft``'s
+    (``docs/guide/vitis_l1/fft/timing.md``), with no frame-time lost.  So ``L = 16`` keeps ``L/R + g``:
+    within 3 cycles of the RTL's interval frame by frame, the same total on random gaps, and up to 13
+    cycles behind over 11 frames at a constant 1-cycle gap (where the RTL alternates 8 and 4).
+
+    The pysim does not stall the FFT's input here (a task holds up to :data:`MAX_INFLIGHT` frames),
+    where the RTL does, and a source the RTL stalls counts its idle cycles from where the stall let it
+    finish.  So the gap is taken between the frames as they arrive (the first word of one less a frame
+    after the first word of the other) and counted from the previous frame's start as the rule placed
+    it: ``start = prev_start + L/R`` back to back, ``prev_start + max(2L/R, L/R + g)`` after a gap."""
+
+    def __init__(self, n_words: int, period: float) -> None:
+        self.n, self.per = int(n_words), float(period)
+        self.prev_arrival: float | None = None
+        self.prev_start = 0.0
+
+    def start(self, arrival: float, earliest: float) -> float:
+        """The frame's start: *arrival* is its first word's arrival, *earliest* the soonest the reader
+        can start it (its first word as read)."""
+        frame = self.n * self.per
+        if self.prev_arrival is None:
+            s = earliest
+        else:
+            gap = arrival - (self.prev_arrival + frame)
+            s = self.prev_start + (frame if gap < 0.5 * self.per else max(2 * frame, frame + gap))
+            s = max(s, earliest)
+        self.prev_arrival, self.prev_start = arrival, s
+        return s
+
+
+def gap_rhythm(geo: m.Geometry, period: float) -> GapRhythm | None:
+    """The :class:`GapRhythm` for a geometry, or ``None`` at ``L = 16`` (the transposer's last commutator
+    of block size 1, where the RTL keeps ``L/R + g`` in total)."""
+    return GapRhythm(geo.n_words, period) if geo.L >= 64 else None
+
 
 def block_type(geo: m.Geometry) -> type[DataArray]:
     """The reorder's block: one frame of raw ``rc`` words (``hls::stream_of_blocks<ap_uint<W>[L/R]>``)."""
@@ -102,6 +152,9 @@ class SsrTask(FreeRunMod):
         self._slots = simpy.Container(self.sim.env, init=MAX_INFLIGHT, capacity=MAX_INFLIGHT)
         self._wlock = simpy.Resource(self.sim.env, capacity=1)
         self.lat = latency_cycles(self.task)
+        #: The transposer's last commutator sets the interval after a gap (:class:`GapRhythm`).
+        self._rhythm = (gap_rhythm(self.geo, self.clk.period)
+                        if self.timed and self.task.inst == f"tp{self.geo.S - 2}" else None)
         for name, ty in self.task.params:
             ep = self._make_endpoint(name, ty)
             setattr(self, name, ep)
@@ -185,6 +238,8 @@ class SsrStream(SsrTask):
         elif self.task.kind == "stage" and self.geo.runtime:
             geo = yield from self._read_dir()
         words, t0 = yield from self._get_words(self.s_in, n)
+        if self._rhythm is not None:
+            t0 = self._rhythm.start(self.s_in.last_stamp.first, t0)
         if self.task.kind in ("pass", "dir_in"):
             self._emit(self.m_out, words, t0)
             return
@@ -403,6 +458,9 @@ class SsrFft(FreeRunMod):
             cap = MAX_INFLIGHT * len(self.tasks)
             self._flat_slots = simpy.Container(self.sim.env, init=cap, capacity=cap)
             self._flat_wlock = simpy.Resource(self.sim.env, capacity=1)
+            # The interval after a gap, applied at the boundary: the chain's tp{S-2} sees each frame a
+            # fixed number of cycles later, so the same rule on the boundary times is the chain's.
+            self._flat_rhythm = gap_rhythm(self.geo, self.clk.period) if self.timed else None
 
     # -- the flat pysim (pysim="flat") ----------------------------------------------------------
     def run_proc(self):
@@ -441,6 +499,8 @@ class SsrFft(FreeRunMod):
                 continue
             if "m_out" in dict(t.task.params):
                 edge = t._edge_of(dict(t.task.params)["m_out"])
+        if self._flat_rhythm is not None:
+            t0 = self._flat_rhythm.start(t0, t0)
         start = t0 + self._flat_lat if self.timed else self.now
         if self.lanes:
             self.call_after(0, SsrLanes._store_lanes, last._lane_ports(), last._lane_words(re, im),

@@ -134,6 +134,7 @@ recorded number moves.
 | 2026-11-22 | 2 | `fidelity.py --timeline`: a CSV per backend and scenario, a row a frame and link (`ch, tx_id, blk, npass, link, first, last`, write-side beats), every link of the bank and its outputs; the same 246 (`test`) and 664 (`long`) frame-links at RTL, untimed and timed pysim, each once. RTL beats are put on the recordings' origin: the waveform runs 15 cycles ahead on every output port, both scenarios. Tooling gaps met (worked around in the script, not the framework; Section 5). |
 | 2026-11-22 | 3 | `fidelity.py --attribute`: the gap along the RTL's critical path, every hop charged to a cause; the causes sum to the gap exactly (166 and 624 with the arbiter timed, 182 and 658 untimed). **Cause A, `SsrFft`'s interval after a gap, is 92-103% of it**: `SsrFft` alone at RTL, frames a gap `g` apart, runs a frame every 16 cycles at `g = 0` and every **32** at every `g` from 1 to 16 (40 at 24) -- `max(2L/R, L/R + g)` -- where its pysim runs `L/R + g`; the same with a fixed direction (`fidelity.py --fft-gaps runtime fixed`; every frame bit-exact). In the bank `pre` leaves a cycle or more between frames, so the RTL's FFT runs at 32 throughout: 72 frames x 32 plus the fill is the `long` scenario's 2,424. Section 5 has the table and the rest (B-H, each under 25%). **Stopped before Step 4**: cause A's fix is in `SsrFft`'s model. |
 | 2026-11-22 | 4 (A, rule first) | The user approved cause A's fix, the rule confirmed first (Section 6). `fidelity.py --fft-gaps 64 16 256 1024` (`SsrFft` alone, constant and random gaps, a traced run; Vitis / xsim 2025.1; every frame bit-exact): **exact and deterministic at `L = 64, 256, 1024`** -- every constant gap and 23 of 23 random intervals follow `max(2L/R, L/R + g)` -- set by the last transposer commutator (`tp1`, `tp2`, `tp3`). **At `L = 16` the intervals spread**: 16 of 23 random intervals, off by -4 to -1; there the FFT loses no throughput (its intervals sum to `L/R + g`, which today's pysim matches in total) but each frame's latency moves 40-43 cycles with the gaps before and after it, an arrival-phase effect. **Stopped before modelling**, as the approval says, for the user (proposal in Section 6). Two open questions noted (Section 7). |
+| 2026-11-22 | 4 (A, the model) | The user approved the rule where `L >= 64`, `L = 16` as it is. **`L = 4096` measured** (`fidelity.py --fft-gaps 4096`, Vitis / xsim 2025.1): every constant gap and 23 of 23 random intervals follow the rule, set by `tp4`. **The model** (`waveflow/dsp/ssr_fft/hw.py`, `GapRhythm`): `tp{S-2}` at `L >= 64`, and the flat pysim at its boundary (its pin against the chain holds); pysim now equals the RTL on **every** measured interval at `L = 64, 256, 1024, 4096` (constant and random gaps). `tests/dsp/ssr_fft/test_hw.py`: `test_composite_pysim_keeps_the_rtl_interval_after_a_gap` (64, 256, 1024, 4096) and `test_composite_pysim_at_l16_is_within_three_cycles_a_frame`; the back-to-back pins did not move (138 FFT tests pass). **`L = 16` corrected**: within 3 cycles a frame and the same total on random gaps, but at constant gaps of 1-3 cycles the RTL falls up to 13 cycles behind over 11 frames (it alternates 8 and 4 at a 1-cycle gap) -- not "exact in total"; so stated in the model and `timing.md`, which now gives the rule, its tables, and no longer says "`L/R` by construction". |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -214,6 +215,7 @@ runtime direction, its own system flow (`ssr_fft.rtl`), every frame of every run
 | 64 | 0, 1, 2, 4, 8, 15, 16, 24, 32 | every gap | `L/R + g` |
 | 256 | 0, 1, 2, 4, 32, 63, 64, 96, 128 | every gap | `L/R + g` |
 | 1024 | 0, 1, 2, 4, 128, 255, 256, 384, 512 | every gap | `L/R + g` |
+| 4096 | 0, 1, 2, 4, 512, 1023, 1024, 1536, 2048 (measured after the approval) | every gap | `L/R + g` |
 
 **Random gaps** (24 frames; a third of the gaps 0, the rest uniform in 1 .. `2L/R`), frame by frame:
 
@@ -223,6 +225,7 @@ runtime direction, its own system flow (`ssr_fft.rtl`), every frame of every run
 | 64 | exact on 23 of 23 | exact (636) | -47 (up to 14 an interval) |
 | 256 | exact on 23 of 23 | exact (2,198) | -262 (up to 59) |
 | 1024 | exact on 23 of 23 | exact (9,587) | -1,288 (up to 222) |
+| 4096 | exact on 23 of 23 | exact | -- (the rule since modelled) |
 
 **Which task** (`fft_tasks`: a traced run, frames 1 cycle apart): at `L = 64, 256, 1024` it is the **last
 transposer commutator**, `tp{S-2}` (`tp1`, `tp2`, `tp3`; block size `L/16`): its input stream is full and
@@ -231,8 +234,8 @@ each frame as `L/R` consecutive words, exactly `2L/R` apart. The streams before 
 28 / 124 / 508; `in_reg` 31 / 127 / 511), all full.
 
 **`L = 16` is different** (there the last transposer commutator is also the first, `tp0`, block size 1): the
-FFT never stalls its input (every frame accepted in 4 cycles) and loses no throughput -- its intervals sum to
-`L/R + g` exactly -- but each frame's latency is 40 to 43 cycles, depending on the gaps before *and after* it
+FFT never stalls its input (every frame accepted in 4 cycles) and on the random run loses no throughput -- its intervals sum to
+`L/R + g` exactly (at a constant gap of 1-3 cycles it falls up to 13 cycles behind over 11 frames: corrected after the approval, row "4 (A, the model)") -- but each frame's latency is 40 to 43 cycles, depending on the gaps before *and after* it
 (a frame after a 1-cycle gap takes 43 when the next comes 3-6 cycles later, 40 when the next follows back to
 back): an arrival-phase effect, like `VitisFft`'s vendor core (`docs/guide/vitis_l1/fft/timing.md`). So no
 single exact rule covers every length.

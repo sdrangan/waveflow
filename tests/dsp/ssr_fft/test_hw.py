@@ -95,6 +95,7 @@ def test_generate_writes_the_build_tree(tmp_path):
 #: frame's last output beat, in cycles from its first input beat.  The interval was exactly L/R.
 #: Keyed (L, lanes): the lane builds came first; the RadixWord-port builds are what
 #: examples/ssr_fft/ssr_fft_measure.py records in measured.json (tests/examples/test_ssr_fft.py).
+#: (Frames with gaps between them: RTL_GAPPED below.)
 RTL_FIRST_FRAME = {(16, True): 42, (64, True): 111, (256, True): 352, (1024, True): 1278,
                    (16, False): 40, (64, False): 109, (256, False): 350, (1024, False): 1276}
 
@@ -107,6 +108,74 @@ def test_composite_pysim_tracks_the_rtl(tmp_path, length, lanes):
     cyc = pysim_frame_cycles(tb)
     assert abs(cyc[0] - RTL_FIRST_FRAME[(length, lanes)]) <= 5, cyc
     assert np.allclose(np.diff(cyc), length // 4), cyc
+
+
+#: XSI, RFSoC 4x2 at 250 MHz, ping-pong reorder, runtime direction (frames 0 1 1 0 1 ...), Vitis / xsim
+#: 2025.1 (2026-11-22, ``plans/osfb_pysim_fidelity.md`` Section 6; ``python -m
+#: examples.os_filterbank.fidelity --fft-gaps 64 16 256 1024``): the interval between consecutive output
+#: frames when the input frames are a constant gap apart -- ``{gap: interval}``, the same for every frame
+#: -- and for 24 frames at random gaps (a third 0, the rest 1 .. 2L/R): the gaps and each interval.
+#: At L >= 64 every interval is ``max(2L/R, L/R + g)`` (``L/R`` at ``g = 0``), the transposer's last
+#: commutator's rhythm; at L = 16 the intervals move with arrival phase (lists: frame by frame).
+RTL_GAPPED = {
+    16: {"const": {0: 4, 1: [8, 4] * 5 + [8], 2: [8, 4] * 5 + [8], 3: [8, 8, 8, 4] * 2 + [8, 8, 8], 4: 8,
+                   6: 10, 8: 12},
+         "gaps": [0, 1, 3, 3, 4, 3, 6, 5, 1, 5, 8, 1, 6, 1, 0, 0, 0, 7, 2, 8, 0, 0, 0],
+         "rtl": [4, 8, 4, 8, 8, 8, 8, 9, 8, 8, 10, 8, 8, 4, 4, 4, 4, 11, 8, 10, 4, 4, 4]},
+    64: {"const": {0: 16, 1: 32, 2: 32, 4: 32, 8: 32, 15: 32, 16: 32, 24: 40, 32: 48},
+         "gaps": [0, 27, 0, 0, 0, 0, 5, 13, 5, 16, 24, 19, 21, 0, 20, 0, 31, 2, 0, 0, 8, 0, 30],
+         "rtl": [16, 43, 16, 16, 16, 16, 32, 32, 32, 32, 40, 35, 37, 16, 36, 16, 47, 32, 16, 16, 32, 16, 46]},
+    256: {"const": {0: 64, 1: 128, 2: 128, 4: 128, 32: 128, 63: 128, 64: 128, 96: 160, 128: 192},
+          "gaps": [0, 0, 0, 0, 15, 0, 7, 65, 0, 0, 114, 11, 0, 0, 0, 55, 93, 70, 0, 5, 0, 29, 0],
+          "rtl": [64, 64, 64, 64, 128, 64, 128, 129, 64, 64, 178, 128, 64, 64, 64, 128, 157, 134, 64, 128, 64,
+                  128, 64]},
+    1024: {"const": {0: 256, 1: 512, 2: 512, 4: 512, 128: 512, 255: 512, 256: 512, 384: 640, 512: 768},
+           "gaps": [48, 0, 110, 41, 0, 0, 73, 0, 410, 0, 316, 0, 34, 500, 177, 0, 167, 0, 425, 0, 110, 0, 0],
+           "rtl": [512, 256, 512, 512, 256, 256, 512, 256, 666, 256, 572, 256, 512, 756, 512, 256, 512, 256, 681,
+                   256, 512, 256, 256]},
+    # Measured at every gap below, the same way; pinned at three of them over 6 frames (a run costs
+    # seconds at this length).
+    4096: {"const": {0: 1024, 1: 2048, 1536: 2560}, "frames": 6,
+           "gaps": [154, 0, 0, 1956, 0, 739, 0, 1279, 897, 677, 454, 629, 1253, 1981, 1685, 202, 0, 0, 1868, 0,
+                    1474, 693, 267],
+           "rtl": [2048, 1024, 1024, 2980, 1024, 2048, 1024, 2303, 2048, 2048, 2048, 2048, 2277, 3005, 2709, 2048,
+                   1024, 1024, 2892, 1024, 2498, 2048, 2048]},
+}
+
+
+def _gapped_intervals(tmp_path, length: int, gaps: list[int]) -> list[int]:
+    tb = run_pysim(tmp_path, length=length, n_frames=len(gaps) + 1, burst_gaps=list(gaps), reorder="pingpong",
+                   direction="runtime", dirs=[0, 1, 1, 0, 1])
+    return [round(float(x)) for x in np.diff(pysim_frame_cycles(tb))]
+
+
+@pytest.mark.parametrize("length", (64, 256, 1024, 4096))
+def test_composite_pysim_keeps_the_rtl_interval_after_a_gap(tmp_path, length):
+    """A frame that follows its predecessor after any idle cycle leaves ``max(2L/R, L/R + g)`` after it,
+    as the RTL's transposer's last commutator lets it: every interval at RTL, constant gaps and random
+    ones, exactly (``hw.GapRhythm``).  Back to back stays ``L/R``."""
+    rec = RTL_GAPPED[length]
+    n = rec.get("frames", 12) - 1
+    for g, want in rec["const"].items():
+        assert _gapped_intervals(tmp_path / f"g{g}", length, [g] * n) == [want] * n, g
+    assert _gapped_intervals(tmp_path / "random", length, rec["gaps"]) == rec["rtl"]
+
+
+def test_composite_pysim_at_l16_is_within_three_cycles_a_frame(tmp_path):
+    """At L = 16 the RTL's intervals after a gap move with arrival phase (a frame's latency depends on the
+    next frame's gap too), and the model keeps ``L/R + g``: within 3 cycles of the RTL's interval, frame
+    by frame; on the random run the total is the RTL's; at constant gaps of 1 to 3 cycles the RTL falls
+    behind by up to 13 cycles over 11 frames (a 1-cycle gap)."""
+    rec = RTL_GAPPED[16]
+    for g, want in rec["const"].items():
+        got = _gapped_intervals(tmp_path / f"g{g}", 16, [g] * 11)
+        want = want if isinstance(want, list) else [want] * 11
+        assert got == [4 + g] * 11, g                       # the model: L/R + g
+        assert max(abs(a - b) for a, b in zip(got, want)) <= 3, (g, got, want)
+        assert 0 <= sum(want) - sum(got) <= 13, (g, got, want)
+    got = _gapped_intervals(tmp_path / "random", 16, rec["gaps"])
+    assert max(abs(a - b) for a, b in zip(got, rec["rtl"])) <= 3
+    assert sum(got) == sum(rec["rtl"])
 
 
 def _observed(tb):
