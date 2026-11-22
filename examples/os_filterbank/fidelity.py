@@ -150,7 +150,8 @@ LINKS = {
     **{f"m_out_{c}": (fb.W_ANS, "pair") for c in range(fb.C)},
     **{f"m_status_{c}": (fb.W_MSG, "one") for c in range(fb.C)},
 }
-NBLK = {(ch, tx): len(x) // fb.B for kind in KINDS for ch, js in fb.jobs(kind).items() for tx, x in js}
+#: Blocks in each job, per scenario: a Status names its job, and the row its last block.
+NBLK = {kind: {(ch, tx): len(x) // fb.B for ch, js in fb.jobs(kind).items() for tx, x in js} for kind in KINDS}
 
 
 def _decode(schema, words: np.ndarray, bw: int):
@@ -160,7 +161,7 @@ def _decode(schema, words: np.ndarray, bw: int):
     return schema().deserialize(first.reshape(-1) if k == 1 else first, word_bw=bw)
 
 
-def _key(link: str, words: np.ndarray) -> tuple:
+def _key(link: str, words: np.ndarray, kind: str) -> tuple:
     """The frame a header word names: ``(ch, tx_id, blk, npass)``."""
     bw = LINKS[link][0]
     if link.startswith(("blk", "fb", "frm", "tag")):
@@ -170,10 +171,10 @@ def _key(link: str, words: np.ndarray) -> tuple:
         r = _decode(fb.Resp, words, bw)
         return (int(r.ch), int(r.tx_id), int(r.blk), 1)
     s = _decode(fb.Status, words, bw)                  # st, m_status: the job's last block answered
-    return (int(s.ch), int(s.tx_id), NBLK[(int(s.ch), int(s.tx_id))] - 1, 1)
+    return (int(s.ch), int(s.tx_id), NBLK[kind][(int(s.ch), int(s.tx_id))] - 1, 1)
 
 
-def frames(bursts: dict[str, list]) -> list[tuple]:
+def frames(bursts: dict[str, list], kind: str) -> list[tuple]:
     """``{link: [(first beat, last beat, words), ...]}`` -> rows ``(ch, tx_id, blk, npass, link, first,
     last)``, a row a frame and link."""
     keys: dict[str, list] = {}
@@ -188,9 +189,9 @@ def frames(bursts: dict[str, list]) -> list[tuple]:
             inv = [k for k in keys["tag"] if k[3] == 1]
             fr = [(inv[i // 2], b[i][0], b[i + 1][1]) for i in range(0, len(b) - 1, 2)]
         elif how == "pair":
-            fr = [(_key(link, b[i][2]), b[i][0], b[i + 1][1]) for i in range(0, len(b) - 1, 2)]
+            fr = [(_key(link, b[i][2], kind), b[i][0], b[i + 1][1]) for i in range(0, len(b) - 1, 2)]
         elif how == "one":
-            fr = [(_key(link, w), f, la) for f, la, w in b]
+            fr = [(_key(link, w, kind), f, la) for f, la, w in b]
         else:
             src = how.split(":", 1)[1]
             order = (keys.get(src) if not src[-1].isdigit()
@@ -204,7 +205,7 @@ def frames(bursts: dict[str, list]) -> list[tuple]:
 
 
 def pysim_timeline(kind: str, timed: bool = False) -> list[tuple]:
-    return frames(pysim_run(kind, timed)["_xfers"])
+    return frames(pysim_run(kind, timed)["_xfers"], kind)
 
 
 def channels_manifest(spec, nets: set[str]) -> dict:
@@ -325,7 +326,7 @@ def rtl_bursts(kind: str) -> dict[str, list]:
 
 
 def rtl_timeline(kind: str) -> list[tuple]:
-    return frames(rtl_bursts(kind))
+    return frames(rtl_bursts(kind), kind)
 
 
 def write_csv(path: Path, rows: list[tuple]) -> None:
@@ -363,6 +364,217 @@ def print_end_table(rows: dict) -> None:
               f"{r['arb_timed']['end']:,.0f} ({pct(r['arb_timed']['end'], rtl)}) | {st} |")
 
 
+# --- Step 3: the end-cycle gap along the RTL's critical path ---------------------------------------------------
+#
+# Events are (frame, link, edge): a frame's first ('f') or last ('l') word on a link, in beats.  Each event's
+# candidate predecessors are the same frame's input to the stage that writes the link, and that stage's
+# previous frame.  The binding one is the one with the least slack at RTL -- its time plus the least the hop
+# ever takes at RTL -- and following it back from the run's last word gives the RTL's critical path.  Along
+# one path the differences telescope: the hops' (RTL - pysim) durations plus the start's difference ARE
+# the gap at the last word, exactly.  Each hop is charged to a cause.
+
+#: Each hop's cause (``plans/osfb_pysim_fidelity.md``, Step 3).
+CAUSE = {
+    ("fft", "after its previous frame"): "A. SsrFft's interval after a gap: RTL max(2L/R, L/R+g), pysim L/R+g",
+    ("fft", "latency"): "A2. SsrFft's latency (within its documented 5 cycles)",
+    ("fft", "latency (from last in)"): "A2. SsrFft's latency (within its documented 5 cycles)",
+    ("fft", "frame out"): "A2. SsrFft's latency (within its documented 5 cycles)",
+    ("fft", "frame into the FFT"): "A2. SsrFft's latency (within its documented 5 cycles)",
+    "pre": "B. pre: pysim waits for the whole frame, the RTL copies it through",
+    "post": "C. post: its loops' overheads, and pass 1 copied through at RTL",
+    "front": "D. front: the block read after the credit (RTL 12 words, pysim already delivered)",
+    "arb": "E. the arbiter's decision at 128 bits, 2-burst frames (table: 32 bits, 1 burst)",
+    "dmx_st": "F. the demuxes' decision cycles (untimed in pysim)",
+    "dmx_crd": "F. the demuxes' decision cycles (untimed in pysim)",
+    "dmx_ans": "F. the demuxes' decision cycles (untimed in pysim)",
+}
+
+
+def _orders(T: dict) -> dict:
+    def order(link):
+        return [k[:4] for k in sorted((k for k in T if k[4] == link), key=lambda k: T[k][0])]
+    o = {"frm": order("frm"), "y": order("y"), **{f"blk{c}": order(f"blk{c}") for c in range(fb.C)},
+         **{f"m_out_{c}": order(f"m_out_{c}") for c in range(fb.C)}}
+    if not o["frm"] == order("x") == order("tag") == o["y"]:
+        raise RuntimeError("pre, the FFT and post must keep the arbiter's order")
+    return o
+
+
+def _preds(ev, o) -> list:
+    """An event's candidate predecessors, each labelled (stage, hop)."""
+    fr, link, edge = ev
+
+    def prev(seq, f):
+        i = seq.index(f)
+        return seq[i - 1] if i > 0 else None
+
+    out = []
+    if link.startswith("blk"):
+        c = int(link[3:])
+        if edge == "l":
+            return [(("front", "frame write"), (fr, link, "f"))]
+        p = prev(o[link], fr)
+        if p is not None:
+            out.append((("front", "after its previous frame"), (p, link, "l")))
+        i = o[link].index(fr)
+        if i >= fb.CR:                                # the credit of the frame CR before it
+            src = o[link][i - fb.CR]
+            out.append((("front", "credit wait"), ((*src[:3], 1), f"crd{c}", "f")))
+        return out
+    if link == "frm":
+        src = ((*fr[:3], 0), f"blk{fr[0]}") if fr[3] == 0 else ((*fr[:3], 1), "fb")
+        if edge == "f":
+            out.append((("arb", "decide and m_sel"), (*src, "f")))
+            p = prev(o["frm"], fr)
+            if p is not None:
+                out.append((("arb", "after its previous frame"), (p, "frm", "l")))
+        else:
+            out += [(("arb", "copy"), (fr, "frm", "f")), (("arb", "copy, input's last word"), (*src, "l"))]
+        return out
+    if link == "x":
+        if edge == "f":
+            out.append((("pre", "tag, dir, first word"), (fr, "frm", "f")))
+            p = prev(o["frm"], fr)
+            if p is not None:
+                out.append((("pre", "after its previous frame"), (p, "x", "l")))
+        else:
+            out += [(("fft", "frame into the FFT"), (fr, "x", "f")),
+                    (("pre", "copy, input's last word"), (fr, "frm", "l"))]
+        return out
+    if link == "y":
+        if edge == "f":
+            out += [(("fft", "latency"), (fr, "x", "f")), (("fft", "latency (from last in)"), (fr, "x", "l"))]
+            p = prev(o["y"], fr)
+            if p is not None:
+                out.append((("fft", "after its previous frame"), (p, "y", "l")))
+        else:
+            out.append((("fft", "frame out"), (fr, "y", "f")))
+        return out
+    if link in ("fb", "ans"):
+        src = fr if link == "ans" else (*fr[:3], 0)       # fb's frame is the forward pass's product
+        if edge == "f":
+            out.append((("post", "frame in (pass 1)" if link == "ans" else "frame in"),
+                        (src, "y", "f" if link == "ans" else "l")))
+            p = prev(o["y"], src)
+            if p is not None:
+                out.append((("post", "after its previous frame"), (p, "fb" if p[3] == 0 else "crd", "l")))
+        else:
+            out.append((("post", "fb write" if link == "fb" else "answer write"), (fr, link, "f")))
+            if link == "ans":
+                out.append((("post", "answer, input's last word"), (fr, "y", "l")))
+        return out
+    if link in ("crd", "st"):
+        return [(("post", "status and credit" if link == "crd" else "status"), (fr, "ans", "l"))]
+    if link.startswith("crd"):
+        return [(("dmx_crd", "route"), (fr, "crd", "f"))]
+    if link.startswith("m_out"):
+        if edge == "f":
+            out.append((("dmx_ans", "route"), (fr, "ans", "f")))
+            p = prev(o[link], fr)
+            if p is not None:
+                out.append((("dmx_ans", "after its previous frame"), (p, link, "l")))
+        else:
+            out += [(("dmx_ans", "copy"), (fr, link, "f")), (("dmx_ans", "copy, input's last word"), (fr, "ans", "l"))]
+        return out
+    if link.startswith("m_status"):
+        return [(("dmx_st", "route"), (fr, "st", "f"))]
+    return []                       # sel, tag, dir: beside the frame's path, never a binding hop on it
+
+
+def _times(rows) -> dict:
+    return {(*r[:4], r[4]): (r[5], r[6]) for r in rows}
+
+
+def attribute(kind: str, timed: bool = True) -> dict:
+    """The end-cycle gap on *kind*, RTL against pysim (the arbiter timed, or not), along the RTL's
+    critical path: ``{"causes": {cause: cycles}, "hops": [...], ...}``; the causes sum to the gap."""
+    R, P = _times(rtl_timeline(kind)), _times(pysim_timeline(kind, timed))
+    run = pysim_run(kind, timed)
+    o = _orders(R)
+
+    def t(T, ev):
+        v = T[(*ev[0], ev[1])]
+        return v[0] if ev[2] == "f" else v[1]
+
+    lmin: dict = {}
+    for k in R:
+        for edge in ("f", "l"):
+            e = (k[:4], k[4], edge)
+            for lab, p in _preds(e, o):
+                if (*p[0], p[1]) in R:
+                    d = t(R, e) - t(R, p)
+                    lmin[lab] = min(lmin.get(lab, d), d)
+    end = max(((k[:4], k[4], "l") for k in R if k[4].startswith(("m_out", "m_status"))),
+              key=lambda e: t(R, e))
+    ev, hops = end, []
+    while True:
+        ps = [(lab, p) for lab, p in _preds(ev, o) if (*p[0], p[1]) in R]
+        if not ps:
+            break
+        lab, p = min(ps, key=lambda lp: t(R, ev) - t(R, lp[1]) - lmin[lp[0]])
+        hops.append((lab, t(R, ev) - t(R, p), t(P, ev) - t(P, p)))
+        ev = p
+    causes: dict = {}
+    for lab, dr, dp in hops:
+        name = CAUSE.get(lab) or CAUSE[lab[0]]
+        causes[name] = causes.get(name, 0) + dr - dp
+    causes["G. the boundary: when the first frame starts"] = t(R, ev) - t(P, ev)
+    rtl_end, pysim_end = rtl_ends(kind)["end"], run["end"]
+    # pysim's run ends on its own last word, which need not be the RTL's last event: the difference is
+    # the end-cycle gap's last term.  (pysim's end is a delivery, its last word's beat plus one; the
+    # RTL's, the recording's beat.)
+    causes["H. pysim's last word is another event than the RTL's"] = t(P, end) - pysim_end
+    return {"kind": kind, "timed": timed, "rtl_end": rtl_end, "pysim_end": pysim_end,
+            "gap": rtl_end - pysim_end, "end_event": [*end[0], end[1]], "hops": len(hops),
+            "causes": causes, "sum": sum(causes.values())}
+
+
+def print_attribution(a: dict) -> None:
+    print(f"\n`{a['kind']}`, arbiter {'timed' if a['timed'] else 'untimed'}: RTL {a['rtl_end']:,}, pysim "
+          f"{a['pysim_end']:,.0f}, gap {a['gap']:,.0f}; critical path {a['hops']} hops from "
+          f"{a['end_event']}\n")
+    print("| cause | cycles | share |")
+    print("|---|---|---|")
+    for name, v in sorted(a["causes"].items()):
+        print(f"| {name} | {v:+,.0f} | {100 * v / a['gap']:+.0f}% |")
+    print(f"| **sum** | **{a['sum']:+,.0f}** | **{100 * a['sum'] / a['gap']:.0f}%** |")
+
+
+# --- cause A's evidence: SsrFft alone, frames a gap apart -------------------------------------------------------
+
+
+def fft_gaps(direction: str = "runtime", gaps=(0, 1, 2, 3, 4, 8, 12, 16, 24), n_frames: int = 12) -> dict:
+    """``SsrFft`` alone at the bank's configuration (``L = 64``, ping-pong; *direction*), its input frames
+    *g* cycles apart: each frame's interval at RTL (XSI, the FFT's own system flow: ``ssr_fft.rtl``) and in
+    pysim, every frame checked bit-exact.  Vitis / xsim; ``work/osfb_fidelity/fft_gaps_<direction>``."""
+    from waveflow.dsp.ssr_fft import rtl as fft_rtl
+    from waveflow.dsp.ssr_fft.testbench import pysim_frame_cycles, run_pysim
+
+    dirs = (0, 1, 1, 0, 1)
+    root = WORK / f"fft_gaps_{direction}"
+    root.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for i, g in enumerate(gaps):
+        bg = [int(g)] * (n_frames - 1)
+        fft_rtl.generate(root, fb.L, n_frames=n_frames, burst_gaps=bg, reorder="pingpong", direction=direction,
+                         dirs=dirs)
+        if i == 0:
+            fft_rtl.synth(root)
+        fft_rtl.run_xsi(root)
+        ok = fft_rtl.check_bits(root, fb.L, n_frames, dirs=list(dirs) if direction == "runtime" else None)
+        ft = fft_rtl.frame_times(root, fb.L)
+        tb = run_pysim(root / "pysim", length=fb.L, n_frames=n_frames, burst_gaps=bg, reorder="pingpong",
+                       direction=direction, dirs=list(dirs))
+        p = [round(x) for x in pysim_frame_cycles(tb)]
+        out[int(g)] = {"bits_exact": bool(all(ok) and len(ok) == n_frames),
+                       "rtl_interval": sorted({int(x) for x in np.diff([f["done"] for f in ft])}),
+                       "rtl_input_span": sorted({f["last_in"] - f["in"] + 1 for f in ft[1:]}),
+                       "pysim_interval": sorted({int(x) for x in np.diff(p)})}
+        print(f"gap {g:3d}: RTL interval {out[int(g)]['rtl_interval']}, pysim {out[int(g)]['pysim_interval']}, "
+              f"RTL input frame over {out[int(g)]['rtl_input_span']} cycles, bit-exact {out[int(g)]['bits_exact']}")
+    return out
+
+
 # --- main ----------------------------------------------------------------------------------------------------
 
 
@@ -371,7 +583,15 @@ def main(argv=None) -> int:
     ap.add_argument("--kind", nargs="+", default=list(KINDS), choices=KINDS)
     ap.add_argument("--rtl", action="store_true", help="run the traced RTL first (Vitis / xsim)")
     ap.add_argument("--timeline", action="store_true", help="write the per-frame timelines (Step 2)")
+    ap.add_argument("--attribute", action="store_true", help="attribute the end-cycle gap (Step 3)")
+    ap.add_argument("--fft-gaps", nargs="*", metavar="DIRECTION",
+                    help="only SsrFft alone, frames a gap apart (cause A; Vitis / xsim): runtime and/or fixed")
     a = ap.parse_args(argv)
+    if a.fft_gaps is not None:
+        res = {d: fft_gaps(d) for d in (a.fft_gaps or ["runtime"])}
+        WORK.mkdir(parents=True, exist_ok=True)
+        (WORK / "fft_gaps.json").write_text(json.dumps(res, indent=1) + "\n", encoding="utf-8")
+        return 0
     if a.rtl:
         run_rtl(a.kind)
     rows = end_table(a.kind)
@@ -383,6 +603,11 @@ def main(argv=None) -> int:
             for backend, rows_ in (("rtl", rtl_timeline(kind)), ("pysim", pysim_timeline(kind)),
                                    ("pysim_arb_timed", pysim_timeline(kind, timed=True))):
                 write_csv(WORK / f"timeline_{kind}_{backend}.csv", rows_)
+    if a.attribute:
+        out = [attribute(kind, timed) for kind in a.kind for timed in (True, False)]
+        for x in out:
+            print_attribution(x)
+        (WORK / "attribution.json").write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
     return 0
 
 
