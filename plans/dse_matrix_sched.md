@@ -144,6 +144,13 @@ in `examples/dse_cg/`), plus:
   and with **data-dependent solve times**. So the engine keeps a shared memory, and (proposed) each job has an
   iteration cap plus a tolerance with early exit (Section 9, item 1). The size of Waveflow's advantage is how
   wrong the proxy is near the deadline: measure it directly.
+- **The Waveflow arm's pysim names its platform, and refuses to run without it.** The decision-gap models of
+  Section 7 are opt-in by platform (`xczu48dr_250mhz_vitis2025_1`; the user's decision, 2026-11-22, as the FFT's
+  calibrated timing is). Naming it is no burden -- a DSE fixes its platform anyway -- but forgetting fails
+  silently: pysim would run with zero gaps and read optimistic exactly at the deadline. So the study's engine and
+  harness set a **refusal**, not only a label: a pysim run whose blocks lack the platform's timing fails. The
+  pattern exists: `VitisFft.require_calibrated` (`waveflow/vitis_l1/hw.py`, on by default). Labels alone
+  (dse_cg's `UNCALIBRATED`) were noticed by one agent, not all.
 
 ## 6. Simulation speed (why pysim can serve the inner loop)
 
@@ -158,14 +165,34 @@ The untimed model is about as fast as pysim; what pysim adds is the timing, at a
 question is never "which simulator is faster" but **how many candidates the baseline must time at RTL**, and
 whether it can time a tail at all.
 
+**But the vector unit's pysim is not yet fast enough for this study's inner loop.** Per CG job, 8 x 32,
+from `vecunit_cg.md` (64 jobs: 4.1 ms golden, 472 ms pysim run, 474 ms interpreter):
+
+| per CG job | time |
+|---|---|
+| the untimed application model (golden) | ~0.06 ms |
+| the VecUnit pysim -- it runs the bit-exact instruction interpreter, 99% of its cost | ~7.4 ms |
+| a job's transactions through a dispatcher pool (`plans/stream_dispatch.md`: 40 jobs, 3.8 ms; ~6 events at the ~16 µs an event of `sim_speed/index.md`) | ~0.1 ms |
+
+At ~350 jobs a window that is ~2.6 s of pysim a window, and ~7 h for a 10,000-window tail -- per policy
+evaluation. Still ~300x faster than RTL, but too slow for an agent to iterate on policies. Precondition 6
+(Section 7) fixes it. The dispatcher's ~16 µs an event is a known cost (`sim_speed/index.md`, *What is still
+slow*), worth reducing, but not what decides this study.
+
 ## 7. Preconditions -- pysim must be right exactly at the deadline
 
 1. **The arbiter's decision gap in pysim.** `StreamArbiter` leaves 3-8 idle cycles between frames at RTL;
    pysim leaves 1 (`docs/guide/streams/arbiter.md`: "pysim does not model this yet").
 2. **The dispatcher's decision cycles in pysim.** `StreamDispatch` (built this session, `plans/stream_dispatch.md`)
    measured 3 / 3 / 5 / 5 idle cycles a job at 2 / 4 / 8 / 16 workers first-free, 4 / 5 / 10 / 20 round-robin,
-   at 100 MHz, Vitis / xsim 2025.1; pysim spends 0. **The user decided to model it** (that plan's Stage 7,
-   proposed shape there).
+   at 100 MHz, Vitis / xsim 2025.1; pysim spends 0.
+
+   **Items 1 and 2 are in progress** (2026-11-22, on the lab machine, `plans/stream_dispatch.md` Stage 7): one
+   timing model for both blocks, the delay a `timeout` a firing (it does not slow pysim: its cost is per burst,
+   not per word), calibrated on `xczu48dr` at 250 MHz, **opt-in by naming the platform** (the user's decision),
+   the arbiter included (the user's decision: in a pool, which worker takes a job depends on when the arbiter
+   returns its credit). Done when pysim's idle cycles between jobs and frames equal the RTL's at every calibrated
+   point. **Ask that stage to carry a `require_calibrated` refusal like `VitisFft`'s** (Section 5).
 3. **The A53 scheduler's run time** priced by the calibrated platform (`docs/guide/cpu/`), since it eats the 5 ms.
 4. **The engine redesigned** (dse_cg's interconnect problem) -- likely a pool of CG units behind a
    `StreamDispatch` with results merged by a `StreamArbiter`, `m_sel` back as the credits
@@ -173,8 +200,22 @@ whether it can time a tail at all.
    shared memory for the matrices. Its job descriptor carries the user set and the iteration count (D5).
 5. **The shared memory's timing calibrated** -- dse_cg's step 1f brought pysim within 1.5% of RTL at every
    memory setting; keep that.
+6. **A fast mode for the CG engine's pysim** (Section 6: the interpreter makes a job ~7.4 ms, ~100x the golden).
+   As the FFT's flat pysim (`docs/guide/dsp/ssr_fft/timing.md`, *the flat pysim*): each job's numbers from the
+   fast application-level golden, its cycles from the vector unit's calibrated timing model (`VecTiming`,
+   `waveflow/vecunit/calib.py`; pysim within 0.14% of RTL), given the iteration count the golden already knows
+   (with a tolerance, the iterations it actually ran). Two conditions:
+   - **Proved, not assumed:** an equality test against the interpreter-backed pysim -- the same bits, the same
+     cycles, at every calibrated configuration -- as `test_flat_pysim_is_the_task_chain` does for the FFT.
+   - **Contention kept:** only the arithmetic and the instruction stepping are replaced; the job's memory
+     traffic still goes through the shared-memory model, at the times the interpreter would issue it (or a
+     calibrated summary of them, proved equal the same way). Without that, the fast mode would erase exactly the
+     effect that defeats the baseline's proxy (Section 5).
 
-Without 1-3, pysim is systematically optimistic exactly where the deadline decides (dse_cg saw pysim read
+   Target: ~0.1-0.2 ms a job, tens of milliseconds a window, minutes for a 10,000-window tail.
+
+Without 1-3, pysim is systematically optimistic exactly where the deadline decides; without 6, it is right
+but too slow to search with (dse_cg saw pysim read
 3-4% fast at its fastest designs, so its agents verified 2-10 designs instead of one).
 
 ## 8. Phases (proposed)
@@ -183,11 +224,11 @@ Without 1-3, pysim is systematically optimistic exactly where the deadline decid
 |---|---|---|
 | 0 | The open decisions of Section 9 answered by the user; this plan accepted | the decisions recorded here |
 | 1 | **The algorithm, untimed (Python):** the user scheduler (fixed), candidate sets per window, R̂(S) for any set S, the closest-superset rule, the no-whitening fallback, the genie, the SINR loss; over the Sionna Denver drops (`examples/ltbf_cg_mem_dse/data/drops/`, cached; numpy only) | the brackets (all exact / none) and two scripted policies scored |
-| 2 | **The engine** (Section 7, item 4): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts | the engine at RTL bit-exact against pysim, its cycles within the targets |
-| 3 | **Preconditions 1-3** (pysim's decision gaps; the A53 pricing of a scheduler) | pysim's idle cycles equal RTL's at every calibrated point |
+| 2 | **The engine** (Section 7, item 4): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts; then **its fast mode** (Section 7, item 6) | the engine at RTL bit-exact against pysim, its cycles within the targets; the fast mode equal to the interpreter-backed pysim, bits and cycles, and a window in tens of ms |
+| 3 | **Preconditions 1-3** (pysim's decision gaps -- `plans/stream_dispatch.md` Stage 7, in progress; the A53 pricing of a scheduler); the `require_calibrated` refusal in the study's harness | pysim's idle cycles equal RTL's at every calibrated point; an uncalibrated run refused |
 | 4 | **One policy, both backends** (Section 5) | a scripted policy runs unchanged in pysim and at RTL, the same RBs covered |
 | 5 | **Scripted baselines:** greedy coverage by probability; insurance superset first; iteration-count sweeps. The agent must beat these | their scores on held-out windows |
-| 6 | **Ground truth:** the evaluator's long RTL runs for a tail; size them (windows needed for a p99 at the target's precision, RTL hours a design) | the cost a submitted design, and whether it is affordable |
+| 6 | **Sizing.** Ground truth: the evaluator's long RTL runs for a tail (windows needed for a p99 at the target's precision, RTL hours a design). The agent's side: pysim's wall time a window with the fast mode, so a policy evaluation fits the budget (Section 6: ~7 h a 10,000-window tail without it) | the cost a submitted design and a policy evaluation, and whether both are affordable |
 | 7 | **The agent harness:** reuse `examples/dse_cg/` (service, ledger, `run_agent.py`, `score.py`, sandbox); the task text, rubric and objectives fixed in **waveflow-eval** (Section 9, item 6) before any run | pilots valid in both arms |
 | 8 | **S1, then S2:** pilots, pre-registration (budget, model, effort, k, N), N runs per arm | scored from the ledgers |
 
