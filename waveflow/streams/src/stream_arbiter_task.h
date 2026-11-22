@@ -44,8 +44,14 @@ static inline void ready_bits(ap_uint<16>& ready, hls::stream<T0>& s0, hls::stre
 // pysim and failed at RTL (Vitis 2025.1, plans/shared_kernel.md Stage 2): a `for (;;)` with a `break`
 // after the read, and a `done` flag computed a burst ahead -- each hung the task after an input's last
 // frame, a read issued past the end of the frame.
+//
+// INLINE, so each input gets its own copy pipeline.  Left to itself, Vitis 2025.1 keeps one shared
+// copy_frame for three or more inputs, the input stream muxed into it per call, and that instance hangs
+// on the first frame it copies from input 1 once input 0 has run dry
+// (plans/shared_kernel_rfsoc_timing.md, the arbiter's timing).
 template <int W, int NB, typename TS, typename TD>
 static void copy_frame(hls::stream<TS>& s, hls::stream<TD>& d) {
+#pragma HLS INLINE
     ap_uint<8> b = 0;
 COPY:
     while (b < NB) {
