@@ -197,10 +197,12 @@ slow*), worth reducing, but not what decides this study.
      bare pool runs 7-17% long, a worst case of 8-word jobs; ~0.1% at CG job sizes). *Decided:* no general fix;
      calibrate the study's engine in context, by tracing it (Phase 2's gate shows whether it matters).
    - **Word against burst.** The RTL blocks commit on a frame's first word and return a credit during the copy;
-     pysim moves a burst whole, so a credit comes back late by about one result burst -- with one credit a
+     pysim moved a burst whole, so a credit came back late by about one result burst -- with one credit a
      worker, a few percent of a ~3,400-cycle CG job, where the deadline decides. *Decided:* fix it in pysim
-     (commit on a begun burst) -- `plans/stream_dispatch.md` **Stage 8, sent to the lab machine 2026-11-22**.
-     **Until it lands, this study uses at least 2 credits a worker** (the second hides the round trip).
+     (commit on a begun burst). **FIXED 2026-11-22** (`plans/stream_dispatch.md` Stage 8): both blocks now
+     commit on a first word in pysim too, and the timed pool at one credit assigns first-free's jobs as the
+     RTL does. **The 2-credit rule is lifted**: one credit a worker is modelled. What remains at one credit
+     is the in-context credit firing (the first caveat above).
    - **Width and frame.** The tables are at 32 bits, 1-burst frames; at 128 bits with 2-burst frames every gap
      is a cycle longer. *Decided:* calibrate at the study's own width and frame.
 
@@ -238,7 +240,7 @@ but too slow to search with (dse_cg saw pysim read
 | 0 | The open decisions of Section 9 answered by the user; this plan accepted | the decisions recorded here |
 | 1 | **The algorithm, untimed (Python):** the user scheduler (fixed), candidate sets per window, R̂(S) for any set S, the closest-superset rule, the no-whitening fallback, the genie, the SINR loss; over the Sionna Denver drops (`examples/ltbf_cg_mem_dse/data/drops/`, cached; numpy only) | the brackets (all exact / none) and two scripted policies scored |
 | 2 | **The engine** (Section 7, item 4): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts; then **its fast mode** (Section 7, item 6) | the engine at RTL bit-exact against pysim, its cycles within the targets; the fast mode equal to the interpreter-backed pysim, bits and cycles, and a window in tens of ms |
-| 3 | **Preconditions 1-3**: pysim's decision gaps (Stage 7 built; Stage 8, word against burst, at the lab); the decision tables at the study's width and frame; the A53 pricing of a scheduler; the harness's refusal of an untimed run | pysim's idle cycles equal RTL's at the study's configuration; an uncalibrated run refused |
+| 3 | **Preconditions 1-3**: pysim's decision gaps (Stage 7 built; Stage 8, word against burst, built 2026-11-22); the decision tables at the study's width and frame; the A53 pricing of a scheduler; the harness's refusal of an untimed run | pysim's idle cycles equal RTL's at the study's configuration; an uncalibrated run refused |
 | 4 | **One policy, both backends** (Section 5) | a scripted policy runs unchanged in pysim and at RTL, the same RBs covered |
 | 5 | **Scripted baselines:** greedy coverage by probability; insurance superset first; iteration-count sweeps. The agent must beat these | their scores on held-out windows |
 | 6 | **Sizing.** Ground truth: the evaluator's long RTL runs for a tail (windows needed for a p99 at the target's precision, RTL hours a design). The agent's side: pysim's wall time a window with the fast mode, so a policy evaluation fits the budget (Section 6: ~7 h a 10,000-window tail without it) | the cost a submitted design and a policy evaluation, and whether both are affordable |

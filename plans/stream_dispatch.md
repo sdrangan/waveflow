@@ -3,10 +3,11 @@
 **Status: ACCEPTED 2026-11-22. Stages 0-3 DONE in pysim and codegen. Stage 4 DONE at Vitis / Vivado
 2025.1: the four pool gates pass, 48 resource records filed, the cost per job measured at RTL. Stage 6
 DONE: every probed top meets 250 MHz on xczu48dr. Stage 7 DONE: the decision cycles in pysim, opt-in on the
-platform, exact for each block alone; in a pool still 7-17% long, and its first-free assignment still
-pysim's. Open questions 5-7 DECIDED by the user 2026-11-22: **Stage 8, word against burst, is the next
-task -- see *Stage 8* below; a fresh lab session starts there.** Stage 5, the curated example, not started:
-it waits for the user (the hand-off's Step 6).**
+platform, exact for each block alone. Open questions 5-7 DECIDED by the user 2026-11-22. **Stage 8 DONE
+2026-11-22 (word against burst): both blocks commit on a frame's first word in pysim; the timed pool at one
+credit now assigns first-free's jobs as the RTL does (all to worker 0), and runs 6-15% long (was 7-17%);
+the decision tables did not move; every gate passes.** Stage 5, the curated example, not started: it waits
+for the user (the hand-off's Step 6).**
 
 ## Why
 
@@ -99,7 +100,7 @@ s_in --> [ StreamDispatch ]--m_out_1--> worker 1 --+--> [ StreamArbiter ] --m_ou
 | 5 | a curated example: jobs of data-dependent length on M workers with their own HLS body, results tagged by `tx_id`, against the same work on one worker | pysim, RTL, an exact cycle count |
 | 6 | the RFSoC probe (250 MHz on `xczu48dr`), as the arbiter's | timing and resources recorded |
 | 7 | the decision cycles in pysim (open question 1, decided; *Stage 7* below) | pysim's idle cycles between jobs equal the RTL's at every calibrated point -- DONE; the pool's assignment as the RTL's -- not met (open question 6) |
-| 8 | word against burst: both blocks commit on a begun burst (open question 6, decided; *Stage 8* below) | the pool's first-free assignment as the RTL's; the tables recalibrated; rule 2's stall shown in pysim |
+| 8 | word against burst: both blocks commit on a begun burst (open question 6, decided; *Stage 8* below) | the pool's first-free assignment as the RTL's; the tables recalibrated; rule 2's stall shown in pysim -- DONE |
 
 ## Progress log
 
@@ -117,6 +118,7 @@ s_in --> [ StreamDispatch ]--m_out_1--> worker 1 --+--> [ StreamArbiter ] --m_ou
 | 2026-11-22 | lab 5 / 6 | Step 5, the RFSoC probe (`rfsoc_probe.py`: `Probe.credits`; the dispatcher alone at 2 and 4 workers under both policies, 32 bits, 2-burst jobs, 4 credits; `dsp16_w128_rr`; the pool as its gates build it at 2 first-free C 1 and 4 round-robin C 3). xczu48dr-ffvg1517-2-e at 4 ns, out of context; csynth Vitis HLS 2025.1 (budget 2.92 ns), place and route Vivado 2025.1. All seven II = 1 and timing met. csynth estimate / routed clock / WNS: dispatcher 2 first-free 2.699 / 2.416 / +1.584 ns; 2 round-robin 2.891 / 2.664 / +1.336; 4 first-free 2.889 / 2.708 / +1.292; 4 round-robin 2.883 / 3.306 / +0.694; 16 x 128 round-robin 2.870 / 3.776 / +0.224; pool 2 first-free 2.763 / 1.812 / +2.188; pool 4 round-robin C 3 2.877 / 2.539 / +1.461. Routed LUT / FF 363 / 579, 334 / 589, 651 / 1,035, 671 / 1,128, 6,611 / 14,098, 284 / 317, 674 / 891. Slowest states: the round-robin search (`next_k + j`, its wrap, the free test) at 2; a count's add -> select -> compare elsewhere; worst routed paths 76-96% routing. The pool at 4 has its dispatcher named plainly (`stream_dispatch_task_U0`) already. Not done: XSI at 250 MHz, so the idle cycles between jobs are 100 MHz figures. On `dispatch.md`, *At 250 MHz on the RFSoC*. |
 | 2026-11-22 | 7 | **The decision cycles in pysim** (the user's two choices: opt-in by platform, the arbiter too). `waveflow/streams/timing.py`: one lookup `TimingModel` a block on the platform (`components/stream_arbiter_task.decision`, basis `n, rr`; `components/stream_dispatch_task.decision`, basis `n, rr, kind` -- a job, or a credit taken back), attached at `pre_sim` when the block names `platform_dir`; `run_iter` waits the firing's cycles after choosing, before acting (the arbiter before `m_sel`). `platform_dir` is a build field (the harness's copy keeps it) and context to the module key (the filed resource records still match); `DispatchPool` and `ArbiterDemuxPair` pass it on. Untimed by default: every existing count and gate unchanged. Calibrated by `waveflow/calib/fixtures/stream_blocks.py` (registered with the other fixtures): each block alone compiled for xczu48dr at 4 ns, under XSI, 2, 4, 8 and 16 ports under both policies (Vitis HLS / xsim 2025.1), then pysim on the platform's model, fit, again: converged in two passes, every point exact. Idle cycles at 4 ns -- arbiter, priority / round-robin: 3 / 3, 3 / 4, 7 / 8, 8 / 8; dispatcher job gap, first-free / round-robin: 3 / 3, 3 / 5, 6 / 10, 5 / 15; a credit firing: 4 / 4, 4 / 5, 6 / 7, 10 / 12 (each run's gaps uniform outside the two credit blocks, and the two blocks agreeing to the cycle). Spot checks at 4 ports: 128 bits with 2-burst frames, every gap a cycle longer, credits unchanged; credits naming no worker, the same cost as valid ones. Tests: `tests/streams/test_stream_timing.py`, 8 fast (pysim reproduces every committed row; refusals of an unmeasured point and of another clock; the key unchanged; the pool keeps the platform) and 2 `-m xsi` gates (dispatcher and arbiter at 4, round-robin, re-measured against the table): pass; `WANT_XSI_GATES` 286 -> 288. **The pool at one credit, 250 MHz** (`dispatch_timing --pool-fidelity`, traced): 40 jobs end at cycle 524 at RTL at 2 workers (682 at 4 round-robin); untimed pysim 376 (28-45% short), timed 611 (730): 7-17% long. The excess is the credit firing: in the pool, `s_free` an internal FIFO, a credit adds 2 cycles to a job gap at 2 workers first-free and 4 at 4 round-robin, against the table's 4 and 5 (open question 5). First-free at RTL sends every job to worker 0 (the arbiter commits on a job's first word and returns its credit during the copy); pysim, timed or not, spreads them 20 / 20 -- the model's grain, burst against word (open question 6). *What it buys*, timed, 4 workers, 24 jobs at 250 MHz: 974 against the fixed split's 2,073 (2.1x; untimed 2.3x). `pytest -m "not vitis and not xsi and not gem5 and not sionna"`: 6,081 passed, the same nine environment failures as Step 7; the 14 stream XSI gates, named by file: 14 passed. |
 | 2026-11-22 | lab 7 | Step 7. `pytest -m "not vitis and not xsi and not gem5 and not sionna"`: 6,073 passed, 142 skipped, 9 failed, 423 quarantined. The nine fail the same way on the base commit `cf286f0f` exported fresh, so they are the environment's, not this work's: a fresh tree lacks the untracked example XSI workspaces, `gen/` trees and markov's `sync_status.json`, and the MCP init tests resolve the venv's interpreter to `/usr/bin/python3.12`, which has no `mcp` (`test_xsi_workspace_copies::test_there_are_workspaces_to_check`, two in `test_markov_figures`, four in `test_init_project`, one each in `test_retrieval_eval` and `test_usage_index`). The run also rewrote two `rfsoc4x2_bfm_250mhz` `vitis_fft` `corpus.csv` files in their last float digits: restored, not committed. `pytest tests/streams -m xsi`: 12 passed (arbiter-demux 5, broadcast 2, dispatch 4, framer 1), none skipped; that session exits 1 only on the whole-suite floor (12 < `WANT_XSI_GATES` 286: `conftest._is_narrowed` does not count a directory), and the same gates named by file pass with exit 0. No `-m xsi` test added or removed, so `WANT_XSI_GATES` stays 286. `library.md`'s row now has the measured timing and resources. Step 6, the curated example, not started: it is the user's call. |
+| 2026-11-22 | 8 | **Word against burst** (lab machine, Vitis / Vivado / xsim 2025.1; *Stage 8* below has the record). `interface.wait_any(..., begun=True)` -- the one addition to `interface.py` -- counts a begun burst from its first word's arrival; `arbiter.copy_burst` takes it then (`begin_read(pending_ok=True)`), starts the output at once and ends it no earlier than the input's last word; `StreamArbiter` and `StreamDispatch` use both, always. **The pool at one credit, 250 MHz** (`dispatch_timing --pool-fidelity`; RTL unchanged, every run `same_order`): first-free's jobs per worker, RTL / timed pysim, 40 / 0 and 40 / 0 at 2 workers (Stage 7: 20 / 20), 40 / 0 / 0 / 0 and 40 / 0 / 0 / 0 at 4 (Stage 7: 22 / 18 / 0 / 0); round-robin 20 / 20 and 10 x 4 both sides. End cycle, RTL / timed pysim: 524 / 601 at 2 first-free (+14.7%, Stage 7 611), 524 / 602 at 4 first-free (+14.9%, 612), 524 / 601 at 2 round-robin (+14.7%, 611), 682 / 721 at 4 round-robin (+5.7%, 730): 6-15% long, was 7-17%; the rest is the in-pool credit firing (open question 5, decided). Untimed pysim 362 (was 376), first-free 24 / 16 and 18 / 11 / 7 / 4 (the arbiter's `m_sel` cycle a frame, with no dispatcher cost, puts it behind). **The decision tables did not move**: `python -m waveflow.calib.fixtures.stream_blocks` from the committed RTL spans converged in one pass, every point exact, files byte-identical (each block alone, backlogged, is decision-limited). **Rule 2's stall in pysim**: three tests (the dispatcher, both policies: a job begun at 10 and held open to 200 keeps a credit returned at 20 unread until 200; the arbiter: a frame held open wins at its first word and holds a higher-priority input) -- all fail on the previous model. **Speed**: the 4-worker pool, 40 jobs, untimed, `run_sim` alone, median of 25: 271 -> 312 SimPy events and 2.53 -> 3.28 ms at 8 words a job, 237 -> 313 and 4.32 -> 5.18 ms at 512 (same machine, same script) -- still per burst, not per word, about a quarter dearer (a first-word wake a begun burst). Moved, asserted nowhere: What it buys 1,012 / 2,065 -> 969 / 2,035 (3 workers), timed 974 / 2,073 -> 928 / 2,043 (4); the pool gates' pysim end cycles 89 / 166 / 376 / 696 -> 80 / 150 / 362 / 682; os_filterbank's pysim 969 -> 885 (test), 1,934 -> 1,766 (long). **Gates**: the stream XSI gates named by file 14 passed (none skipped); os_filterbank `-m xsi` 6 passed (recordings equal pysim's, `LAST_STATUS` unchanged); ring_stub `-m xsi` 8 passed. No gate's recorded number moved; no gate added, `WANT_XSI_GATES` unchanged (288). `pytest -m "not vitis and not xsi and not gem5 and not sionna"`: 6,088 passed, 143 skipped, 10 failed -- Step 7's nine environment failures, and `tests/linalg/test_no_example_imports.py::test_waveflow_gained_only_the_manifest`, which diffs against the local `main` (`3619245`) and sees Stage 7's 52 decision-table files as unlisted gains; this stage adds no file under `waveflow/`, so the base fails it too. The run rewrote the two `rfsoc4x2_bfm_250mhz` `vitis_fft` `corpus.csv` files again: restored. |
 
 ## Lab hand-off: Stages 4-6 on a machine with Vitis / Vivado 2025.1
 
@@ -274,7 +276,7 @@ progress row "7"; what is left is open questions 5-7.
    one credit between (`G + K`), not `G` and `K` apart, so the credit firing's in-pool cost would be taken
    as the pool's gap less the alone `G`; or a composite bench putting each block's ports on internal FIFOs;
    or a context feature in the basis (which ports are at the top). For the user: which, if any.
-6. **DECIDED 2026-11-22 (the user): build the fix -- Stage 8 below.** **Word against burst** (Stage 7). The RTL blocks commit to a frame on its first word; pysim moves a
+6. **DECIDED 2026-11-22 (the user): build the fix -- BUILT, Stage 8 below.** **Word against burst** (Stage 7). The RTL blocks commit to a frame on its first word; pysim moves a
    burst whole, so in a pool the arbiter's credit comes back later in pysim than at RTL, and first-free
    picks other workers (RTL: every job to worker 0 at one credit). No delay fixes it. pysim has the
    mechanism (`begin_read(pending_ok=True)`, a writer's begun bursts, `plans/pipelined_ops.md`): both
@@ -283,7 +285,7 @@ progress row "7"; what is left is open questions 5-7.
 7. **DECIDED 2026-11-22 (the user): no extension now.** A design calibrates at its own width and frame. **Width and frame** (Stage 7). At 128 bits with 2-burst frames every gap is a cycle longer than the
    32-bit, 1-burst table's; not yet told apart (width or bursts), and not in the basis.
 
-## Stage 8: word against burst -- the next task (for a lab machine with Vitis / Vivado 2025.1)
+## Stage 8: word against burst -- DONE 2026-11-22 (the task as written, then its record)
 
 **For the agent picking this up:** a fresh session. Read this plan whole first (D1-D6, the rules, Stage 7
 and its progress-log row, the open questions), then `waveflow/streams/timing.py`, `waveflow/streams/arbiter.py`,
@@ -324,4 +326,33 @@ study uses at least 2 credits a worker.
 - a progress-log row, the status line, `docs/guide/streams/dispatch.md` and `arbiter.md` (the word-against-burst
   caveat removed or restated), `plans/dse_matrix_sched.md` precondition 2 (the 2-credit rule lifted if met);
   committed and pushed. Then stop and report.
+
+### Stage 8 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
+
+**DONE.** Numbers in the progress-log row "8".
+
+- **The wait** (`waveflow/hw/interface.py`, the only change there): `wait_any(*eps, begun=False)`. With
+  `begun=True` an endpoint is ready when it holds a delivered burst, or a begun one (`pending_burst`) whose
+  first word has arrived (`pending_burst[1] <= now`, to a millionth of a cycle); the wait wakes on a burst
+  posted or delivered (the arrival slots, as before) and on a timeout to the earliest first word still on its
+  way. The default path is unchanged (ring stub's `Mux` and every other caller). `FreeRunMod.wait_any`
+  passes `begun` through.
+- **The copy** (`waveflow/streams/arbiter.py`, `copy_burst`): `begin_read(pending_ok=True)` (the burst at its
+  first word, its words in hand), `m_out.begin(words)` at once, `end_read` (the input's delivery), then
+  `m_out.end` -- whose delivery is `max(start + n cycles, now)`, so the output's last word is never before
+  the input's. Both blocks copy every burst of a frame with it; TLAST counting, frames whole and D1-D6
+  unchanged. Always on.
+- **Why the tables did not move.** Each block alone, on a backlog, fires on delivered bursts after its
+  first few frames (its output, with the decision, is slower than its input), and a delivered burst copies
+  in exactly the old time; `SKIP_JOBS` / the first `n` frames cover the start. So the residuals are the same,
+  and the refit from the committed RTL spans gives byte-identical files.
+- **Why untimed pysim still spreads first-free** (24 / 16): there the arbiter spends a cycle a frame
+  writing `m_sel` and the dispatcher none, so the arbiter drifts behind and a credit is late for the next
+  decision. That is the untimed model's timing, not its grain; timed, both blocks spend their measured
+  cycles and the assignment is the RTL's.
+- **Cost:** about a quarter more wall time and 15-30% more events on the pool (a first-word wake and a
+  delivery wait a begun burst), still independent of the burst's length.
+- **Left:** the in-pool credit firing (open question 5, decided: calibrate in context) is now the whole of
+  the timed pool's excess -- about 2 cycles a job at 2 workers first-free (the table's credit firing 4,
+  in the pool 2): 40 jobs, 77 cycles over the RTL's 524.
 
