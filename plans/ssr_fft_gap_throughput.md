@@ -6,9 +6,9 @@ is that plan's work. This plan is the *hardware* (or design-pattern) fix. Nothin
 
 ## The finding (lab machine, Vitis / xsim 2025.1, `SsrFft` alone, every frame bit-exact)
 
-At `L >= 64` the RTL's interval between frames is `max(2L/R, L/R + g)` for a gap of `g` idle cycles before
-a frame: back to back (`g = 0`) it is `L/R`, as designed; **any gap from 1 to `L/R` costs a whole frame
-time**. Exact and deterministic (constant and random gaps, `L = 64, 256, 1024`). Set by the last transposer
+At `L >= 64` the RTL's interval between frames, for a gap of `g` idle cycles before a frame, is piecewise:
+`L/R` at `g = 0` (back to back, as designed), and `max(2L/R, L/R + g)` for `g >= 1` -- so **any gap from 1 to
+`L/R` costs a whole frame time** (the max form alone would wrongly give `2L/R` at `g = 0`). Exact and deterministic (constant and random gaps, `L = 64, 256, 1024`). Set by the last transposer
 commutator (`tp{S-2}`, block size `L/16`): its input frame stretches to `2L/R - L/16` cycles, and every
 stream after it carries a frame every `2L/R`. At `L = 16` there is no throughput loss (an arrival-phase
 latency jitter of 40-43 cycles instead). `L = 4096` not yet measured.
