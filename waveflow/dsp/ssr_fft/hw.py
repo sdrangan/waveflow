@@ -69,7 +69,7 @@ def latency_cycles(t: hls.TaskInstance) -> int:
         return 3 * t.d + 3
     if t.kind == "reorder_pingpong":
         return t.d + 1                       # a whole frame in before its first word can leave
-    if t.kind == "pass":
+    if t.kind in ("pass", "dir_in"):
         return 0
     # reorder_read: the SOB reader re-enters (and re-acquires its lock) once a frame; 5 is what XSI
     # measures on the RadixWord boundary -- an interval of L/R + 5 (L/R + 4 with lanes=True).
@@ -116,9 +116,16 @@ class SsrTask(FreeRunMod):
             cls = SobIFMaster if name.startswith("m_") else SobIFSlave
             return cls(name=f"{self.name}_{name}", sim=self.sim, element_type=block_type(self.geo))
         cls = StreamIFMaster if name.startswith("m_") else StreamIFSlave
-        e = self._edge_of(ty)
-        return cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=e.bitwidth,
+        bw = hls.DIR_W if ty == hls.DIR_STREAM else self._edge_of(ty).bitwidth
+        return cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=bw,
                    has_tlast=name in self.boundary_ports)
+
+    def _read_dir(self):
+        """A runtime build's frame direction (one word on ``s_dir``): the geometry to compute with."""
+        d = np.asarray((yield from self.s_dir.get(nwords_max=1)))
+        if d.shape[0] != 1:
+            raise RuntimeError(f"{self.name}: a direction is one word a frame, got {d.shape[0]}")
+        return self.geo.direction(bool(int(d.reshape(-1)[0]) & 1))
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(f"{hls.config_namespace(self.geo)}_{self.task.inst}",
@@ -170,8 +177,15 @@ class SsrStream(SsrTask):
         yield self._slots.get(1)
         e_in = self._edge_of(dict(self.task.params)["s_in"])
         e_out = self._edge_of(dict(self.task.params)["m_out"])
+        geo = self.geo
+        if self.task.kind == "dir_in":           # the frame's direction, a copy to every stage
+            d = np.asarray((yield from self.s_dir.get(nwords_max=1)))
+            for s in range(self.geo.S):
+                yield from getattr(self, f"m_dir_{s}").write(d)
+        elif self.task.kind == "stage" and self.geo.runtime:
+            geo = yield from self._read_dir()
         words, t0 = yield from self._get_words(self.s_in, n)
-        if self.task.kind == "pass":
+        if self.task.kind in ("pass", "dir_in"):
             self._emit(self.m_out, words, t0)
             return
         if self.task.kind == "reorder_pingpong":
@@ -181,7 +195,7 @@ class SsrStream(SsrTask):
             return
         re, im = self._unpack(words, e_in)
         if self.task.kind == "stage":
-            re, im = m.stage(self.geo, self.task.s, re, im)
+            re, im = m.stage(geo, self.task.s, re, im)
         else:
             re, im = m.commute(re, self.task.d), m.commute(im, self.task.d)
         self._emit(self.m_out, self._pack(re, im, e_out), t0)
@@ -269,7 +283,9 @@ class SsrReorder(SsrTask):
 
 _KIND_CLASS = {"commutator": SsrStream, "stage": SsrStream, "lanes_in": SsrLanes,
                "lanes_out": SsrLanes, "reorder_write": SsrReorder, "reorder_read": SsrReorder,
-               "reorder_pingpong": SsrStream, "pass": SsrStream}
+               "reorder_pingpong": SsrStream, "pass": SsrStream, "dir_in": SsrStream}
+
+DIRECTIONS = ("fixed", "runtime")
 
 
 @dataclass
@@ -311,11 +327,28 @@ class SsrFft(FreeRunMod):
     #: the chain buffers more frames than one process does.  Not offered for ``"sob"``, whose reader
     #: is slower than its input (``L/R + 5``), so its frames queue and that queue is the timing.
     pysim: str = "tasks"
+    #: ``"fixed"`` (default): the direction is ``inverse``, fixed at build time.  ``"runtime"``: chosen
+    #: per frame on a third boundary port ``s_dir``, one word a frame before or with its first sample
+    #: word (bit 0 set = inverse).  Each frame is the fixed build's of that direction bit for bit --
+    #: the forward ROMs, with butterfly outputs 1 and 3 swapped and the twiddles conjugated for an
+    #: inverse frame (``model.py``).  The output edge carries the forward format; an inverse frame's
+    #: bits read as :attr:`inv_out_fmt` (the inverse build's ``out_fmt``: the ``1/L``).  RadixWord
+    #: boundary only (``lanes=False``).
+    direction: str = "fixed"
+
+    #: The harness's and the system top's fresh copy keep these (``hw_module.build_params``).
+    build_fields: ClassVar[tuple[str, ...]] = ("reorder", "lanes", "inverse", "direction")
 
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.pysim not in ("tasks", "flat"):
             raise ValueError(f"SsrFft.pysim must be 'tasks' or 'flat', got {self.pysim!r}")
+        if self.direction not in DIRECTIONS:
+            raise ValueError(f"SsrFft.direction must be one of {DIRECTIONS}, got {self.direction!r}")
+        runtime = self.direction == "runtime"
+        if runtime and (self.inverse or self.lanes):
+            raise ValueError("SsrFft(direction='runtime') takes the direction per frame on s_dir: "
+                             "leave inverse=False, and lanes=False (the RadixWord boundary only).")
         if self.pysim == "flat" and self.reorder != "pingpong":
             raise ValueError(
                 f"SsrFft(pysim='flat') models the ping-pong reorder only, not {self.reorder!r}: the "
@@ -323,14 +356,15 @@ class SsrFft(FreeRunMod):
                 f"queue inside the chain and the flat model would not reproduce that queue.  Use "
                 f"pysim='tasks'.")
         self.geo = m.Geometry(int(self.L), int(self.in_w), int(self.in_i), int(self.tw_w),
-                              int(self.tw_i), inverse=bool(self.inverse))
+                              int(self.tw_i), inverse=bool(self.inverse), runtime=runtime)
         self.R = self.geo.R
         self.out_fmt = self.geo.out_fmt
+        self.inv_out_fmt = self.geo.inv_out_fmt
         self.tasks: list[SsrTask] = []
         tis = hls.task_instances(self.geo, reorder=self.reorder, lanes=self.lanes)
         for k, t in enumerate(tis):
             ports = tuple(n for n, _ in t.params
-                          if (k == 0 and n.startswith("s_in")) or
+                          if (k == 0 and (n.startswith("s_in") or n == "s_dir")) or
                           (k == len(tis) - 1 and n.startswith("m_out")))
             c = _KIND_CLASS[t.kind](name=f"{self.name}_{t.inst}", sim=self.sim, geo=self.geo, task=t,
                                     clk=self.clk, timed=self.timed, boundary_ports=ports,
@@ -350,6 +384,9 @@ class SsrFft(FreeRunMod):
             self.s_in = self.tasks[0].s_in
             self.m_out = self.tasks[-1].m_out
             self.boundary = ["s_in", "m_out"]
+            if runtime:
+                self.s_dir = self.tasks[0].s_dir
+                self.boundary = ["s_in", "s_dir", "m_out"]
         self.extra_includes = ("hls_streamofblocks.h",)
         if self.pysim == "flat":
             # First word in -> start of the output write, as the per-task chain composes it: each
@@ -379,6 +416,7 @@ class SsrFft(FreeRunMod):
         write -- what the children do, without the internal edges between them."""
         first, last = self.tasks[0], self.tasks[-1]
         yield self._flat_slots.get(1)
+        geo = (yield from first._read_dir()) if self.geo.runtime else self.geo
         if self.lanes:
             re, im, t0 = yield from first._read_lanes()
         else:
@@ -388,7 +426,7 @@ class SsrFft(FreeRunMod):
         for t in self.tasks:
             kind = t.task.kind
             if kind == "stage":
-                re, im = m.stage(self.geo, t.task.s, re, im)
+                re, im = m.stage(geo, t.task.s, re, im)
             elif kind == "commutator":
                 re, im = m.commute(re, t.task.d), m.commute(im, t.task.d)
             elif kind == "reorder_pingpong":     # whole words move: its input edge's packing stays
@@ -423,4 +461,23 @@ class SsrFft(FreeRunMod):
                              bitwidth=e.bitwidth)
                 i.bind("master", a.m_out)
                 i.bind("slave", b.s_in)
+            self.add_if(i)
+        if self.geo.runtime:
+            self._wire_dirs()
+
+    def _wire_dirs(self) -> None:
+        """A runtime build's direction FIFOs: the input register to each stage.  Each must hold a
+        word for every frame between the two -- the register writes a frame's copy as its first
+        word passes, the stage reads it as that word arrives -- so its depth is the frames the
+        chain up to the stage spans (its tasks' latencies plus a hop each, in frames), plus two."""
+        first = self.tasks[0]
+        stages = {t.task.s: t for t in self.tasks if t.task.kind == "stage"}
+        for s, st in stages.items():
+            before = self.tasks[:self.tasks.index(st)]
+            span = sum(t.lat + 3 for t in before)
+            depth = -(-span // self.geo.n_words) + 2
+            i = StreamIF(name=f"{self.name}_dir{s}_if", sim=self.sim, clk=self.clk,
+                         bitwidth=hls.DIR_W, depth=depth)
+            i.bind("master", getattr(first, f"m_dir_{s}"))
+            i.bind("slave", st.s_dir)
             self.add_if(i)

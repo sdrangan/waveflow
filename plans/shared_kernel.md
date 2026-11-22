@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open (records at the end). Next: Stage 3.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64 (records at the end). Next: Stage 4.**
 
 ## Why
 
@@ -351,6 +351,49 @@ Guide: `docs/guide/streams/arbiter.md`, `demux.md`, two rows in `streams/index.m
 
 Left for later stages: putting the arbiter and demux into the ring stub in place of its hand-written mux
 (the stub's mux carries a credit and a design tag, which stay in a design); the 250 MHz check.
+
+## Stage 3 record (2026-11-21): `SsrFft` direction per frame -- pysim and RTL
+
+Done on the developer laptop, Vitis HLS / Vivado 2025.1, **xczu48dr at 250 MHz** (the `SsrFft` gates' part).
+
+**The design departs from the plan's sketch, deliberately.** The plan said "conjugation at the ends plus the
+`1/L` shift". That is the inverse in exact arithmetic, but not bit for bit: truncation does not commute
+with negation, and `-(-2^15)` does not fit the input (`test_conjugating_at_the_ends_is_not_bit_exact`).
+What is exact: the inverse tables are the forward ones conjugated, exactly, at every `L` 16-4096 and twiddle
+width tried (`test_inverse_tables_are_the_forward_ones_conjugated`). So each stage turns the forward
+arithmetic into the inverse's with two moves and the forward ROMs: butterfly outputs 1 and 3 swap
+(`W_4^{-qj} = W_4^{(4-q)j}`, the same products), and the rotation's twiddle has its imaginary part negated
+(exact in `tw_t`). Every product and truncation is then the inverse build's. The `1/L` stays free: an
+inverse frame's words hold the inverse build's bits, read through `inv_out_fmt`.
+
+- `SsrFft(direction="runtime")` (`waveflow/dsp/ssr_fft/hw.py`): a third boundary port `s_dir`, 8 bits, one
+  word a frame (bit 0 = inverse); RadixWord boundary only, `inverse=False`. `Geometry(runtime=True)`, its
+  configuration key `_rt`, `Geometry.direction(inv)` for the model of one frame.
+- HLS (`src/ssr_fft_tasks.h`): `ssr_fft_dir_in_task`, the input register that reads a frame's direction at
+  its first word and writes a copy to each stage's FIFO; `ssr_fft_stage_dir_task` / `ssr_butterfly_dir`.
+  The fixed bodies are untouched. Each direction FIFO's depth is the frames the chain up to its stage
+  spans, plus two (L = 64: 4, 6, 7).
+- **`SsrFft.build_fields` = `reorder, lanes, inverse, direction`.** It had none, so the system top's fresh
+  copy (`system_top._rtl_of` -> `build_params`) built every `SsrFft` with the default `reorder`, `lanes` and
+  `inverse`. Harmless until now, because those keep the port names; `direction` adds a port.
+
+| L = 64, ping-pong | DSP | BRAM | FF | LUT | worst slack | frame interval (XSI) | first frame done |
+|---|---|---|---|---|---|---|---|
+| forward | 24 | 6 | 8306 | 10402 | +0.06 ns | 16 | 111 |
+| inverse | 24 | 6 | 8303 | 10402 | +0.06 ns | 16 | 111 |
+| runtime, F I I F I | 24 | 6 | 9168 (+10%) | 11537 (+11%) | +0.06 ns | **16** | 112 |
+
+csynth estimates; the interval and the done cycle from the XSI run (8 frames back to back, every frame
+bit-exact with its direction's golden). The extra cycle of latency has not been traced to a task.
+
+Tests: `tests/dsp/ssr_fft/test_direction.py` (40: the table identity, the hardware's stage formula against
+the fixed stage at L 16-1024 including the most negative input, the end-conjugation counter-example, pysim
+in both reorders and both pysim modes against the golden and against the two fixed builds' pysim,
+structure, refusals); `tests/dsp/ssr_fft/test_xsi.py` gains `pingpong-runtime` (3 gates).
+`WANT_XSI_GATES` 269 -> 272. Guide: `dsp/ssr_fft/parameters.md` (a section and a row), `interfaces.md`
+(`s_dir`), `synthesis.md` (the stage body, the resource table), `timing.md`, `systems/library.md`.
+
+Not done: only L = 64 at RTL; lengths 256-4096 are pysim-only for the runtime build.
 
 ## Hand-off: continuing on the lab machine (2026-11-21)
 

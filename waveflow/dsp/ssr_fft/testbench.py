@@ -47,14 +47,30 @@ __all__ = ["SsrFftTB", "golden", "write_scenario", "run_pysim", "pysim_output",
 
 
 def golden(n_frames: int, length: int, seed: int = 0, *, inverse: bool = False, in_w: int = IN_W,
-           in_i: int = IN_I, tw_w: int = TW_W, tw_i: int = TW_I, **_):
+           in_i: int = IN_I, tw_w: int = TW_W, tw_i: int = TW_I, dirs=None, **_):
     """The expected output of every frame, ``[(re, im), ...]``: ``VitisFft``'s golden forward, and
-    for the inverse the library's arithmetic with the exact ``1/L`` (the bits unscaled)."""
+    for the inverse the library's arithmetic with the exact ``1/L`` (the bits unscaled).
+
+    *dirs* (a runtime-direction build): each frame's direction, ``0`` forward, ``1`` inverse; each
+    frame's golden is then that direction's."""
+    if dirs is not None:
+        fwd = golden(n_frames, length, seed, in_w=in_w, in_i=in_i, tw_w=tw_w, tw_i=tw_i)
+        inv = golden(n_frames, length, seed, inverse=True, in_w=in_w, in_i=in_i, tw_w=tw_w,
+                     tw_i=tw_i)
+        return [inv[k] if frame_dirs(dirs, n_frames)[k] else fwd[k] for k in range(n_frames)]
     if not inverse:
         return vitis_golden(n_frames, length, seed, in_w=in_w, in_i=in_i, tw_w=tw_w, tw_i=tw_i)
     return [fft_model.fft_general(x_re, x_im, length, in_w, in_i, tw_w, tw_i, inverse=True,
                                   exact_scale=True)[:2]
             for x_re, x_im in input_frames(n_frames, length, seed, in_w=in_w)]
+
+
+def frame_dirs(dirs, n_frames: int) -> list[int]:
+    """Each frame's direction: *dirs* repeated to ``n_frames``."""
+    dirs = [int(d) & 1 for d in dirs]
+    if not dirs:
+        raise ValueError("a runtime-direction scenario needs at least one direction")
+    return [dirs[k % len(dirs)] for k in range(n_frames)]
 
 
 def _edges(length: int, in_w: int = IN_W, in_i: int = IN_I, tw_w: int = TW_W, tw_i: int = TW_I,
@@ -67,22 +83,27 @@ def _chunks(bitwidth: int) -> int:
     return -(-int(bitwidth) // 64)
 
 
-def port_names(lanes: bool) -> tuple[list[str], list[str]]:
-    """The boundary ports' names: ``(["s_in"], ["m_out"])``, or the ``R`` lanes of each."""
+def port_names(lanes: bool, runtime: bool = False) -> tuple[list[str], list[str]]:
+    """The boundary ports' names: ``(["s_in"], ["m_out"])``, or the ``R`` lanes of each; a
+    runtime-direction build adds ``s_dir`` after the sample input(s)."""
     if lanes:
         return [f"s_in_{j}" for j in range(R)], [f"m_out_{j}" for j in range(R)]
-    return ["s_in"], ["m_out"]
+    return (["s_in", "s_dir"] if runtime else ["s_in"]), ["m_out"]
 
 
 def write_scenario(root, n_frames: int, length: int, seed: int = 0, *, lanes: bool = False,
-                   **cfg) -> None:
+                   dirs=None, **cfg) -> None:
     """The input bundles under ``<root>/vectors``, one burst per frame.
 
     With ``lanes``, ``VitisFft``'s four lane bundles.  Without, one ``vectors/s_in`` bundle of
-    ``RadixWord`` s -- packed by the schema, ``k`` 64-bit chunks a word."""
+    ``RadixWord`` s -- packed by the schema, ``k`` 64-bit chunks a word.  With *dirs* (a
+    runtime-direction build), also ``vectors/s_dir``: one one-word burst a frame, its direction."""
     if lanes:
         write_lane_scenario(root, n_frames, length, seed, **cfg)
         return
+    if dirs is not None:
+        write_burst_bundle([np.array([d], dtype=np.uint64) for d in frame_dirs(dirs, n_frames)],
+                           Path(root) / "vectors" / "s_dir")
     e_in, _ = _edges(length, **cfg)
     bursts = []
     for x_re, x_im in input_frames(n_frames, length, seed, in_w=cfg.get("in_w", IN_W)):
@@ -127,6 +148,10 @@ class SsrFftTB(FreeRunMod):
     capture_accepts: bool = False
     #: ``SsrFft.pysim``: ``"tasks"`` (one process per task) or ``"flat"`` (one for the FFT).
     pysim: str = "tasks"
+    #: ``SsrFft.direction``.  With ``"runtime"``, *dirs* is each frame's direction (repeated to
+    #: ``n_frames``; 0 forward, 1 inverse), driven on ``s_dir``.
+    direction: str = "fixed"
+    dirs: list = field(default_factory=lambda: [0, 1, 1, 0])
     root: Path | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=CLK_HZ))
 
@@ -135,9 +160,11 @@ class SsrFftTB(FreeRunMod):
         self.dut = SsrFft(name="ssr_fft", sim=self.sim, clk=self.clk, L=self.length,
                           in_w=self.in_w, in_i=self.in_i, tw_w=self.tw_w, tw_i=self.tw_i,
                           timed=self.timed, reorder=self.reorder, lanes=self.lanes,
-                          inverse=self.inverse, pysim=self.pysim)
-        ins, outs = port_names(self.lanes)
+                          inverse=self.inverse, pysim=self.pysim, direction=self.direction)
+        ins, outs = port_names(self.lanes, self.direction == "runtime")
         d_in = self.dut.s_in if self.lanes else [self.dut.s_in]
+        if self.direction == "runtime":
+            d_in = [*d_in, self.dut.s_dir]
         d_out = self.dut.m_out if self.lanes else [self.dut.m_out]
         words_per_frame = self.length // R
         self.drivers = [StreamDriver(name=f"drv_{j}", sim=self.sim, bitwidth=ep.bitwidth,
@@ -167,8 +194,11 @@ class SsrFftTB(FreeRunMod):
 
     @property
     def config(self) -> dict:
-        return {"in_w": self.in_w, "in_i": self.in_i, "tw_w": self.tw_w, "tw_i": self.tw_i,
-                "inverse": self.inverse}
+        cfg = {"in_w": self.in_w, "in_i": self.in_i, "tw_w": self.tw_w, "tw_i": self.tw_i,
+               "inverse": self.inverse}
+        if self.direction == "runtime":
+            cfg["dirs"] = frame_dirs(self.dirs, self.n_frames)
+        return cfg
 
 
 def run_pysim(root, **kw) -> SsrFftTB:

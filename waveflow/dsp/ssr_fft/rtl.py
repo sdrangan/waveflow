@@ -52,7 +52,8 @@ def make_tb(length: int, n_frames: int = 8, burst_gaps=(), **kw) -> SsrFftTB:
 
 
 def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reorder: str = "sob",
-             lanes: bool = False, inverse: bool = False, part: str = RFSOC4X2_PART,
+             lanes: bool = False, inverse: bool = False, direction: str = "fixed",
+             dirs=(0, 1, 1, 0), part: str = RFSOC4X2_PART,
              period_ns: float = RFSOC4X2_PERIOD_NS) -> str:
     """Everything before csynth for an *length*-point build at *root*."""
     root = Path(root).resolve()
@@ -66,7 +67,8 @@ def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reord
 
     scenario = {"length": int(length), "n_frames": int(n_frames),
                 "burst_gaps": [int(g) for g in burst_gaps], "reorder": reorder,
-                "lanes": bool(lanes), "inverse": bool(inverse)}
+                "lanes": bool(lanes), "inverse": bool(inverse), "direction": direction,
+                "dirs": [int(d) for d in dirs]}
     (root / SCENARIO_JSON).write_text(json.dumps(scenario, indent=1) + "\n", encoding="utf-8")
     dut = SsrFftSystem(**scenario).tb.dut
     hls.write_sources(dut.geo, root, INCLUDE_DIR, reorder=reorder, lanes=lanes)
@@ -95,10 +97,13 @@ class SsrFftSystem(GraphSystem):
     reorder: str = "sob"
     lanes: bool = False
     inverse: bool = False
+    direction: str = "fixed"
+    dirs: list = field(default_factory=lambda: [0, 1, 1, 0])
 
     def graph(self) -> SsrFftTB:
         return make_tb(self.length, self.n_frames, self.burst_gaps, timed=False,
-                       reorder=self.reorder, lanes=self.lanes, inverse=self.inverse)
+                       reorder=self.reorder, lanes=self.lanes, inverse=self.inverse,
+                       direction=self.direction, dirs=list(self.dirs))
 
     def dut_modules(self, g) -> list:
         return [g.dut]
@@ -183,11 +188,12 @@ def _out_w(length: int) -> int:
 
 
 def check_bits(root: Path, length: int, n_frames: int, *, lanes: bool = False,
-               inverse: bool = False) -> list[bool]:
+               inverse: bool = False, dirs=None) -> list[bool]:
     """Per frame: is the RTL's output the golden?  (Fewer entries than frames = frames missing.)
-    *lanes* and *inverse* say what the build is -- the caller built it, so the caller knows."""
+    *lanes*, *inverse* and *dirs* (a runtime-direction build's per-frame directions) say what the
+    build is -- the caller built it, so the caller knows."""
     got = captured_frames(vectors_dir(root).parent, length, lanes, inverse=inverse)
-    want = golden(n_frames, length, inverse=inverse)
+    want = golden(n_frames, length, inverse=inverse, dirs=dirs)
     mask = (1 << _out_w(length)) - 1
     return [bool(np.array_equal(g[0] & mask, w[0] & mask) and np.array_equal(g[1] & mask, w[1] & mask))
             for g, w in zip(got, want)]

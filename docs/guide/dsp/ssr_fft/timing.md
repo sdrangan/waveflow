@@ -19,6 +19,11 @@ Every task moves one word a cycle and never stops between frames. A frame is `L/
 follow each other every `L/R` cycles through every task, and through the chain. Measured in RTL, back
 to back, every length: 4, 16, 64, 256, 1024 cycles at `L` = 16 ... 4096. There is nothing to fit.
 
+The same holds with the direction chosen per frame (`direction="runtime"`). At `L = 64`, with
+forward and inverse frames back to back in the pattern F I I F I, frames leave exactly 16 cycles
+apart. The first frame completes one cycle later than in a fixed build (112 against 111 on the XSI
+testbench's clock; Vitis 2025.1, xczu48dr at 250 MHz). Which task adds the cycle has not been traced.
+
 ## The latency is a sum
 
 A frame's latency is what its tasks add up to:

@@ -9,7 +9,9 @@ BFMs' capture bundles, for the RFSoC 4x2 at 250 MHz.  Both reorders:
   reader re-fires once a frame;
 * timing met at 250 MHz on the real top (worst slack >= 0);
 * the inverse (ping-pong): the same three -- its golden is the library's inverse arithmetic with
-  the exact ``1/L``, and its interval is the forward's, since it is the same pipeline with other ROMs.
+  the exact ``1/L``, and its interval is the forward's, since it is the same pipeline with other ROMs;
+* the direction chosen per frame (ping-pong, ``direction="runtime"``): the same three, each frame
+  the golden of its own direction (``DIRS``, forward and inverse frames back to back).
 
 Measured 2026-10-05: ping-pong done = 113, 129, ... (interval 16); SOB 115, 135, ... (20).  For
 scale: ``VitisFft``, AMD's core as shipped, runs 120 cycles a frame at L = 64.
@@ -36,35 +38,43 @@ L, N_FRAMES = 64, 8
 EXPECTED_INTERVAL = {"pingpong": L // 4, "sob": L // 4 + 5}
 
 
-@pytest.fixture(scope="module", params=[("pingpong", False), ("sob", False), ("pingpong", True)],
-                ids=["pingpong", "sob", "pingpong-inverse"])
+#: The runtime-direction build's per-frame directions (plans/shared_kernel.md Stage 3).
+DIRS = [0, 1, 1, 0, 1]
+
+
+@pytest.fixture(scope="module", params=[("pingpong", False, "fixed"), ("sob", False, "fixed"),
+                                        ("pingpong", True, "fixed"), ("pingpong", False, "runtime")],
+                ids=["pingpong", "sob", "pingpong-inverse", "pingpong-runtime"])
 def run(request):
     if not (find_vivado_path() and find_vitis_path()):
         pytest.skip("XSI gate prerequisite missing: Vitis HLS + Vivado")
-    reorder, inverse = request.param
-    root = ROOT / f"L{L}_{reorder}{'_inv' if inverse else ''}"
+    reorder, inverse, direction = request.param
+    suffix = "_inv" if inverse else "_rt" if direction == "runtime" else ""
+    root = ROOT / f"L{L}_{reorder}{suffix}"
     root.mkdir(parents=True, exist_ok=True)
-    rtl.generate(root, L, n_frames=N_FRAMES, reorder=reorder, inverse=inverse)
+    rtl.generate(root, L, n_frames=N_FRAMES, reorder=reorder, inverse=inverse, direction=direction,
+                 dirs=DIRS)
     if not (root / f"{rtl.TOP}_proj").is_dir() or rtl_staleness(root, rtl.TOP) is not None:
         rtl.synth(root)
     rtl.run_xsi(root)
-    return reorder, inverse, root
+    return reorder, inverse, direction, root
 
 
 def test_every_frame_out_and_bit_exact(run):
-    _, inverse, root = run
-    assert rtl.check_bits(root, L, N_FRAMES, inverse=inverse) == [True] * N_FRAMES
+    _, inverse, direction, root = run
+    dirs = DIRS if direction == "runtime" else None
+    assert rtl.check_bits(root, L, N_FRAMES, inverse=inverse, dirs=dirs) == [True] * N_FRAMES
 
 
 def test_frame_interval(run):
-    reorder, _, root = run
+    reorder, _, _, root = run
     done = [f["done"] for f in rtl.frame_times(root, L)]
     assert len(done) == N_FRAMES
     assert set(np.diff(done)) == {EXPECTED_INTERVAL[reorder]}, done
 
 
 def test_timing_met_at_250_mhz(run):
-    _, _, root = run
+    _, _, _, root = run
     rpt = (root / f"{rtl.TOP}_proj" / "solution1" / "syn" / "report" / "csynth.rpt").read_text(
         encoding="utf-8")
     slacks = [float(s) for s in re.findall(r"^\s*\|\s*\+ \S+\s*\|\s*\S+\|\s*(-?\d+\.\d+)\|", rpt,
