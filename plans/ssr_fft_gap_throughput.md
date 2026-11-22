@@ -39,7 +39,43 @@ shared FFT seldom gets its frames back to back. The FFT's documented interval, "
 (`docs/guide/dsp/ssr_fft/timing.md`), holds only back to back. The FFT-sharing evaluation problems in
 `plans/dse_matrix_sched.md` Section 11 (spectrum sensing, delay-Doppler) depend on it.
 
-## Two fixes, to compare
+## The mechanism (read from `ssr_fft_commutator_task`, `waveflow/dsp/ssr_fft/src/ssr_fft_tasks.h`)
+
+A commutator ticks in **groups of `R*D` ticks** and decides each group only at its first tick: **data** if a
+word is waiting; a **bubble group** if the last group was data ("one is always enough to push a group's tail
+out"); idle otherwise. A bubble group runs all `R*D` ticks even if data arrives meanwhile, because the switch's
+slot is a function of the tick count, so a frame can start only at a group boundary. The flush is deliberate
+-- an isolated frame must leave without a next one pushing it (the shared-kernel return-path rule) -- but it
+is a whole group long. For the **last transposer commutator** `D = L/16`, so a group is `R*D = L/R` ticks,
+**exactly a frame**: a frame missing the boundary by one cycle finds a frame-long bubble group committed, hence
+`2L/R`. Earlier commutators have smaller `D` (shorter bubble groups, smaller stretch, as traced); at `L = 16`
+the only one has `D = 1` (a 4-tick group: the arrival-phase jitter). Inside a data group a missing word only
+stalls (no tick), so gaps *within* a frame cost only the gap.
+
+## Fixes, ranked (proposed 2026-11-22 by the planning session; to be confirmed when started)
+
+1. **Feed the FFT back to back -- no FFT change.** Throughput is lost only when the FFT is the bottleneck,
+   and then frames are waiting: the gap comes from the stage in front. In `os_filterbank`, `pre` spends a cycle
+   or more a frame deciding (reading `m_sel`, writing `s_dir` and the tag). Overlap that with the end of the
+   previous frame and the gap is 0 whenever a frame waits (`docs/guide/vectorization/hls/loop_optimization.md`:
+   "do not decide, compute and commit in one iteration"). When nothing waits the FFT is not the bottleneck, and
+   a gap costs only latency (up to `L/R`). Cheapest, probably sufficient; becomes a guide rule: whatever feeds
+   `SsrFft` keeps it back to back when a frame is ready.
+2. **Shorten the flush (HLS).** The tail is out after `(R-1)*D` bubble ticks, not `R*D`; everything inside is a
+   bubble then, so the commutator can return to a group boundary and take a waiting frame. Worst case at
+   `L = 1024`: 448 cycles instead of 512 (~12%). Keep it a fixed tick count: a count of samples inside once
+   cost 1.3 ns of slack at 250 MHz (the body's comment). The pysim cycle reference (`cycle_ref.CommutatorTask`)
+   changes with it, statement for statement.
+3. **Defer the flush with a timeout `W`** (a build parameter): at a boundary with nothing waiting, wait up to `W`
+   cycles before committing to a bubble group. Gaps up to `W` cost only the gap, but an isolated frame leaves `W`
+   later -- `W` added to every feedback pass in a loop -- and gaps just over `W` still pay the full group. For a
+   design that knows its gap pattern, not a default.
+4. **Start a frame at any tick** (a rotation offset tracked through the transpose): a redesign, and the road
+   to the vendor core's arrival-phase jitter. Not recommended.
+
+Do 1 first; 2 if a design cannot keep its feeder back to back.
+
+## Two fixes, to compare (as first written; superseded by the ranking above)
 
 1. **The design pattern (no FFT change).** The loss needs a gap; a producer that holds the next frame whole
    and starts it the cycle after the previous one ends gives `g = 0`. Check whether `os_filterbank`'s `pre`
