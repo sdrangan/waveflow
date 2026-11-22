@@ -319,6 +319,7 @@ STAGE_CYC = {
     "post_mul": 4,      # post, pass 0: the FFT frame's last word read -> the feedback tag (MUL loop drain)
     "post_fb": 2,       # post, pass 0: the feedback tag -> its first word (FB loop entry)
     "post_ans": 5,      # post, pass 1: the FFT frame's first word -> the answer's first (OUT loop: PW words dropped)
+    "pre_copy": 3,      # pre: the tag and direction written -> the COPY loop's first word to the FFT
 }
 
 
@@ -436,6 +437,7 @@ class OsPre(FreeRunMod):
         tag = yield from self.s_frm.get_schema(Tag)
         yield from self.m_tag.write(tag)
         yield from self.m_dir.write(np.asarray([1 if int(sel[0]) == 0 else 0], dtype=np.uint64))
+        yield from _cycles(self, "pre_copy")
         yield from copy_burst(self.s_frm, self.m_x)
 
 

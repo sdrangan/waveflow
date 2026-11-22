@@ -538,8 +538,10 @@ def print_attribution(a: dict) -> None:
     print("| cause | cycles | share |")
     print("|---|---|---|")
     for name, v in sorted(a["causes"].items()):
-        print(f"| {name} | {v:+,.0f} | {100 * v / a['gap']:+.0f}% |")
-    print(f"| **sum** | **{a['sum']:+,.0f}** | **{100 * a['sum'] / a['gap']:.0f}%** |")
+        share = f"{100 * v / a['gap']:+.0f}%" if a["gap"] else "--"
+        print(f"| {name} | {v:+,.0f} | {share} |")
+    total = f"{100 * a['sum'] / a['gap']:.0f}%" if a["gap"] else "-- (no gap)"
+    print(f"| **sum** | **{a['sum']:+,.0f}** | **{total}** |")
 
 
 # --- cause A's evidence: SsrFft alone, frames a gap apart -------------------------------------------------------
