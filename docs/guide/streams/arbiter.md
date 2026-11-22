@@ -161,9 +161,25 @@ The step at 8 inputs is Vitis no longer inlining `streamutils::write_boundary_wo
 `COPY` pipeline. **Feed a kernel shared through an arbiter frames long enough that these cycles are small
 next to them**: at 256-word frames, 8 cycles are 3%.
 
-pysim does not model this yet: its frames are 1 cycle apart. Until the arbiter carries a calibrated
-timing model (`FreeRunMod.add_timing_model` and `timed_delay`, the gap as a function of `n_in` and the
-policy), a pysim run of a design whose frames are short overstates the shared unit's rate.
+By default pysim's frames are 1 cycle apart. Name a calibrated platform and each firing spends the
+cycles the RTL does there, before its `m_sel` word (`waveflow.streams.timing`, `plans/stream_dispatch.md`
+Stage 7):
+
+```python
+arb = StreamArbiter(name="arb", sim=sim, n_in=4, policy="round_robin", clk=Clock(freq=250e6),
+                    platform_dir=packaged_platforms_dir() / "xczu48dr_250mhz_vitis2025_1")
+```
+
+The platform's table, the arbiter alone at 4 ns on `xczu48dr` (Vitis HLS / xsim 2025.1, 8-word frames;
+`python -m waveflow.calib.fixtures.stream_blocks`), idle cycles between frames, priority / round-robin:
+3 / 3 at 2 inputs, 3 / 4 at 4, 7 / 8 at 8 and 8 / 8 at 16 -- the 100 MHz figures above but for
+round-robin at 16, a cycle more. pysim reproduces each. A point not measured (3 inputs) is refused when
+the block is built, and another clock when the simulation starts. Two limits:
+
+- At 128 bits with 2-burst frames every gap is a cycle longer than the table's (4 inputs, both policies).
+- The table is the arbiter alone, every port at the top. Inside a composite its ports are FIFOs and a
+  firing may cost less; in the dispatcher's pool that was so of the dispatcher's credit firing
+  ([StreamDispatch](dispatch.md#in-pysim-on-a-calibrated-platform)).
 
 ## Its resources
 

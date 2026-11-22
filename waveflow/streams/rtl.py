@@ -66,13 +66,15 @@ class ArbiterDemuxPair(FreeRunMod):
     outputs are not), and the shape of a shared link: K would sit between the two."""
 
     cpp_kernel_name: ClassVar[str | None] = "stream_arb_pair"
-    build_fields: ClassVar[tuple[str, ...]] = ("policy",)
+    build_fields: ClassVar[tuple[str, ...]] = ("policy", "platform_dir")
 
     n: HwParam[int] = 2
     bitwidth: HwParam[int] = 32
     frame_bursts: HwParam[int] = 1
     policy: str = "priority"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Times the arbiter's firings on a calibrated platform (:mod:`waveflow.streams.timing`).
+    platform_dir: str | Path | None = None
 
     #: Link depths, in words: the data link holds a frame's burst, the index link a few.
     DEPTH: ClassVar[dict] = {"data": 16, "sel": 4}
@@ -81,7 +83,7 @@ class ArbiterDemuxPair(FreeRunMod):
         super().__post_init__()
         n, w, nb = int(self.n), int(self.bitwidth), int(self.frame_bursts)
         self.arb = StreamArbiter(name=f"{self.name}_arb", sim=self.sim, n_in=n, bitwidth=w, frame_bursts=nb,
-                                 policy=self.policy, clk=self.clk)
+                                 policy=self.policy, clk=self.clk, platform_dir=self.platform_dir)
         self.dmx = StreamDemux(name=f"{self.name}_dmx", sim=self.sim, n_out=n, bitwidth=w, frame_bursts=nb,
                                clk=self.clk)
         self.add_comp(self.arb)
@@ -119,7 +121,7 @@ class DispatchPool(FreeRunMod):
     outstanding credit, ``n * credits`` words (the first)."""
 
     cpp_kernel_name: ClassVar[str | None] = "stream_pool"
-    build_fields: ClassVar[tuple[str, ...]] = ("policy",)
+    build_fields: ClassVar[tuple[str, ...]] = ("policy", "platform_dir")
 
     n: HwParam[int] = 2
     bitwidth: HwParam[int] = 32
@@ -127,6 +129,8 @@ class DispatchPool(FreeRunMod):
     credits: HwParam[int] = 1
     policy: str = "first_free"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Times both blocks' firings on a calibrated platform (:mod:`waveflow.streams.timing`).
+    platform_dir: str | Path | None = None
 
     #: A worker link's depth, in words: a job's burst.
     DEPTH: ClassVar[int] = 16
@@ -135,9 +139,9 @@ class DispatchPool(FreeRunMod):
         super().__post_init__()
         n, w, nb, c = int(self.n), int(self.bitwidth), int(self.frame_bursts), int(self.credits)
         self.dsp = StreamDispatch(name=f"{self.name}_dsp", sim=self.sim, n_out=n, bitwidth=w, frame_bursts=nb,
-                                  credits=c, policy=self.policy, clk=self.clk)
+                                  credits=c, policy=self.policy, clk=self.clk, platform_dir=self.platform_dir)
         self.arb = StreamArbiter(name=f"{self.name}_arb", sim=self.sim, n_in=n, bitwidth=w, frame_bursts=nb,
-                                 policy="round_robin", clk=self.clk)
+                                 policy="round_robin", clk=self.clk, platform_dir=self.platform_dir)
         self.add_comp(self.dsp)
         self.add_comp(self.arb)
         links = [(f"w{k}", self.dsp.m_out[k], self.arb.s_in[k], self.DEPTH) for k in range(n)]
@@ -183,7 +187,7 @@ def block(n_out: int = 2, bitwidth: int = 32) -> StreamBroadcast:
 
 
 def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, policy: str = "priority",
-         credits: int = 1):
+         credits: int = 1, clk_hz: float | None = None, platform_dir=None):
     """A gated module and its top's name: ``broadcast``, ``demux`` (by ``s_sel``), ``demux_hdr`` (by
     bits 16-23 of a frame's first word), ``pair`` (:class:`ArbiterDemuxPair`), ``framer`` (its frame
     length passed as *frame_bursts*) or ``pool`` (:class:`DispatchPool`, *credits* a worker; a
@@ -191,13 +195,16 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
     alone, and ``dispatch``, the dispatcher alone (*credits* a worker, *policy* as the pool's): neither
     has a gate (which input wins, or which worker takes a job, is timing's), but each one's csynth is
     the block's own resources and its RTL run the block's own timing (:mod:`waveflow.streams.calib`,
-    :mod:`waveflow.streams.dispatch_timing`)."""
+    :mod:`waveflow.streams.dispatch_timing`).  *clk_hz* and *platform_dir* time the arbiter's and the
+    dispatcher's pysim on a calibrated platform (``arbiter``, ``dispatch``, ``pair``, ``pool``;
+    :mod:`waveflow.streams.timing`); the other blocks take neither."""
     sim = Simulation()
+    timed = {"platform_dir": platform_dir, **({"clk": Clock(freq=clk_hz)} if clk_hz else {})}
     if kind == "broadcast":
         return block(n, bitwidth), top_name(n, bitwidth)
     if kind == "arbiter":
         mod = StreamArbiter(name=StreamArbiter.cpp_kernel_name, sim=sim, n_in=n, bitwidth=bitwidth,
-                            frame_bursts=frame_bursts, policy=policy)
+                            frame_bursts=frame_bursts, policy=policy, **timed)
         return mod, f"sarb{'rr' if policy == 'round_robin' else 'p'}{n}_w{bitwidth}_f{frame_bursts}"
     if kind in ("demux", "demux_hdr"):
         hdr = kind == "demux_hdr"
@@ -210,17 +217,17 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
         return mod, f"frm{frame_bursts}_w{bitwidth}"
     if kind == "pair":
         mod = ArbiterDemuxPair(name=ArbiterDemuxPair.cpp_kernel_name, sim=sim, n=n, bitwidth=bitwidth,
-                               frame_bursts=frame_bursts, policy=policy)
+                               frame_bursts=frame_bursts, policy=policy, **timed)
         return mod, f"arb{'rr' if policy == 'round_robin' else 'p'}{n}_w{bitwidth}_f{frame_bursts}"
     if kind == "pool":
         pol = "round_robin" if policy == "round_robin" else "first_free"
         mod = DispatchPool(name=DispatchPool.cpp_kernel_name, sim=sim, n=n, bitwidth=bitwidth,
-                           frame_bursts=frame_bursts, credits=credits, policy=pol)
+                           frame_bursts=frame_bursts, credits=credits, policy=pol, **timed)
         return mod, f"pool{'rr' if pol == 'round_robin' else 'ff'}{n}_w{bitwidth}_f{frame_bursts}_c{credits}"
     if kind == "dispatch":
         pol = "round_robin" if policy == "round_robin" else "first_free"
         mod = StreamDispatch(name=StreamDispatch.cpp_kernel_name, sim=sim, n_out=n, bitwidth=bitwidth,
-                             frame_bursts=frame_bursts, credits=credits, policy=pol)
+                             frame_bursts=frame_bursts, credits=credits, policy=pol, **timed)
         return mod, f"sdsp{'rr' if pol == 'round_robin' else 'ff'}{n}_w{bitwidth}_f{frame_bursts}_c{credits}"
     raise ValueError(f"unknown stream block {kind!r}")
 
@@ -266,6 +273,10 @@ class StreamBlockCodegenStep(BuildStep):
     frame_bursts: int = 1
     policy: str = "priority"
     credits: int = 1
+    #: The csynth target; ``None`` each is the gates' (``DEFAULT_PART`` at 100 MHz).  A calibration
+    #: names its platform's (:mod:`waveflow.calib.fixtures.stream_blocks`).
+    part: str | None = None
+    period_ns: float | None = None
     description = "Generate the stream helpers, the blocks' bodies and the free-running top."
     params: ClassVar[dict] = {}
     produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
@@ -276,21 +287,26 @@ class StreamBlockCodegenStep(BuildStep):
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         root = Path(config.root_dir)
         mod, _top = make(self.kind, self.n_out, self.bitwidth, self.frame_bursts, self.policy, self.credits)
-        generate_for(root, mod)
+        generate_for(root, mod, part=self.part or DEFAULT_PART, period_ns=self.period_ns or DEFAULT_PERIOD_NS)
         return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
 
 
 def build_block_dag(work_dir, kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1,
-                    policy: str = "priority", workload: str = "test",
-                    credits: int = 1, trace: bool = False) -> tuple[BuildDag, str]:
+                    policy: str = "priority", workload: str | dict = "test",
+                    credits: int = 1, trace: bool = False, part: str | None = None,
+                    period_ns: float | None = None, n_cycles: int = 4000) -> tuple[BuildDag, str]:
     """``codegen``, then the system steps of the module's harness; returns the DAG and the top's name.
+    *workload* is a kind the module names or the stimulus itself (:func:`~waveflow.hw.harness.harness`).
     *trace* traces the XSI run: the waveform of the top's own nets, its internal links among them
-    (``SystemXsiStep.trace``; :mod:`waveflow.streams.dispatch_timing` reads a pool's)."""
+    (``SystemXsiStep.trace``; :mod:`waveflow.streams.dispatch_timing` reads a pool's).  *part* /
+    *period_ns* are the csynth target, the gates' by default; *n_cycles* bounds the RTL run."""
     mod, top = make(kind, n, bitwidth, frame_bursts, policy, credits)
     dag = BuildDag()
     dag.add(StreamBlockCodegenStep(name="codegen", kind=kind, n_out=n, bitwidth=bitwidth,
-                                   frame_bursts=frame_bursts, policy=policy, credits=credits))
-    add_system_steps(dag, harness(mod, workload=workload), work_dir=work_dir, top=top, trace=trace)
+                                   frame_bursts=frame_bursts, policy=policy, credits=credits,
+                                   part=part, period_ns=period_ns))
+    add_system_steps(dag, harness(mod, workload=workload, n_cycles=n_cycles), work_dir=work_dir, top=top,
+                     trace=trace)
     return dag, top
 
 

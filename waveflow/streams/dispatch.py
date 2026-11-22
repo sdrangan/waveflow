@@ -30,6 +30,7 @@ timing: pysim and RTL agree on what comes out, not on which worker did it.  The 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -39,6 +40,14 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
 from waveflow.streams.body_step import StreamBodyStep
+from waveflow.streams.timing import (
+    CREDIT,
+    JOB,
+    attach,
+    decide,
+    features,
+    require_points,
+)
 from waveflow.utils.burst_io import StreamBurst
 
 __all__ = ["StreamDispatch", "StreamDispatchStep", "POLICIES"]
@@ -54,11 +63,13 @@ class StreamDispatch(FreeRunMod):
 
     Build parameters: ``n_out`` (2 to 16), ``bitwidth`` (every port's), ``frame_bursts`` (TLAST bursts a
     job, 1 to 255), ``credits`` (jobs a worker may hold at once, 1 to 255) and ``policy``
-    (``"first_free"`` or ``"round_robin"``)."""
+    (``"first_free"`` or ``"round_robin"``).  ``platform_dir``, a platform its decision cost was
+    calibrated on, times each firing as the RTL does (:mod:`waveflow.streams.timing`); without one the
+    block decides at once."""
 
     cpp_kernel_name: ClassVar[str | None] = "stream_dispatch"
     #: Build inputs that are not template parameters: a fresh copy (the harness's DUT) keeps them.
-    build_fields: ClassVar[tuple[str, ...]] = ("policy",)
+    build_fields: ClassVar[tuple[str, ...]] = ("policy", "platform_dir")
 
     n_out: HwParam[int] = 2
     bitwidth: HwParam[int] = 32
@@ -67,6 +78,9 @@ class StreamDispatch(FreeRunMod):
     #: Not an ``HwParam`` (those are integers); it reaches the body as its ``RR`` template argument.
     policy: str = "first_free"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: A calibrated platform (``xczu48dr_250mhz_vitis2025_1``, at its 250 MHz): each firing then spends
+    #: the cycles its RTL does.  Not part of the module's identity (``elaborate._CONTEXT_ATTRS``).
+    platform_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -98,6 +112,14 @@ class StreamDispatch(FreeRunMod):
         #: Jobs sent to each worker over the run, and the most each held at once.
         self.sent = [0] * n
         self.peak = [0] * n
+        if self.platform_dir is not None:
+            require_points(self, "dispatch", [self.firing(JOB), self.firing(CREDIT)])
+
+    def pre_sim(self) -> None:
+        """On a calibrated platform, attach the decision model (:func:`waveflow.streams.timing.attach`)."""
+        super().pre_sim()
+        if self.platform_dir is not None and self.timing_model is None:
+            attach(self, "dispatch", [self.firing(JOB), self.firing(CREDIT)])
 
     @property
     def ports(self) -> tuple[str, ...]:
@@ -128,9 +150,14 @@ class StreamDispatch(FreeRunMod):
         else:
             self.bad_credits += 1
 
+    def firing(self, kind: int) -> dict:
+        """A firing's point on the decision model's basis (:mod:`waveflow.streams.timing`)."""
+        return features(int(self.n_out), self.policy == "round_robin", kind)
+
     def run_iter(self):
         """One action: a returned credit if one waits; else a job to the first free worker in the
-        policy's order, whole; waiting on ``s_in`` only while some worker can take it."""
+        policy's order, whole; waiting on ``s_in`` only while some worker can take it.  On a calibrated
+        platform each action first spends its decision cycles (the choice is made, then time passes)."""
         free = self.free_workers()
         if free:
             i = yield from self.wait_any(self.s_free, self.s_in)
@@ -138,6 +165,7 @@ class StreamDispatch(FreeRunMod):
             i = yield from self.wait_any(self.s_free)
         if i == 0:
             words = yield from self.s_free.get()
+            yield from decide(self, self.firing(CREDIT))
             self.take_back(int(np.asarray(words, dtype=np.uint64).reshape(-1)[0]))
             return
         k = free[0]
@@ -146,6 +174,7 @@ class StreamDispatch(FreeRunMod):
         self.outstanding[k] += 1
         self.sent[k] += 1
         self.peak[k] = max(self.peak[k], self.outstanding[k])
+        yield from decide(self, self.firing(JOB))
         for _ in range(int(self.frame_bursts)):
             words = yield from self.s_in.get()
             yield from self.m_out[k].write(words)

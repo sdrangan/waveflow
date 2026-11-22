@@ -29,6 +29,7 @@ input with ``empty()``; the model waits with ``wait_any`` on the same inputs in 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -38,6 +39,7 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
 from waveflow.streams.body_step import StreamBodyStep
+from waveflow.streams.timing import attach, decide, features, require_points
 from waveflow.utils.burst_io import StreamBurst
 
 __all__ = ["StreamArbiter", "StreamArbiterStep", "POLICIES"]
@@ -52,11 +54,13 @@ class StreamArbiter(FreeRunMod):
     time; the winner's index on ``m_sel``, one word before each frame.
 
     Build parameters: ``n_in`` (2 to 16), ``bitwidth`` (every port's), ``frame_bursts`` (TLAST bursts a
-    frame, at least 1) and ``policy`` (``"priority"`` or ``"round_robin"``)."""
+    frame, at least 1) and ``policy`` (``"priority"`` or ``"round_robin"``).  ``platform_dir``, a
+    platform its decision cost was calibrated on, times each firing as the RTL does
+    (:mod:`waveflow.streams.timing`); without one the block decides at once."""
 
     cpp_kernel_name: ClassVar[str | None] = "stream_arbiter"
     #: Build inputs that are not template parameters: a fresh copy (the harness's DUT) keeps them.
-    build_fields: ClassVar[tuple[str, ...]] = ("policy",)
+    build_fields: ClassVar[tuple[str, ...]] = ("policy", "platform_dir")
 
     n_in: HwParam[int] = 2
     bitwidth: HwParam[int] = 32
@@ -64,6 +68,9 @@ class StreamArbiter(FreeRunMod):
     #: Not an ``HwParam`` (those are integers); it reaches the body as its ``RR`` template argument.
     policy: str = "priority"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: A calibrated platform (``xczu48dr_250mhz_vitis2025_1``, at its 250 MHz): each firing then spends
+    #: the cycles its RTL does.  Not part of the module's identity (``elaborate._CONTEXT_ATTRS``).
+    platform_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -86,6 +93,14 @@ class StreamArbiter(FreeRunMod):
             self.s_in.append(ep)
         #: Round-robin: where the next search starts.  State across firings, as the body's ``static``.
         self.next_k = 0
+        if self.platform_dir is not None:
+            require_points(self, "arbiter", [self.firing()])
+
+    def pre_sim(self) -> None:
+        """On a calibrated platform, attach the decision model (:func:`waveflow.streams.timing.attach`)."""
+        super().pre_sim()
+        if self.platform_dir is not None and self.timing_model is None:
+            attach(self, "arbiter", [self.firing()])
 
     @property
     def ports(self) -> tuple[str, ...]:
@@ -106,14 +121,20 @@ class StreamArbiter(FreeRunMod):
         start = self.next_k if self.policy == "round_robin" else 0
         return [(start + j) % n for j in range(n)]
 
+    def firing(self) -> dict:
+        """A firing's point on the decision model's basis (:mod:`waveflow.streams.timing`)."""
+        return features(int(self.n_in), self.policy == "round_robin")
+
     def run_iter(self):
         """Wait for any input to hold a frame; the first in :meth:`search_order` wins.  Its index on
-        ``m_sel``, then its ``frame_bursts`` bursts on ``m_out``."""
+        ``m_sel``, then its ``frame_bursts`` bursts on ``m_out``.  On a calibrated platform the firing
+        first spends its decision cycles (the winner is chosen, then time passes, then ``m_sel``)."""
         order = self.search_order()
         i = yield from self.wait_any(*(self.s_in[k] for k in order))
         k = order[i]
         if self.policy == "round_robin":
             self.next_k = (k + 1) % int(self.n_in)
+        yield from decide(self, self.firing())
         yield from self.m_sel.write(np.asarray([k], dtype=np.uint64))
         for _ in range(int(self.frame_bursts)):
             words = yield from self.s_in[k].get()

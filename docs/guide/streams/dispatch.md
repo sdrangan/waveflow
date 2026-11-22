@@ -97,6 +97,11 @@ leaves at cycle 1,012; with a fixed split (round-robin, credits deep enough neve
 because the worker holding the long jobs finishes last. First-free sent 8, 5 and 5 jobs; the fixed split
 6, 6 and 6.
 
+The same with both blocks timed on the platform (below) needs a calibrated worker count, so four workers
+and 24 jobs, every fourth 16 words, at 250 MHz: first-free's last result leaves at cycle 974 and the fixed
+split's at 2,073, 2.1 times later (untimed, 908 and 2,065: 2.3 times). The decision cycles take a little of
+the gain, not the conclusion.
+
 ## Its HLS body
 
 `src/stream_dispatch_task.h`, copied into a build by `StreamDispatchStep`:
@@ -175,10 +180,48 @@ free again by the dispatcher's next decision. pysim, which decides at once, spre
 credit comes back only when a result is taken; but links, or workers that drain their input at once, get
 no spread from first-free.
 
-pysim does not model the decision cost: its jobs leave back to back, and a credit is acted on a cycle after
-it arrives. Until the dispatcher carries a calibrated timing model (the gap as a function of `n_out` and
-the policy, as the arbiter's would), a pysim run of a pool with short jobs overstates its rate. Whether to
-model it is an open question of `plans/stream_dispatch.md`.
+### In pysim, on a calibrated platform
+
+By default pysim decides at once: its jobs leave back to back, and a credit is acted on a cycle after it
+arrives. Name a calibrated platform and a firing spends the cycles the RTL does there:
+
+```python
+from waveflow.calib.platform import packaged_platforms_dir
+from waveflow.hw.clock import Clock
+
+plat = packaged_platforms_dir() / "xczu48dr_250mhz_vitis2025_1"
+dsp = StreamDispatch(name="dsp", sim=sim, n_out=4, clk=Clock(freq=250e6), platform_dir=plat)
+```
+
+A job firing then waits its job gap before the copy, and a credit firing its own cost, each a lookup per
+(`n_out`, policy) the platform measured (`waveflow.streams.timing`). They were measured at 4 ns on
+`xczu48dr` with each block alone (Vitis HLS / xsim 2025.1, `python -m waveflow.calib.fixtures.stream_blocks`):
+
+| workers | job gap, first-free / round-robin | a credit firing, first-free / round-robin |
+|---|---|---|
+| 2 | 3 / 3 | 4 / 4 |
+| 4 | 3 / 5 | 4 / 5 |
+| 8 | 6 / 10 | 6 / 7 |
+| 16 | 5 / 15 | 10 / 12 |
+
+pysim reproduces every row (`tests/streams/test_stream_timing.py`; at RTL, `-m xsi`). A point the
+platform has not measured (3 workers, say) is refused when the block is built, and a clock other than the
+platform's when the simulation starts. The same `platform_dir` on `DispatchPool` times both of its blocks.
+The model adds one `timeout` a firing: pysim's cost stays a few events a burst, whatever the burst's length.
+
+**Where it is not yet exact.**
+
+- **Inside a composite.** The table is each block alone, every port a top-level AXI-Stream port. In the
+  pool at 250 MHz, `s_free` an internal FIFO, a credit firing adds 2 cycles to a job gap at 2 workers
+  first-free and 4 at 4 round-robin, against the table's 4 and 5. So the timed pool runs 7 to 17% long
+  (40 jobs at one credit: 611 cycles against the RTL's 524 at 2 workers), where the untimed one ran 28 to
+  45% short (376).
+- **Another width or frame.** At 128 bits with 2-burst frames every job gap is a cycle longer than the
+  table's, and the credit firing the same (4 workers).
+- **Which worker takes a job.** The RTL commits to a frame on its first word; pysim moves a burst whole.
+  In the pool the arbiter returns a credit while the dispatcher is still copying, so first-free sends
+  every job to worker 0 at RTL. Timed or not, pysim spreads them (20 / 20). No delay fixes this: it is the
+  model's grain, word against burst.
 
 ## Its resources
 

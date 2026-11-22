@@ -263,6 +263,52 @@ def pysim_round_trip(n: int, policy: str, credits: int = 1) -> dict:
             "round_trip": _stats(round(j - t) for t, j, _ in pairs)}
 
 
+# --- the timed pysim against the RTL: the pool on a calibrated platform -----------------------------
+
+
+def pool_fidelity(n: int, policy: str, credits: int = 1, platform_dir=None, root: Path | None = None) -> dict:
+    """The pool at a calibrated platform's target (xczu48dr at 4 ns by default), at RTL (traced) and in
+    pysim timed by the platform's models (``plans/stream_dispatch.md`` Stage 7): the jobs each worker
+    took on each side, and whether ``m_out`` carried the jobs in the same order -- which worker takes a
+    job, and so the order out, is timing's, so it is the timing model that has to make them agree."""
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.system_dag import add_system_steps
+    from waveflow.calib.platform import packaged_platforms_dir
+    from waveflow.hw.harness import harness
+    from waveflow.streams import rtl
+    from waveflow.streams.timing import PLATFORM
+
+    pdir = Path(platform_dir or packaged_platforms_dir() / PLATFORM)
+    pj = json.loads((pdir / "platform.json").read_text(encoding="utf-8"))
+    part, hz = str(pj["part"]), float(pj["clk_freq_hz"])
+    root = Path(root or OUT / f"fid_{_tag(policy)}{n}_c{credits}").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    mod, top = rtl.make("pool", n, 32, 1, policy, credits, clk_hz=hz, platform_dir=pdir)
+    sysm = harness(mod, workload="long")
+    dag = BuildDag()
+    dag.add(rtl.StreamBlockCodegenStep(name="codegen", kind="pool", n_out=n, bitwidth=32, frame_bursts=1,
+                                       policy=policy, credits=credits, part=part, period_ns=1e9 / hz))
+    add_system_steps(dag, sysm, work_dir=root / "xw", top=top, trace=True)
+    cfg = BuildConfig(root_dir=root, params={"synth": "build"})
+    res = dag.run(cfg, through="system_xsi")
+    res.update(dag.run(cfg, through="pysim"))
+    bad = {k: r.message for k, r in res.items() if not r.success}
+    if bad:
+        raise RuntimeError(f"pool n={n} {policy} C={credits}: {bad}")
+    work = root / "xw" / top
+    bt = _bound_trace(work, mod)
+    out_on = {k: _beats_by_burst(bt, f"w{k}", "write") for k in range(n)}
+    words = {side: np.fromfile(work / d / "m_out" / "words.bin", dtype="<u8")
+             for side, d in (("rtl", "traces"), ("pysim", "pysim_traces"))}
+    cyc = np.fromfile(work / "traces" / "m_out" / "cycles.bin", dtype="<u8")
+    return {"n": n, "policy": policy, "credits": credits,
+            "rtl_per_worker": [len(out_on[k]) for k in range(n)],
+            "pysim_per_worker": list(sysm.dut().dsp.sent),
+            "same_order": bool(np.array_equal(words["rtl"], words["pysim"])),
+            "rtl_first_last_word": [int(cyc[0]), int(cyc[-1])],
+            "pysim_cycles": json.loads((work / "pysim.json").read_text(encoding="utf-8"))["cycles"]}
+
+
 # --- the run ------------------------------------------------------------------------------------------
 
 
@@ -283,7 +329,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--policy", nargs="+", default=["first_free", "round_robin"])
     ap.add_argument("--round-trip-n", type=int, nargs="*", default=[2, 4], help="the round trip's")
     ap.add_argument("--no-rtl", action="store_true", help="pysim only")
+    ap.add_argument("--pool-fidelity", action="store_true",
+                    help="only the pool on the calibrated platform, RTL against the timed pysim (--round-trip-n)")
     a = ap.parse_args(argv)
+    if a.pool_fidelity:
+        rows = [pool_fidelity(n, p) for p in a.policy for n in a.round_trip_n]
+        for r in rows:
+            print(json.dumps(r))
+        out = OUT / "pool_fidelity.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
+        print(f"-> {out}")
+        return 0
     gaps, trips = [], []
     for policy in a.policy:
         for n in a.n:

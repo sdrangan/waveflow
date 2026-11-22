@@ -554,7 +554,10 @@ stand. The shared arbiter module appeared in the lone arbiter from 3 inputs, and
    would then let a model predict 8 and 16 from 2 and 4. Until then, the lookup answers exactly what was
    built, and nothing else.
 3. **The arbiter's decision cost in pysim** (above): a timing model through `timed_delay`, calibrated at
-   the platform's clock.
+   the platform's clock. **Built 2026-11-22** (`plans/stream_dispatch.md` Stage 7), opt-in: a
+   `StreamArbiter` given `platform_dir` (xczu48dr at 250 MHz) spends a lookup per (`n_in`, policy), the
+   arbiter alone at 4 ns (Vitis HLS / xsim 2025.1): 3 / 3, 3 / 4, 7 / 8 and 8 / 8 idle cycles between
+   frames, priority / round-robin, at 2 / 4 / 8 / 16 inputs. A cycle more at 128 bits with 2-burst frames.
 
 ### Not done (the stream blocks' records)
 
