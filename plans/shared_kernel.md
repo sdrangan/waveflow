@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21; Stage 5 DONE 2026-11-21, RTL included; Stage 6 DONE 2026-11-21, triggers 8 of 8 (records at the end). Stage 7 (the held-out evaluation) is left to the planning session, which runs it from outside the repository so the prompt stays unseen.**
+**Status: ACCEPTED 2026-11-21. Stages 0-7 DONE (Stage 7 run 2026-11-22 from the planning session); the Stage 7 fixes DONE in pysim and codegen, their RTL gates pending (records at the end).**
 
 ## Why
 
@@ -553,4 +553,65 @@ arbiter's core, without the credit and the tag format (those stay in a design). 
 
 Then Stage 3 (`SsrFft` direction per frame). Keep this plan's records current as each stage lands; open a
 pull request only when the user asks.
+
+## Stage 7 record (2026-11-22): the held-out evaluation
+
+Run from the planning session at ead8011 (Stages 0-6), from outside the repository; the prompt, the
+rubric and every run's report are kept there, not here. Four chat runs (two Opus 5.5, two Sonnet 5.5)
+and one build run (Opus 5.5), fresh agents with the Waveflow skills, told not to read `plans/`.
+
+- **Every chat run reached the same right architecture**, `os_filterbank`'s shape: per-client fronts
+  holding a credit, a `StreamArbiter` in priority with the feedback on input 0, one
+  `SsrFft(direction="runtime")`, the clients' data resident beside the FFT, a controller with one state
+  machine per client (polling with `wait_any`), and `StreamDemux` by header to a port per client so RTL
+  and pysim compare. The maths was right in all four. None announced a feedback frame early (the
+  baseline's flaw); none used a hand-written mux or the conj trick. **None considered replicating the
+  FFT**, which the skill's checklist asks for.
+- **The build run took 14 minutes** from an empty folder (`waveflow init`) to 11 passing pysim tests:
+  the golden, each stage alone, the composite on staggered clients finishing out of order with every
+  count and `tx_id` asserted and all frames through the one FFT, a deadlock witness, and the generated
+  top. The FFT was 85% busy while four clients were in the loop. HLS bodies for two of its three stages
+  and any RTL were left undone (no tools).
+- **Against the baselines (2026-11-21):** before Stage 0 the Waveflow agent hand-wrote the FFT's mux,
+  called a cycle in a composite "untested territory" and proposed no extension; the Vitis-only agent
+  had the architecture on paper and "csim, then cosim" as its verification.
+- Caveats: two runs a model is a sample, not a rate; the chat runs adapted `os_filterbank` closely,
+  which is what a reference design is for, so this measures adaptation more than invention.
+
+## The Stage 7 fixes (2026-11-22)
+
+What the build run found, fixed in the framework:
+
+1. **pysim could pass a loop that RTL deadlocks** (`waveflow/hw/loop_check.py`). A blocking write of a
+   burst larger than its link's depth is admitted whole once the link is empty, so the writer finishes
+   with nobody reading; RTL stalls it after `depth` words (shown directly: a 16-word write into a
+   depth-4 link, no reader, completes). On a cycle that hides deadlocks. Every link now records its
+   largest burst, and after a pysim run each composite warns (`LoopDepthWarning`, and
+   `loop_depth_hazards`) for a link on one of its cycles whose burst exceeded its depth. A reader that
+   drains whenever its output has room (`drains_inputs = True`: `SsrFft`, `StreamFramer`) is exempt.
+   The burst model itself is unchanged: making it word-granular would move every pinned timing.
+   The whole non-vendor suite runs clean with the warning as an error, except the two deadlock-witness
+   tests, which now expect it; the ring stub with its feedback link cut to 8 words answers every job in
+   pysim and is now flagged.
+2. **A schema's dependency header could be silently missing** (`DataSchemaStep.resolve_deps`). A
+   dependency with no step (an array field's `Int32Array`) is now warned
+   (`MissingSchemaHeaderWarning`) instead of found at csynth. A warning, not an error: a step resolved
+   alone, or a header another build writes, is legitimate.
+3. **An input's first burst could not arrive late.** `StreamBurst(words, gap_before=n)` states a
+   burst's arrival in a workload; the harness turns a port's gaps into its driver's `start_gap_cycles`
+   (new, before the first burst) and `burst_gaps`. Both backends: the pysim `StreamDriver` and the XSI
+   `AxisMaster` (`xsi_bfm.h`, and the two committed copies in `examples/interleaver/xsi/` and
+   `examples/mem_copy/xsi/`). Not compiled here; a test checks the C++ declares the member.
+4. **Nothing could route by frame after `SsrFft`**, whose output carries no TLAST, so its post stage
+   had to do everything serially and became the bottleneck. New block `StreamFramer`
+   (`waveflow/streams/framer.py`, `src/stream_framer_task.h`, `StreamFramerStep`, `rtl.make("framer")`,
+   `docs/guide/streams/framer.md`): TLAST every `frame_words` words. 10 pysim tests; its XSI gate is
+   written and counted (`WANT_XSI_GATES` 278 -> 279) but not run here.
+5. **Docs:** the shared-kernels page now states that serial store and forward halves the shared
+   unit's throughput (overlap receive and send; a framer and a demux split the feedback from the
+   answers), and the loop-depth rule with its check; the harness page states `gap_before`.
+
+Pending a machine with Vitis 2025.1 / Vivado: `pytest tests/streams/test_framer.py -m xsi`, and an XSI
+run with a first-burst gap set (`start_gap_cycles`) to check the `AxisMaster` change, for example the
+ring stub with a delayed first job.
 

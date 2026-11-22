@@ -94,6 +94,11 @@ class StreamDriver(HwModule):
     #: spreads frame arrivals over every phase of a block's internal cadence; see
     #: ``examples/vitis_fft/vitis_fft_build.py`` (``measure``).  Empty (the default) emits nothing.
     burst_gaps: DynParam[list[int]] = field(default_factory=list)
+    #: Idle cycles before the **first** burst (the XSI ``AxisMaster`` holds TVALID low for as many from
+    #: the start), so an input's first frame can arrive late -- several clients whose first jobs come at
+    #: different times.  A workload states it as ``StreamBurst(..., gap_before=n)`` on its first burst
+    #: and the harness sets it.  ``0`` (the default) emits nothing and starts at once, as before.
+    start_gap_cycles: DynParam[int] = 0
     #: If set, the XSI ``AxisMaster`` dumps every accepted word with its acceptance cycle to this
     #: bundle (the twin of :attr:`StreamSink.out_bundle`), so a DUT can be timed at its ports from the
     #: BFMs alone, with no waveform.  pysim ignores it: its own timestamps are the simulation's.
@@ -131,11 +136,11 @@ class StreamDriver(HwModule):
             yield from self.stream_ep.write(np.asarray(b))
 
     def gap_before(self, k: int) -> int:
-        """Idle cycles before burst *k* (none before the first).  The C++ ``AxisMaster`` applies the
-        same rule -- and, under a stall policy, holds words off cycle by cycle, which pysim
-        approximates here as the average stall over the burst before."""
+        """Idle cycles before burst *k* (:attr:`start_gap_cycles` before the first).  The C++
+        ``AxisMaster`` applies the same rule -- and, under a stall policy, holds words off cycle by
+        cycle, which pysim approximates here as the average stall over the burst before."""
         if k == 0:
-            return 0
+            return int(self.start_gap_cycles)
         from waveflow.simulation.policy import stall_cycles
 
         stall = stall_cycles(len(self.bursts[k - 1]), self.stall_pct) if self.bursts else 0

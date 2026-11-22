@@ -1,6 +1,6 @@
 """rtl.py -- build a stream block in its own harness and run it under XSI: the blocks' RTL gates.
 
-    python -m waveflow.streams.rtl <root> [--block broadcast|demux|demux_hdr|pair] [--n 2]
+    python -m waveflow.streams.rtl <root> [--block broadcast|demux|demux_hdr|pair|framer] [--n 2]
                                           [--bitwidth 32] [--frame-bursts 1] [--policy priority]
                                           [--through compare]
 
@@ -37,9 +37,10 @@ from waveflow.simulation.simulation import Simulation
 from waveflow.streams.arbiter import StreamArbiter, StreamArbiterStep, frames_of
 from waveflow.streams.broadcast import StreamBroadcast, StreamBroadcastStep
 from waveflow.streams.demux import StreamDemux, StreamDemuxStep
+from waveflow.streams.framer import StreamFramer, StreamFramerStep
 
 #: Every block's body, copied into every build (each a header; unused ones cost nothing).
-BODY_STEPS = (StreamBroadcastStep, StreamArbiterStep, StreamDemuxStep)
+BODY_STEPS = (StreamBroadcastStep, StreamArbiterStep, StreamDemuxStep, StreamFramerStep)
 
 
 @dataclass
@@ -104,7 +105,8 @@ def block(n_out: int = 2, bitwidth: int = 32) -> StreamBroadcast:
 
 def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, policy: str = "priority"):
     """A gated module and its top's name: ``broadcast``, ``demux`` (by ``s_sel``), ``demux_hdr`` (by
-    bits 16-23 of a frame's first word) or ``pair`` (:class:`ArbiterDemuxPair`)."""
+    bits 16-23 of a frame's first word), ``pair`` (:class:`ArbiterDemuxPair`) or ``framer`` (its frame
+    length passed as *frame_bursts*)."""
     sim = Simulation()
     if kind == "broadcast":
         return block(n, bitwidth), top_name(n, bitwidth)
@@ -113,6 +115,10 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
         mod = StreamDemux(name=StreamDemux.cpp_kernel_name, sim=sim, n_out=n, bitwidth=bitwidth,
                           frame_bursts=frame_bursts, route="header" if hdr else "sel", sel_lsb=16, sel_bits=8)
         return mod, f"{'dmxh' if hdr else 'dmx'}{n}_w{bitwidth}_f{frame_bursts}"
+    if kind == "framer":
+        mod = StreamFramer(name=StreamFramer.cpp_kernel_name, sim=sim, frame_words=frame_bursts,
+                           bitwidth=bitwidth)
+        return mod, f"frm{frame_bursts}_w{bitwidth}"
     if kind == "pair":
         mod = ArbiterDemuxPair(name=ArbiterDemuxPair.cpp_kernel_name, sim=sim, n=n, bitwidth=bitwidth,
                                frame_bursts=frame_bursts, policy=policy)
@@ -190,7 +196,7 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("root", type=Path)
-    ap.add_argument("--block", default="broadcast", choices=("broadcast", "demux", "demux_hdr", "pair"))
+    ap.add_argument("--block", default="broadcast", choices=("broadcast", "demux", "demux_hdr", "pair", "framer"))
     ap.add_argument("--n", "--n-out", dest="n", type=int, default=2)
     ap.add_argument("--bitwidth", type=int, default=32)
     ap.add_argument("--frame-bursts", type=int, default=1)

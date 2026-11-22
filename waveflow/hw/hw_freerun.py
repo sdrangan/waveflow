@@ -273,6 +273,17 @@ class FreeRunMod(HwModule):
             return None
         return self._run_iter_forever() if self._kind() == 'standalone' else None
 
+    def post_sim(self) -> None:
+        """After a pysim run, a **composite** checks its cycles: a link on one that carried a burst
+        larger than its depth is warned about (:mod:`waveflow.hw.loop_check`) -- pysim passed that
+        burst whole, RTL stalls its writer word by word, and on a cycle that can deadlock where pysim
+        did not.  The hazards stay on :attr:`loop_depth_hazards`."""
+        super().post_sim()
+        if self.sub_comps and self.interfaces:
+            from waveflow.hw.loop_check import warn_loop_depth_hazards
+
+            self.loop_depth_hazards = warn_loop_depth_hazards(self)
+
     #: Set by :meth:`make_passive`: a parent's coarser pysim does this module's work.
     _sim_passive: ClassVar[bool] = False
 

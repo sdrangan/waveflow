@@ -57,6 +57,13 @@ Most deadlocks in a shared design are on the way back. Five rules:
   ([measured, 2025.1](../rf/rfshotbuf/tx_internal.md)).
 - **A feedback frame is announced only once it is complete** (store and forward). An arbiter commits to
   a frame on its first word, so a frame still being produced would stall every other client meanwhile.
+  But store and forward done **serially in one stage halves the shared unit's throughput**: a stage
+  that reads a whole frame and only then writes it spends two frame times per frame, so the unit before
+  it is idle half the time. The ring stub measured K busy about 45% for this reason. Overlap the
+  two: receive the next frame while sending the previous one (a ping-pong buffer, or the stage split
+  into a reader and a writer). After a unit framed by count, a [`StreamFramer`](../streams/framer.md)
+  and a [`StreamDemux`](../streams/demux.md) let the feedback and the answers leave by different
+  stages, so no one stage does both.
 - **A streaming unit on a cycle must flush an isolated frame** without the next frame pushing it out. If
   a frame's tail only leaves when the next frame arrives, and the next frame is that frame's own
   feedback, the loop stops. `SsrFft` flushes on its own (its commutators' bubble group,
@@ -70,6 +77,7 @@ Most deadlocks in a shared design are on the way back. Five rules:
 | return each of K's output frames to its client | `StreamDemux`: by an `s_sel` word a frame (the arbiter's `m_sel`, carried beside K), or by a field of the frame's header | [StreamDemux](../streams/demux.md) |
 | one FFT for the forward and the inverse pass | `SsrFft(direction="runtime")`: the direction on `s_dir`, one word a frame, each frame bit-exact with the fixed build | [SSR FFT parameters](../dsp/ssr_fft/parameters.md#the-direction-chosen-per-frame) |
 | the pysim model of a body that polls its inputs | `wait_any(*slaves)`: block until one holds a burst, then poll in the HLS body's order | [Non-blocking reads](../interface/primitive/index.md) |
+| route by frame after a unit framed by count (`SsrFft`) | `StreamFramer`: TLAST every `frame_words` words, the words unchanged | [StreamFramer](../streams/framer.md) |
 
 **The tag travels beside K.** K need not know whose a frame is. The arbiter's `m_sel` -- or a tag of
 the design's own, such as the job id and the pass -- goes on a side stream from the stage in front of
@@ -115,6 +123,18 @@ credit on `crd`. What it showed (Vitis 2025.1):
 - **A deadlock looks like success.** With no effective credit and shallow loop links, the same
   composite answers 0 of 40 jobs, and the simulation still ends cleanly: it simply runs out of events.
   Assert the counts -- every response, every status -- never only that the run finished.
+- **On a cycle, a link holds whole bursts -- pysim cannot show you otherwise.** pysim moves bursts: a
+  blocking write of a burst larger than its link's depth waits until the link is empty, then hands the
+  whole burst over, so the writer finishes even if nobody reads. RTL moves words: the writer stalls
+  after `depth` words. In a pipeline that is only timing; on a cycle it can be a deadlock pysim does not
+  show -- a post stage stalled on a short feedback link while the arbiter is mid-frame from another
+  client, the unit between them unable to drain. With the ring stub's feedback link cut to 8 words,
+  pysim still answers all 40 jobs. So after a pysim run every composite checks its cycles
+  (`waveflow.hw.loop_check`) and warns (`LoopDepthWarning`) for each link on one that carried a burst
+  larger than its depth; the hazards are on the composite's `loop_depth_hazards`. A link into a unit
+  that reads whenever its output has room (`drains_inputs = True`: `SsrFft`, `StreamFramer`) is
+  exempt, since its writer waits only on that unit's own output link. Give every other loop link a
+  depth that holds its largest burst, or show the loop live at RTL.
 
 At RTL (xc7z020 at 100 MHz, Vitis 2025.1) its ten-job scenario's last status leaves at cycle 934, and
 its forty-job one at 6282; `tests/examples/test_ring_stub.py` pins both.

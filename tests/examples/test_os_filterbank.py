@@ -26,6 +26,7 @@ from examples.os_filterbank.os_filterbank_build import (
 )
 from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 from waveflow.hw.harness import harness
+from waveflow.hw.loop_check import LoopDepthWarning
 from waveflow.simulation.simulation import Simulation
 
 
@@ -85,7 +86,8 @@ def test_without_the_credit_the_loop_deadlocks_and_the_run_still_returns(monkeyp
     monkeypatch.setattr(fb, "DEPTH", {**fb.DEPTH, "fb": fb.FRAME, "frm": 4, "y": 4, "x": 2, "tag": 2,
                                       "sel": 2, "blk": fb.FRAME})
     sysm = harness(fb.OsFilterBank, workload="long")
-    sysm.run()                                                     # returns: no error, no hang
+    with pytest.warns(LoopDepthWarning):                          # the loop check names the short link
+        sysm.run()                                                 # returns: no error, no hang
     done = sum(len(_bursts(sysm, f"m_status_{ch}")) for ch in range(fb.C))
     assert done < sum(len(js) for js in fb.jobs("long").values())
 

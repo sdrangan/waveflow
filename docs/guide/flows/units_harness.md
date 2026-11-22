@@ -103,6 +103,12 @@ def workload(self, kind: str = "test") -> dict:
     return {"s_cmd": cmds, "m_in": image}
 ```
 
+**When the bursts arrive** is part of the scenario too. `StreamBurst(words, gap_before=n)` makes the
+input's driver wait `n` idle cycles before that burst -- the first included, so one client's first job
+can come late while another's are already in flight. The harness turns a port's gaps into its driver's
+`start_gap_cycles` and `burst_gaps`, which the pysim driver and the RTL `AxisMaster` both play, so the
+build's own scenario carries them; a workload with no gaps is generated exactly as before.
+
 A one-off scenario is passed as the dict itself: `harness(MemRStream, workload={"s_cmd": [...],
 "m_mem": image})` ([`test_harness_memory.py`](../../../tests/hw/test_harness_memory.py)). A workload
 that names a port the module has no input of is refused.

@@ -32,3 +32,4 @@ Every block here follows the same shape:
 | [`StreamBroadcast`](broadcast.md) | one framed stream in, `n_out` copies out: every word to every output, TLAST included |
 | [`StreamArbiter`](arbiter.md) | `n_in` framed streams into one, a whole frame at a time, strict priority or round-robin; the winner's index on `m_sel` |
 | [`StreamDemux`](demux.md) | one framed stream out to `n_out`, a whole frame at a time, to the output `s_sel` or a header field names |
+| [`StreamFramer`](framer.md) | a stream framed by count alone into a framed one, TLAST every `frame_words` words: so a demux can sit after `SsrFft` |

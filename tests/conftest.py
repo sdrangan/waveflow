@@ -261,7 +261,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 272 + 6 -> 278 on 2026-11-21 (plans/shared_kernel.md, Stage 5): the overlap-save filter bank on one
 #: shared SsrFft -- a front alone, post alone, the bank on two scenarios, and the bank's timing on both
 #: (tests/examples/test_os_filterbank.py).
-WANT_XSI_GATES = 278
+#: 278 + 1 -> 279 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes): StreamFramer in its harness
+#: (tests/streams/test_framer.py).
+WANT_XSI_GATES = 279
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

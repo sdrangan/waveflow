@@ -27,6 +27,7 @@ from examples.ring_stub.ring_stub_build import (
 )
 from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 from waveflow.hw.harness import harness
+from waveflow.hw.loop_check import LoopDepthWarning
 
 
 def _bursts(sysm, port):
@@ -68,7 +69,8 @@ def test_without_the_credit_the_loop_deadlocks_and_the_run_still_returns(monkeyp
     monkeypatch.setattr(rs, "FMAX", 100)
     monkeypatch.setattr(rs, "DEPTH", {**rs.DEPTH, "fb": 8, "k_in": 8, "k_out": 8, "tag": 2})
     sysm = harness(RingStub, workload="long")
-    sysm.run()                                                     # returns: no error, no hang
+    with pytest.warns(LoopDepthWarning):                          # the loop check names the short link
+        sysm.run()                                                 # returns: no error, no hang
     assert len(_bursts(sysm, "m_status")) < len(jobs("long"))
 
 

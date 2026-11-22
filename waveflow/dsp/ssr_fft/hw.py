@@ -300,6 +300,9 @@ class SsrFft(FreeRunMod):
     """
 
     cpp_kernel_name: ClassVar[str | None] = "ssr_fft"
+    #: It reads its input whenever its output has room (a streaming pipeline, II = 1), so a link into
+    #: it cannot close a deadlock on a cycle by itself (``waveflow.hw.loop_check``).
+    drains_inputs: ClassVar[bool] = True
     cpp_namespace: ClassVar[str | None] = "ssr_fft_impl"
 
     L: HwParam[int] = 64

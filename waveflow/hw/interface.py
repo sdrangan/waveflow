@@ -1045,6 +1045,12 @@ class QueuedTransferIF(Interface):
         the remaining delay is never negative.
         """
         cycles = self.latency_init + words.shape[0]
+        # The largest burst this link has carried: a burst above the link's depth is admitted whole
+        # once the queue is empty (_admit_blocking), where RTL would stall its writer word by word --
+        # harmless in a pipeline, a hidden deadlock on a cycle (waveflow.hw.loop_check).
+        n = int(words.shape[0])
+        if n > getattr(self, "max_burst", 0):
+            self.max_burst = n
 
         bus = ep.bus
         hold = _bus_take(bus)                   # a free bus: taken now, no request event
