@@ -251,6 +251,11 @@ progress row "7"; what is left is open questions 5-7.
 
 ## Open questions
 
+**DECIDED 2026-11-22 (the user), on Stage 8's report:** pysim's ~25% slowdown in the pool (2.53 -> 3.28 ms at
+8 words a job, 4.32 -> 5.18 ms at 512) is **accepted**: the timing model's accuracy is what matters. Stage 8
+also showed os_filterbank's pysim 17-27% short of its RTL (a gap Stage 8 exposed, not caused); its
+investigation is `plans/osfb_pysim_fidelity.md`. Stage 5, the curated example, waits until that is done.
+
 1. **DECIDED 2026-11-22 (the user): model the decision cycles in pysim** -- BUILT, Stage 7.
    At RTL, 100 MHz, Vitis / xsim 2025.1: 3 / 3 / 5 / 5 idle cycles between jobs at 2 / 4 / 8 / 16 workers
    under first-free, 4 / 5 / 10 / 20 under round-robin, 2 to 4 more when a credit firing comes between;
