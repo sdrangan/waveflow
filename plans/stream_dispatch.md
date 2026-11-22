@@ -106,6 +106,7 @@ s_in --> [ StreamDispatch ]--m_out_1--> worker 1 --+--> [ StreamArbiter ] --m_ou
 | 2026-11-22 | lab 1 | On the lab machine (Ubuntu 24.04, Vitis / Vivado 2025.1 at `/tools/Xilinx/2025.1`, system g++ 13.3): Step 1, the baseline. `pytest tests/streams -m "not vitis and not xsi"`: 82 passed, 12 deselected. |
 | 2026-11-22 | lab 2 | Step 2, the RTL gates (Vitis HLS / Vivado 2025.1, `DEFAULT_PART` at 100 MHz). On the first run every pool's RTL `m_out` was the inputs' jobs as a multiset -- csynth clean, no hang, none lost, doubled or split: pool2 first-free, 14 jobs, last word at cycle 138; pool3 round-robin C 2, 14 2-burst jobs, 250; pool4 first-free on the long workload, 40 jobs, 526; pool4 round-robin C 3, 40 2-burst jobs, 1,044. All four then failed on the next line, reading `pysim_traces/`: `through="system_xsi"` runs a step and its ancestors only, and `pysim` is not one, so pysim never ran. The fix is the test's driving, not its assertions: it also runs `through="pysim"`. Then **4 passed** from a cold build (96 s); pysim's runs end at cycles 89, 166, 376 and 696 (the RTL's decision cycles, which pysim does not model: Step 4). Regression: `test_arbiter_demux.py -m xsi`, 5 passed. No change to D1-D6, the body or the model. |
 | 2026-11-22 | lab 3 | Step 3, resources. `rtl.make("dispatch", ...)`, the dispatcher alone as its own `ap_ctrl_none` top (`sdsp{ff,rr}<n>_w<W>_f<NB>_c<C>`); its own scenario now puts an empty bundle on `s_free`, which the harness's driver needs. `python -m waveflow.streams.calib dispatch`: 48 points (2 and 4 workers; 32, 64, 128 bits; 1- and 2-burst jobs; 1 and 4 credits; both policies), xczu48dr at 4 ns, Vitis HLS 2025.1: 48/48 clean in 810 s, every loop II = 1, no DSP or BRAM. Published into `xczu48dr_250mhz_vitis2025_1` (144 files, 48 keys, `platform.json` unchanged); the lookup answers `EXACT` on 48 distinct keys. LUT at one credit, one burst, 32 / 64 / 128 bits: 449 / 513 / 641 (2, first-free), 642 / 706 / 834 (2, round-robin), 882 / 1,010 / 1,266 (4, first-free), 1,365 / 1,493 / 1,749 (4, round-robin): about a LUT a bit a worker (a copy pipeline an output). Routed (`rfsoc_probe` `dsp16_w128_rr`, Vivado 2025.1, out of context, 4 ns): 16 workers x 128 bits, round-robin, 6,611 LUT, 14,098 FF, WNS +0.224 ns. Tables on `dispatch.md`, *Its resources*. |
+| 2026-11-22 | lab 4 | Step 4, the cost per job (`waveflow/streams/dispatch_timing.py`, modelled on `arbiter_timing.py`; the default part at 100 MHz, Vitis HLS / xsim 2025.1; 40 jobs of 8 words). **The dispatcher alone**, credits ample: idle cycles between jobs 3 / 3 / 5 / 5 at 2 / 4 / 8 / 16 workers under first-free, 4 / 5 / 10 / 20 under round-robin; every gap in a run the same, none inside a job; pysim 0 everywhere. Round-robin at 16 workers: the search over five states and the count update over eleven (open question 3). **The pool at one credit**: idle cycles between jobs 5 / 5 first-free and 7 / 9 round-robin at 2 / 4 workers (a credit firing between); from a credit's write to the next job's first word on its worker, 9-11 cycles first-free (4-6 waiting for the copy in progress, 5 to react), 27-28 / 64 round-robin (the worker's turn); pysim at least 1. At RTL first-free put all 40 jobs on worker 0 (the arbiter returns a credit as it starts a copy), where pysim spread them 20 / 20 and 13 / 12 / 9 / 6. The RTL round trip reads the pool's links off a traced run: `load_trace` could not bind it, because Vitis 2025.1 spelled the tasks' word types `framed_word` where the manifest predicts `framed_word_32`; it now binds the one instance with the task's `<body>_<template args>` prefix (two tests in `tests/utils/test_trace.py`). On `dispatch.md`, *What it costs a job*. The decision cost is not added to pysim (open question 1). |
 
 ## Lab hand-off: Stages 4-6 on a machine with Vitis / Vivado 2025.1
 
@@ -207,5 +208,20 @@ something, propose the extension rather than work around it; stop and ask before
 
 ## Open questions
 
-1. Whether pysim models the dispatcher's decision cycles between jobs (Step 4 measures them).
+1. **Whether pysim models the dispatcher's decision cycles between jobs** (measured in Step 4, for the user
+   to decide). At RTL, 100 MHz, Vitis / xsim 2025.1: 3 / 3 / 5 / 5 idle cycles between jobs at 2 / 4 / 8 / 16
+   workers under first-free, 4 / 5 / 10 / 20 under round-robin, 2 to 4 more when a credit firing comes
+   between; pysim spends 0. The mechanism would be the arbiter's proposal (`FreeRunMod.add_timing_model`,
+   `timed_delay` in `run_iter` before the copy, calibrated per `n_out` and policy at the platform's clock).
+   Not done: the plan said report, not model. A consequence to weigh: the cost changes which worker takes a
+   job -- in the pool at one credit, first-free put every job on worker 0 at RTL and spread them in pysim.
 2. A `least_loaded` policy (D2): only if a design needs it.
+3. **Round-robin's cost at 8 and 16 workers** (Step 4): 10 and 20 idle cycles a job, against first-free's 5.
+   Proposed, not built (the body and the model would change together, and the g++ check and the gates re-run):
+   search a per-worker "has a credit" mask, each bit a constant part-select, rotated by `next_k` and
+   priority-encoded; update the one count by `win` with a single indexed write. The search order, and so
+   D2's policy, is unchanged.
+4. **Fixed in passing, outside the block** (Step 4): `waveflow.utils.trace.load_trace` binds a task whose
+   word types Vitis 2025.1 spelled other than predicted (`framed_word` for `framed_word_32`, in the pool and
+   the arbiter-demux pair) by its `<body>_<template args>` prefix, the one instance with it. The prediction
+   in `composite_gen._vitis_type_name` is unchanged; it is right for markov's chain core.

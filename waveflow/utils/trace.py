@@ -435,6 +435,19 @@ def load_trace(manifest: dict | str | Path, vcd_path: str | Path,
         if inst and inst != short and f"{inst}_ap_start" not in by_bare \
                 and f"{short}_ap_start" in by_bare:
             renames[inst] = short
+    # Vitis 2025.1 also spells a framed port's word type more than one way: ``framed_word_32`` (the
+    # prediction, markov's chain core), ``framed_word`` (an arbiter-demux pair's tasks), and the width
+    # on the last of several only (a dispatcher pool's arbiter).  The ``<body>_<template args>`` prefix
+    # (the task's ``id``) is codegen's and holds; when neither name above has pins in the trace, bind
+    # the ONE instance whose pins carry that prefix -- two would be ambiguous, and stay unbound.
+    pins = [b[: -len("_ap_start")] for b in by_bare if b.endswith("_U0_ap_start")]
+    for t in manifest.get("tasks", ()):
+        inst, tid = t.get("inst"), t.get("id")
+        if not inst or not tid or inst in renames or f"{inst}_ap_start" in by_bare:
+            continue
+        found = [p for p in pins if p.startswith(f"{tid}_")]
+        if len(found) == 1:
+            renames[inst] = found[0]
     if renames:
         text = json.dumps(manifest)
         for inst, short in renames.items():

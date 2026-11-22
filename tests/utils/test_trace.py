@@ -107,6 +107,26 @@ class TestShortInstanceNames:
         assert short in {x["inst"] for x in bt.manifest["tasks"]}
         assert not bt.missing
 
+    def test_binds_an_instance_whose_word_types_vitis_spelled_differently(self, tmp_path,
+                                                                         memcopy_manifest):
+        """Vitis 2025.1 spells a framed word type ``framed_word`` in some instances and the width on
+        only the last of several in others (a dispatcher pool, ``plans/stream_dispatch.md``): the one
+        instance with the task's ``<body>_<template args>`` prefix binds."""
+        t = next(t for t in memcopy_manifest["tasks"] if t["inst"] != f"{t['body']}_U0")
+        built = f"{t['id']}_framed_word_framed_word_32_U0"
+        as_built = json.loads(json.dumps(memcopy_manifest).replace(t["inst"], built))
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", as_built))
+        assert built in {x["inst"] for x in bt.manifest["tasks"]}
+        assert not bt.missing
+
+    def test_two_instances_with_the_prefix_stay_unbound(self, tmp_path, memcopy_manifest):
+        t = next(t for t in memcopy_manifest["tasks"] if t["inst"] != f"{t['body']}_U0")
+        as_built = json.loads(json.dumps(memcopy_manifest).replace(t["inst"], f"{t['id']}_a_U0"))
+        twin = json.loads(json.dumps(memcopy_manifest).replace(t["inst"], f"{t['id']}_b_U0"))
+        as_built["tasks"].append(next(x for x in twin["tasks"] if x["id"] == t["id"]))
+        with pytest.raises(TraceBindError, match="ap_start"):
+            load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", as_built))
+
 
 class TestBindingFailsLoud:
     def test_missing_required_net_raises(self, tmp_path, memcopy_manifest):

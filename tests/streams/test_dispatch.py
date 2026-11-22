@@ -254,6 +254,50 @@ def test_the_pool_top_has_both_tasks_the_loop_and_a_credit_link_for_every_credit
     assert all(f"#pragma HLS STREAM variable=w{k} depth=16" in text for k in range(4))
 
 
+def test_the_dispatcher_alone_runs_in_its_harness():
+    """``rtl.make("dispatch", ...)``: the block alone, for its resources and timing.  Its own scenario
+    puts nothing on ``s_free`` (an empty bundle, so the driver has one to read), so each worker takes
+    its credits' worth of jobs and the rest wait."""
+    mod, top = rtl.make("dispatch", 3, 32, 1, "priority", credits=2)
+    assert top == "sdspff3_w32_f1_c2" and mod.policy == "first_free"
+    assert mod.workload("test")["s_free"] == []
+    sysm = harness(mod, workload="test")
+    sysm.run()
+    d = sysm.dut()
+    assert d.sent == [2, 2, 2] and d.outstanding == [2, 2, 2] and d.bad_credits == 0
+    assert [len(sysm.stand_ins[f"m_out_{k}"].words) for k in range(3)] == [2, 2, 2]
+
+
+def test_the_dispatcher_alone_top_has_its_task_only(tmp_path):
+    mod, top = rtl.make("dispatch", 4, 64, 2, "round_robin", credits=4)
+    assert top == "sdsprr4_w64_f2_c4"
+    rtl.generate_for(tmp_path, mod)
+    text = (tmp_path / "gen" / "stream_dispatch.cpp").read_text()
+    assert "stream_dispatch_task<64, 2, 4, 1," in text and "stream_arbiter_task<" not in text
+
+
+def test_pysim_dispatcher_spends_no_cycle_between_jobs():
+    """pysim's ``StreamDispatch`` has no decision cost: backlogged jobs leave back to back, whatever
+    ``n_out`` and the policy (the RTL's cost is measured by ``waveflow.streams.dispatch_timing``,
+    ``plans/stream_dispatch.md`` Stage 4).  First-free with ample credits keeps to worker 0."""
+    from waveflow.streams.dispatch_timing import JOBS, pysim_gaps
+
+    for n, policy in ((2, "first_free"), (4, "round_robin")):
+        g = pysim_gaps(n, policy)
+        assert g["jobs"] == JOBS and set(g["gaps"]) == {0}
+        assert g["workers"] == ([0] * JOBS if policy == "first_free" else [f % n for f in range(JOBS)])
+
+
+def test_the_round_trip_pairs_each_credit_with_its_workers_next_job():
+    """``dispatch_timing._pair``: a credit for worker ``k`` with the first job to ``k`` after it; a credit
+    no job followed is left out."""
+    from waveflow.streams.dispatch_timing import _pair
+
+    credits = [(10, 0), (12, 1), (30, 0), (40, 1)]
+    jobs = {0: [0, 14, 33], 1: [5, 20]}
+    assert _pair(credits, jobs) == [(10, 14, 0), (12, 20, 1), (30, 33, 0)]
+
+
 # --- the body under g++, against the model's decision rules ------------------------------------------------
 
 

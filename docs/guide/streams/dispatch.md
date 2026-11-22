@@ -139,6 +139,47 @@ backlog under both policies, one to three credits -- **pass** at Vitis HLS / Viv
 part at 100 MHz): csynth clean, no hang, every job once and whole at RTL and in pysim
 (`plans/stream_dispatch.md`, Stage 4).
 
+## What it costs a job
+
+Between consecutive jobs the dispatcher spends a few idle cycles deciding: a firing tests `s_free`, then
+`s_in`, searches for a worker, updates its count, and only then starts the copy. With a backlog of 8-word
+jobs, credits ample (none ever waited for) and every output ready, at RTL (the default part at 100 MHz,
+Vitis HLS / xsim 2025.1; `python -m waveflow.streams.dispatch_timing`):
+
+| workers | idle cycles between jobs, first-free / round-robin | port rate used, 8-word jobs |
+|---|---|---|
+| 2 | 3 / 4 | 73% / 67% |
+| 4 | 3 / 5 | 73% / 62% |
+| 8 | 5 / 10 | 62% / 44% |
+| 16 | 5 / 20 | 62% / 29% |
+
+Every gap in a run was the same, and no job had an idle cycle inside it. Round-robin's cost grows with the
+workers: its search starts at a run-time position (`next_k + j`), and the count update then rewrites the
+packed register through a chain of selects; at 16 workers Vitis HLS 2025.1 schedules the search over five
+states and the update over eleven (its 100 MHz schedule). A returned credit takes a firing of its own: in a
+pool at one credit a worker
+(`DispatchPool`, links for workers), the idle cycles between jobs are 5 under first-free at 2 and 4
+workers, and 7 and 9 under round-robin.
+
+**The credit round trip.** In that pool, from the arbiter writing a worker's index on `m_sel` to the next
+job's first word on that worker's link, first-free takes 9 to 11 cycles: 4 to 6 while the dispatcher
+finishes the job it is copying (it reads `s_free` only between jobs), then 5 to take the credit back and
+send. A one-credit worker whose result is taken the moment it is done idles that long between jobs, plus
+its own path to the arbiter; a second credit, with room for the second job, hides it. Under round-robin the
+next job to a worker also waits its turn behind the others' (27 cycles at 2 workers, 64 at 4).
+
+**First-free at RTL is not first-free in pysim.** In that pool at RTL, first-free sent all 40 jobs to worker
+0: the arbiter returns a credit as it starts copying a job (it commits on the first word), so worker 0 is
+free again by the dispatcher's next decision. pysim, which decides at once, spread them 20 / 20 and
+13 / 12 / 9 / 6. The gate allows this (which worker takes a job is timing's), and with real workers a
+credit comes back only when a result is taken; but links, or workers that drain their input at once, get
+no spread from first-free.
+
+pysim does not model the decision cost: its jobs leave back to back, and a credit is acted on a cycle after
+it arrives. Until the dispatcher carries a calibrated timing model (the gap as a function of `n_out` and
+the policy, as the arbiter's would), a pysim run of a pool with short jobs overstates its rate. Whether to
+model it is an open question of `plans/stream_dispatch.md`.
+
 ## Its resources
 
 Records for 2 and 4 workers -- 32, 64 and 128 bits, 1- and 2-burst jobs, 1 and 4 credits a worker, both
