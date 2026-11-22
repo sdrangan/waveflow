@@ -112,12 +112,20 @@ Two choices make it track the hardware:
 - **The write is deferred** (`call_after`), so a child reads its next frame while the previous one
   drains -- the interval comes out `L/R` by itself.
 - **The gap rule on the transposer's last commutator** (`hw.GapRhythm`, at `L >= 64`): `tp{S-2}` starts a
-  frame that did not follow its predecessor back to back no earlier than `max(2L/R, L/R + g)` after the
-  predecessor's start. The pysim does not stall the FFT's input (a task holds up to `MAX_INFLIGHT`
-  frames) where the RTL does, so the gap is taken between the frames as they arrive and counted from the
-  previous frame's start as the rule placed it -- as a source the RTL stalls would count it. `L = 16`
-  keeps `L/R + g` (above). `tests/dsp/ssr_fft/test_hw.py` pins the measured intervals above, every one
-  at `L = 64 ... 1024` and three constant gaps and the random run at `L = 4096`.
+  frame that did not follow its predecessor back to back no earlier than `2L/R` after the predecessor's
+  start, and no earlier than it arrives -- the gap counted from the arrivals. `L = 16` keeps `L/R + g`
+  (above).
+
+  **Its limit: a source the FFT stalls.** At RTL a source the FFT holds back offers its next frame only its
+  own gap after the FFT took its last word; pysim's links move a burst at a time and do not stall a source
+  word by word, so such a source is early in pysim. The testbench's driver is one: at a constant gap every
+  interval is the RTL's, but at random gaps (24 frames, gaps up to `2L/R`) pysim falls short after each
+  stalled frame -- 6.1, 3.9, 6.5 and 7.7% over the run at `L` = 64, 256, 1024, 4096, never long on any
+  interval. `tests/dsp/ssr_fft/test_hw.py` pins it so: pysim exactly the arrival counting, the RTL's record
+  exactly the stall counting, the difference short only and within 8%. A source whose frames come when
+  their data is ready -- a design's kernels -- is not early: in `examples/os_filterbank` the arrival
+  counting lands the bank on its RTL. Word-by-word back-pressure in pysim's links is open
+  (`plans/osfb_pysim_fidelity.md`, Section 7).
 
 `lat` per task is `latency_cycles`: `3D + 3` for a commutator, 3 for a stage, a frame plus one for the
 ping-pong reorder. The fixed terms were first csynth's pipeline depths, which put the first frame

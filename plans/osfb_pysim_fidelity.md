@@ -140,6 +140,7 @@ recorded number moves.
 | 2026-11-22 | 4 (C, D) | `post` and `front` do what their bodies do (`os_filterbank.STAGE_CYC`, read off the traced RTL at each loop's least): `front` reads its block a word a cycle (`end_read(charge_beats=True)`), its Job header's `CLEAR` loop 11 cycles, its loops' exit and entry 1 and 2; `post` reads the FFT's frame as it arrives, pass 0 the `MUL` loop's drain 4 and the `FB` loop's entry 2, pass 1 the `Resp` first and the answer copied through, from the frame's first word plus 5. Checked: every `post` hop's least now the RTL's (y last -> feedback tag 5, tag -> words 3; y first -> answer 6, its end 2 after y's). G (the first frame's start) +12 -> +1, D +15 -> +3. End cycle (timed): `test` 1,279 (+19.9%), `long` 2,841 (+17.2%): the stages are right, and with `post` as slow as the RTL's the loop backs up in pysim and A's counting charges the back-up again (A -414 of -417 on `long`). Attribution (timed): `test` A -76, A2 -185, B +9, C +39, D +3, E +5, F +4, G +1, H -12 (gap -212); `long` A -414, A2 +1, B +3, C 0, E +1, F +3, G +1, H -12 (gap -417). |
 | 2026-11-22 | 4 (A, counting) | **An experiment for the decision** (`fidelity.py --rule-variants`: patches the rule in its own process, the FFT flat): counting a gap from the previous frame's start (as built), the bank ends at 1,277 / 2,839 (+19.7% / +17.1%); from the arrivals (`max(arrival, prev + 2L/R)`), **1,039 / 2,425 (-2.6% / +0.0%)**; net of pysim's own stall, as built (pysim's `pre` is not stalled). The arrival counting misses the driver measurements, though: 17, 19, 19 of 23 random intervals at `L = 64, 256, 1024` (as built: 23 of 23). Why: at RTL a stalled driver offers its next frame only its gap after the FFT took its last word, and pysim's links (a whole frame each) do not stall it so; in the bank `pre`'s frames come when their data does. Section 8. |
 | 2026-11-22 | open question 2 | Re-measured on the traced RTL (Vitis / xsim 2025.1): the FFT's frames leave 32 cycles apart throughout `long` (cause A: at most half busy; busy 48%), while `post` takes 39-40 cycles a forward frame and 19-22 an inverse one, about 30 on average, busy 91% of `long`. So the FFT's own half rate after a gap is why it is under half busy; `post` would bind next. `docs/examples/os_filterbank/index.md` corrected (it named `post` alone). |
+| 2026-11-22 | 4 (A, counting: option (a)) | The user chose (a): `GapRhythm` counts a gap from the arrivals -- a frame starts no earlier than it arrives, nor than `2L/R` after the previous start after a gap. Against the driver records: every constant gap exact at every `L`; random gaps 3.9-7.7% short (`L` = 64, 256, 1024, 4096: 6.1, 3.9, 6.5, 7.7%), never long on an interval -- the driver the FFT stalls, early in pysim. `test_hw.py` restated: pysim exactly the arrival counting, the RTL record exactly the stall counting, the difference short only and within 8%. **The bank, the arbiter timed: `test` 1,043 (-2.2%), `long` 2,427 (+0.1%)** (untimed 1,039 / 2,425); attribution: `test` (gap +24) A 0, A2 -2, B +9, C +16, D +3, E +5, F +4, G +1, H -12; `long` (gap -3) A 0, A2 +1, B +3, C 0, E +1, F +3, G +1, H -12. Word-by-word back-pressure recorded as open question 3; ledger rows 18 and 19 added. |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -260,7 +261,17 @@ error), rather than a mean with an error for every length. `L = 4096` is not mea
    os_filterbank/index.md`, "the FFT is busy under half the time, and `post` is why") should be re-checked
    against cause A. A first look (Step 3): on the RTL's critical path the binding hop is the FFT's own
    32-cycle rhythm (71 of 149 hops on `long`), and `post` averages about 31 cycles a frame (about 43 on a
-   forward pass, about 20 on an inverse), under the FFT's 32. Not yet re-measured as the page would need.
+   forward pass, about 20 on an inverse), under the FFT's 32. **ANSWERED 2026-11-22**: re-measured (`post`
+   39-40 cycles a forward frame, 19-22 an inverse, busy 91% of `long`; the FFT at 32 a frame); the page
+   corrected (progress row "open question 2").
+3. **Word-by-word back-pressure in pysim's links** (Section 8's option (c); the user, 2026-11-22: record it,
+   its own plan later). pysim moves a burst at a time: a link admits a burst larger than its depth whole
+   once it is empty, so a source the consumer stalls at RTL word by word runs ahead in pysim by up to a
+   frame. Seen here as `SsrFft`'s gap counted from the arrivals being 6-8% short for a driver the FFT
+   stalls; the same root cause -- pysim moves bursts, the RTL moves words -- as ledger rows 8 (the arbiter
+   and dispatcher committing on a whole burst) and 16 (`StreamDemux` storing and forwarding)
+   (`docs/evaluation/timing_fidelity/index.md`). A change to how links admit a burst
+   (`waveflow/hw/interface.py`).
 
 ## 8. Where Step 4 stopped (2026-11-22): two decisions for the user
 

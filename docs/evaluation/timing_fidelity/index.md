@@ -3,7 +3,7 @@ title: Timing fidelity
 parent: Evaluation
 nav_order: 3
 has_children: true
-summary: "Is Waveflow's pysim right, and what does checking it find? Two claims: pysim's cycles match the RTL's within a stated tolerance, for compositions of calibrated blocks and not only for the blocks alone; and where they do not, attributing the difference finds real performance bugs -- the calibrated simulator as a performance oracle. The method (an accuracy gate; per-frame timelines in both backends; the gap attributed hop by hop; every discrepancy classified as a pysim error, a real cost, a design flaw or a wrong conclusion drawn from the RTL alone), and the ledger of every discrepancy found so far: of 17, 5 were design flaws and 3 wrong conclusions that RTL numbers alone had not exposed. Weaknesses: one loop and its blocks so far, and the RTL-only counterfactual not yet tested."
+summary: "Is Waveflow's pysim right, and what does checking it find? Two claims: pysim's cycles match the RTL's within a stated tolerance, for compositions of calibrated blocks and not only for the blocks alone; and where they do not, attributing the difference finds real performance bugs -- the calibrated simulator as a performance oracle. The method (an accuracy gate; per-frame timelines in both backends; the gap attributed hop by hop; every discrepancy classified as a pysim error, a real cost, a design flaw or a wrong conclusion drawn from the RTL alone), and the ledger of every discrepancy found so far: of 19, 5 were design flaws and 3 wrong conclusions that RTL numbers alone had not exposed. Weaknesses: one loop and its blocks so far, and the RTL-only counterfactual not yet tested."
 ---
 
 # Timing fidelity
@@ -72,9 +72,11 @@ Every discrepancy found so far, oldest first. Measured with Vitis HLS / Vivado /
 | 15 | 2026-11-22 | `os_filterbank` | `pre`, `post` and `front` were charged only their links' word rate in pysim (causes B, C, D) | pysim error | #10's attribution | each charges what its HLS body does | commit `3b20f22` |
 | 16 | 2026-11-22 | `StreamDemux` | its decision cycles are untimed in pysim, and it stores and forwards where its body copies through (causes F, H) | pysim error | #10's attribution | open (a framework change) | `plans/osfb_pysim_fidelity.md` |
 | 17 | 2026-11-22 | `StreamArbiter` | its decision table was measured at 32 bits and 1-burst frames; at 128 bits and 2 bursts every gap is a cycle longer | pysim error (calibration coverage) | the spot check; #10's attribution (cause E) | open: a design calibrates at its own width | `plans/stream_dispatch.md`, open question 7 |
+| 18 | 2026-11-22 | `SsrFft` (pysim) | #11's rule counted a gap from the previous frame's start -- exact for a driver the FFT stalls -- and in `os_filterbank` charged the loop's own back-up twice (+17-20%); counted from the arrivals the bank lands on its RTL (-2.2%, +0.1%), but a driver the FFT stalls is early: 4-8% short on random gaps, since pysim's links move a burst at a time and do not stall a source word by word | pysim error (link back-pressure) | #11's model against the bank and the driver runs | counted from the arrivals; the driver's limit stated and pinned; word-by-word back-pressure open (the same root cause as #8 and #16) | `plans/osfb_pysim_fidelity.md`, Sections 7-8 |
+| 19 | 2026-11-22 | `SsrFft` at `L = 16` | no rate lost after a gap, but each frame's latency moves 40-43 cycles with the gaps before and after it (arrival phase); at a constant 1-3 cycle gap the RTL falls up to 13 cycles behind `L/R + g` over 11 frames | real cost (arrival phase) | #11's gap sweep at every `L` | stated, not modelled: within 3 cycles a frame, exact in total on random gaps | `docs/guide/dsp/ssr_fft/timing.md` |
 
-**So far:** 5 design flaws (#1, 4, 6, 11, 13), 3 real costs (#3, 5, 7), 6 pysim errors (#8, 9, 10, 15,
-16, 17) and 3 wrong conclusions (#2, 12, 14). Every design flaw and wrong conclusion was in hardware or
+**So far:** 5 design flaws (#1, 4, 6, 11, 13), 4 real costs (#3, 5, 7, 19), 7 pysim errors (#8, 9, 10, 15,
+16, 17, 18) and 3 wrong conclusions (#2, 12, 14). Every design flaw and wrong conclusion was in hardware or
 documentation that had passed its RTL gates.
 
 `os_filterbank` gets its own page once `plans/osfb_pysim_fidelity.md` closes: the attribution, each fix
@@ -82,7 +84,7 @@ with its before and after, the gate and its tolerance.
 
 ## What is not shown
 
-- **One loop and its blocks.** Rows 5-17 come from one week, one example and the blocks it uses. Whether
+- **One loop and its blocks.** Rows 5-19 come from one week, one example and the blocks it uses. Whether
   the rate of real findings holds on other designs is unmeasured.
 - **Selection.** The method finds only what pysim and the RTL disagree on. A flaw both share -- a model
   written from the same wrong assumption as the RTL -- passes. Row 12 is the warning: the FFT's model

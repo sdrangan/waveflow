@@ -65,11 +65,16 @@ class GapRhythm:
     within 3 cycles of the RTL's interval frame by frame, the same total on random gaps, and up to 13
     cycles behind over 11 frames at a constant 1-cycle gap (where the RTL alternates 8 and 4).
 
-    The pysim does not stall the FFT's input here (a task holds up to :data:`MAX_INFLIGHT` frames),
-    where the RTL does, and a source the RTL stalls counts its idle cycles from where the stall let it
-    finish.  So the gap is taken between the frames as they arrive (the first word of one less a frame
-    after the first word of the other) and counted from the previous frame's start as the rule placed
-    it: ``start = prev_start + L/R`` back to back, ``prev_start + max(2L/R, L/R + g)`` after a gap."""
+    **Counted from the arrivals** (the user's decision, ``plans/osfb_pysim_fidelity.md`` Section 8): a gap
+    is taken between the frames as they arrive (the first word of one less a frame after the first word of
+    the other), and a frame starts no earlier than its arrival, nor than ``prev_start + 2L/R`` after a gap
+    (``prev_start + L/R`` back to back).  That is the FFT's behaviour at its input, and lands a design whose
+    kernels feed the FFT when their data is ready on its RTL (``examples/os_filterbank``).  **Its limit:** at
+    RTL a source the FFT stalls offers its next frame only its own gap after the FFT took its last word, and
+    pysim's links move a burst at a time, so they do not stall a source word by word (open:
+    ``plans/osfb_pysim_fidelity.md`` Section 7).  A testbench driver that waits its gap after a stalled frame
+    is therefore early in pysim: on random gaps up to ``2L/R`` its run is 6-8% short of the RTL's
+    (``tests/dsp/ssr_fft/test_hw.py``); constant gaps and back-to-back frames stay exact."""
 
     def __init__(self, n_words: int, period: float) -> None:
         self.n, self.per = int(n_words), float(period)
@@ -84,8 +89,7 @@ class GapRhythm:
             s = earliest
         else:
             gap = arrival - (self.prev_arrival + frame)
-            s = self.prev_start + (frame if gap < 0.5 * self.per else max(2 * frame, frame + gap))
-            s = max(s, earliest)
+            s = max(earliest, self.prev_start + (frame if gap < 0.5 * self.per else 2 * frame))
         self.prev_arrival, self.prev_start = arrival, s
         return s
 

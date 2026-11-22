@@ -149,16 +149,40 @@ def _gapped_intervals(tmp_path, length: int, gaps: list[int]) -> list[int]:
     return [round(float(x)) for x in np.diff(pysim_frame_cycles(tb))]
 
 
+def _counted(nw: int, gaps: list[int], stalled_source: bool) -> list[int]:
+    """The intervals the gap rule gives a driver's frames, *gaps* apart.  A frame after a gap starts no
+    earlier than ``2L/R`` after the one before it (``L/R`` back to back) -- and no earlier than it is
+    offered: by a driver the FFT does not stall (pysim's links, a burst at a time), its gap after its
+    previous frame's arrival; by one it stalls (the RTL), its gap after the FFT took that frame."""
+    out, start, arrival = [], 0, 0
+    for g in gaps:
+        arrival += nw + g
+        offered = start + nw + g if stalled_source else arrival
+        s = max(offered, start + (2 * nw if g else nw))
+        out.append(s - start)
+        start = s
+    return out
+
+
 @pytest.mark.parametrize("length", (64, 256, 1024, 4096))
 def test_composite_pysim_keeps_the_rtl_interval_after_a_gap(tmp_path, length):
-    """A frame that follows its predecessor after any idle cycle leaves ``max(2L/R, L/R + g)`` after it,
-    as the RTL's transposer's last commutator lets it: every interval at RTL, constant gaps and random
-    ones, exactly (``hw.GapRhythm``).  Back to back stays ``L/R``."""
+    """A frame that follows its predecessor after any idle cycle leaves no sooner than ``2L/R`` after it --
+    the RTL's transposer's last commutator -- and no sooner than it arrives (``hw.GapRhythm``, counted from
+    the arrivals).  At a constant gap every interval is the RTL's, exactly.  At random gaps the RTL's
+    driver is stalled by the FFT and offers its next frame its gap after the FFT took its last word, which
+    pysim's burst-at-a-time links do not reproduce: there pysim is the arrival counting exactly, the RTL the
+    stall counting exactly, and pysim falls short of the RTL only after a stalled frame -- **6-8% over the
+    run** (``L = 256``: 4%), never long (``plans/osfb_pysim_fidelity.md``, Sections 6 and 8)."""
     rec = RTL_GAPPED[length]
+    nw = length // 4
     n = rec.get("frames", 12) - 1
     for g, want in rec["const"].items():
         assert _gapped_intervals(tmp_path / f"g{g}", length, [g] * n) == [want] * n, g
-    assert _gapped_intervals(tmp_path / "random", length, rec["gaps"]) == rec["rtl"]
+    got = _gapped_intervals(tmp_path / "random", length, rec["gaps"])
+    assert got == _counted(nw, rec["gaps"], stalled_source=False)            # the model, exactly
+    assert rec["rtl"] == _counted(nw, rec["gaps"], stalled_source=True)       # the RTL, exactly
+    assert all(a <= b for a, b in zip(got, rec["rtl"]))                       # short only, never long
+    assert 0 <= sum(rec["rtl"]) - sum(got) <= 0.08 * sum(rec["rtl"])          # the driver-stall limit
 
 
 def test_composite_pysim_at_l16_is_within_three_cycles_a_frame(tmp_path):
