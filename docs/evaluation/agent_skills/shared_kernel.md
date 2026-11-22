@@ -11,6 +11,13 @@ summary: "Can an agent design an accelerator in which one expensive kernel is sh
 > reviewer. The build run stops at pysim: nothing it wrote has been through csynth or RTL. The held-out
 > problem's specification is kept outside the repository, so that `waveflow kb` and a grep cannot find it.
 
+**Held-out problems are not in this repository.** Their specifications, rubrics, run transcripts and
+scores are kept in a separate, private evaluation repository, so that no agent working in this
+repository -- an agent under test, or one developing Waveflow -- can read them, and the problems stay
+unseen for later runs. This repository holds only the method and the results in outline. Researchers
+who want the full material for a held-out study can ask the maintainer for read access (open an
+issue on the Waveflow repository). A problem is released publicly once it is retired as a test.
+
 ## The question
 
 The other skill tests ask whether a skill makes an agent follow a pattern it would otherwise miss. This one
@@ -26,7 +33,8 @@ A multi-client estimator. Each client (an antenna) sends independent jobs. A job
 search, where each grid point needs a forward and an inverse transform, then an iterative refinement with
 a line search, which stops at a tolerance or an iteration limit, so jobs end at times that depend on the
 data. Every transform in every phase, for every client, must go through **one** FFT, kept busy across
-clients. The full specification, the scoring rubric and every run's report are outside the repository.
+clients. The full specification, the scoring rubric and every run's report are in the private evaluation
+repository (above).
 
 The scoring rubric has seven points:
 1. the maths;
