@@ -2,11 +2,12 @@
 
     python -m waveflow.streams.calib arbiter [--dry-run] [--resume] [--n-in 2 4 ...]   # csynth, file
     python -m waveflow.streams.calib demux   [--dry-run] [--resume] [--n-out 2 4 ...]
+    python -m waveflow.streams.calib dispatch [--dry-run] [--resume] [--n-out 2 4 ...]
     waveflow_calib publish work/stream_calib/calib/work/xczu48dr_250mhz_vitis2025_1 \\
                            waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1 --apply
 
 ``plans/shared_kernel_rfsoc_timing.md``: what sharing a kernel costs in arbiter and demux, against
-replicating it.  Each point is the block alone as its own ``ap_ctrl_none`` top -- every port an AXIS port
+replicating it; ``plans/stream_dispatch.md``: what the dispatcher in front of a pool of workers costs.  Each point is the block alone as its own ``ap_ctrl_none`` top -- every port an AXIS port
 of the top -- synthesized at the **platform's** part and clock (``tcl_target``; the packaged
 ``xczu48dr_250mhz_vitis2025_1`` is xczu48dr at 4 ns) and attributed by ``InspectSynthStep``, which files
 one resource record per point under the block's module key.  The key is the block's structure, so
@@ -36,6 +37,7 @@ from waveflow.build.resource_steps import InspectSynthStep
 from waveflow.build.sweep import ParamGrid, Stage, SweepRunner, sweep_cli
 from waveflow.streams.arbiter import StreamArbiter
 from waveflow.streams.demux import StreamDemux
+from waveflow.streams.dispatch import StreamDispatch
 
 REPO = Path(__file__).resolve().parents[2]
 #: The sweep's build directories and its work tier (``/work/`` is not tracked).
@@ -69,7 +71,8 @@ class Block:
 
 
 _WIDTHS, _BURSTS = (32, 64, 128), (1, 2)
-#: ``n`` outer: a partial run then covers whole sizes.  48 points each.
+#: ``n`` outer: a partial run then covers whole sizes.  48 points each.  The dispatcher's grid is 2 and 4
+#: workers only (``plans/stream_dispatch.md`` Stage 4), its credits a worker a fifth axis.
 BLOCKS: dict[str, Block] = {
     "arbiter": Block(StreamArbiter, ("n_in", "bitwidth", "frame_bursts", "policy"),
                      ParamGrid(n_in=(2, 4, 8, 16), bitwidth=_WIDTHS, frame_bursts=_BURSTS,
@@ -78,6 +81,9 @@ BLOCKS: dict[str, Block] = {
                    ParamGrid(n_out=(2, 4, 8, 16), bitwidth=_WIDTHS, frame_bursts=_BURSTS,
                              route=("sel", "header")),
                    fixed=(("sel_lsb", SEL_LSB), ("sel_bits", SEL_BITS))),
+    "dispatch": Block(StreamDispatch, ("n_out", "bitwidth", "frame_bursts", "credits", "policy"),
+                      ParamGrid(n_out=(2, 4), bitwidth=_WIDTHS, frame_bursts=_BURSTS, credits=(1, 4),
+                                policy=("first_free", "round_robin"))),
 }
 
 

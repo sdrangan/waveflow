@@ -1,0 +1,12 @@
+{
+  "key": "stream_dispatch-fcebab90",
+  "cls_name": "StreamDispatch",
+  "cls_module": "waveflow.streams.dispatch",
+  "params": {
+    "bitwidth": 64,
+    "credits": 4,
+    "frame_bursts": 2,
+    "n_out": 2
+  },
+  "signature": "fcebab90c2a811ba555fed6336f2455f639a556501c7e0f728d3457c1aad57ab"
+}

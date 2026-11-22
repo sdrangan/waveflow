@@ -151,9 +151,12 @@ class StreamDispatch(FreeRunMod):
             yield from self.m_out[k].write(words)
 
     def workload(self, kind: str = "test") -> dict:
-        """The block's own scenario, for a harness that returns credits: jobs whose words name the job
-        and burst (job ``f``, burst ``b``, word ``j``: ``f << 12 | b << 8 | j``), 1 to 9 words a burst."""
-        return {"s_in": jobs_of(int(self.frame_bursts), kind)}
+        """The block's own scenario: jobs whose words name the job and burst (job ``f``, burst ``b``,
+        word ``j``: ``f << 12 | b << 8 | j``), 1 to 9 words a burst -- and nothing on ``s_free``.  Its
+        harness (the block alone, ``rtl.make("dispatch", ...)``) returns no credits, so each worker
+        takes at most ``credits`` jobs; a pool (:class:`~waveflow.streams.rtl.DispatchPool`) returns
+        them."""
+        return {"s_in": jobs_of(int(self.frame_bursts), kind), "s_free": []}
 
 
 def jobs_of(frame_bursts: int, kind: str = "test", n_jobs: int | None = None) -> list[StreamBurst]:

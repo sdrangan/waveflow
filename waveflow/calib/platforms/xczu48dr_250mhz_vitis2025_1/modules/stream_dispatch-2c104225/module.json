@@ -1,0 +1,12 @@
+{
+  "key": "stream_dispatch-2c104225",
+  "cls_name": "StreamDispatch",
+  "cls_module": "waveflow.streams.dispatch",
+  "params": {
+    "bitwidth": 32,
+    "credits": 1,
+    "frame_bursts": 2,
+    "n_out": 4
+  },
+  "signature": "2c104225898631eb781ebb343e15fd0239912b287b1931e5995bfc9c6c31fdaf"
+}

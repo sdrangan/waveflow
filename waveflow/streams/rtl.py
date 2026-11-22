@@ -1,6 +1,6 @@
 """rtl.py -- build a stream block in its own harness and run it under XSI: the blocks' RTL gates.
 
-    python -m waveflow.streams.rtl <root> [--block broadcast|demux|demux_hdr|pair|framer|pool]
+    python -m waveflow.streams.rtl <root> [--block broadcast|demux|demux_hdr|pair|framer|pool|dispatch]
                                           [--n 2] [--bitwidth 32] [--frame-bursts 1] [--credits 1]
                                           [--policy priority] [--through compare]
 
@@ -17,7 +17,8 @@ interleave: the frames whole, none lost, every index right.
 ``StreamDispatch`` has none alone either, for the same reason (which worker takes a job is timing's).  Its
 gate is :class:`DispatchPool` -- the dispatcher's outputs into an arbiter, the arbiter's ``m_sel`` back as
 the credits -- run through ``system_xsi`` and checked by its frames as a multiset
-(:meth:`DispatchPool.expected_frames`), since the pool's output order is timing's too.
+(:meth:`DispatchPool.expected_frames`), since the pool's output order is timing's too.  The dispatcher
+alone (``make("dispatch", ...)``) is built only for its resources and its timing, as the arbiter is.
 
 **Build in a short directory**: csynth fails silently past the Windows path limit.
 """
@@ -186,9 +187,11 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
     """A gated module and its top's name: ``broadcast``, ``demux`` (by ``s_sel``), ``demux_hdr`` (by
     bits 16-23 of a frame's first word), ``pair`` (:class:`ArbiterDemuxPair`), ``framer`` (its frame
     length passed as *frame_bursts*) or ``pool`` (:class:`DispatchPool`, *credits* a worker; a
-    *policy* of ``"priority"`` means the dispatcher's ``"first_free"``).  Also ``arbiter``, the arbiter alone: it has no gate (its
-    interleave is timing's), but its csynth is the block's own resources and its RTL run the block's
-    own timing (:mod:`waveflow.streams.calib`)."""
+    *policy* of ``"priority"`` means the dispatcher's ``"first_free"``).  Also ``arbiter``, the arbiter
+    alone, and ``dispatch``, the dispatcher alone (*credits* a worker, *policy* as the pool's): neither
+    has a gate (which input wins, or which worker takes a job, is timing's), but each one's csynth is
+    the block's own resources and its RTL run the block's own timing (:mod:`waveflow.streams.calib`,
+    :mod:`waveflow.streams.dispatch_timing`)."""
     sim = Simulation()
     if kind == "broadcast":
         return block(n, bitwidth), top_name(n, bitwidth)
@@ -214,6 +217,11 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
         mod = DispatchPool(name=DispatchPool.cpp_kernel_name, sim=sim, n=n, bitwidth=bitwidth,
                            frame_bursts=frame_bursts, credits=credits, policy=pol)
         return mod, f"pool{'rr' if pol == 'round_robin' else 'ff'}{n}_w{bitwidth}_f{frame_bursts}_c{credits}"
+    if kind == "dispatch":
+        pol = "round_robin" if policy == "round_robin" else "first_free"
+        mod = StreamDispatch(name=StreamDispatch.cpp_kernel_name, sim=sim, n_out=n, bitwidth=bitwidth,
+                             frame_bursts=frame_bursts, credits=credits, policy=pol)
+        return mod, f"sdsp{'rr' if pol == 'round_robin' else 'ff'}{n}_w{bitwidth}_f{frame_bursts}_c{credits}"
     raise ValueError(f"unknown stream block {kind!r}")
 
 
@@ -274,13 +282,15 @@ class StreamBlockCodegenStep(BuildStep):
 
 def build_block_dag(work_dir, kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1,
                     policy: str = "priority", workload: str = "test",
-                    credits: int = 1) -> tuple[BuildDag, str]:
-    """``codegen``, then the system steps of the module's harness; returns the DAG and the top's name."""
+                    credits: int = 1, trace: bool = False) -> tuple[BuildDag, str]:
+    """``codegen``, then the system steps of the module's harness; returns the DAG and the top's name.
+    *trace* traces the XSI run: the waveform of the top's own nets, its internal links among them
+    (``SystemXsiStep.trace``; :mod:`waveflow.streams.dispatch_timing` reads a pool's)."""
     mod, top = make(kind, n, bitwidth, frame_bursts, policy, credits)
     dag = BuildDag()
     dag.add(StreamBlockCodegenStep(name="codegen", kind=kind, n_out=n, bitwidth=bitwidth,
                                    frame_bursts=frame_bursts, policy=policy, credits=credits))
-    add_system_steps(dag, harness(mod, workload=workload), work_dir=work_dir, top=top)
+    add_system_steps(dag, harness(mod, workload=workload), work_dir=work_dir, top=top, trace=trace)
     return dag, top
 
 
@@ -295,7 +305,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("root", type=Path)
     ap.add_argument("--block", default="broadcast",
-                    choices=("broadcast", "demux", "demux_hdr", "pair", "arbiter", "framer", "pool"))
+                    choices=("broadcast", "demux", "demux_hdr", "pair", "arbiter", "framer", "pool",
+                             "dispatch"))
     ap.add_argument("--n", "--n-out", dest="n", type=int, default=2)
     ap.add_argument("--bitwidth", type=int, default=32)
     ap.add_argument("--frame-bursts", type=int, default=1)

@@ -134,9 +134,35 @@ python -m waveflow.streams.rtl C:/wfb/pool --block pool --n 4 --frame-bursts 2 -
     --policy round_robin --through system_xsi
 ```
 
-**Status: written, not yet run at RTL** (`plans/stream_dispatch.md`, Stage 4): the four gates in
-`tests/streams/test_dispatch.py` (`-m xsi`) -- two and three workers, and four on a backlog under both
-policies -- need Vitis HLS and Vivado 2025.1. Its timing and resources go here once measured.
+The four gates in `tests/streams/test_dispatch.py` (`-m xsi`) -- two and three workers, and four on a
+backlog under both policies, one to three credits -- **pass** at Vitis HLS / Vivado 2025.1 (the default
+part at 100 MHz): csynth clean, no hang, every job once and whole at RTL and in pysim
+(`plans/stream_dispatch.md`, Stage 4).
+
+## Its resources
+
+Records for 2 and 4 workers -- 32, 64 and 128 bits, 1- and 2-burst jobs, 1 and 4 credits a worker, both
+policies -- are filed in the packaged platform `xczu48dr_250mhz_vitis2025_1` (csynth at 4 ns, Vitis HLS
+2025.1; rebuilt by `python -m waveflow.streams.calib dispatch`), so the platform's resource lookup answers
+`EXACT` for them. No DSP, no BRAM. At one credit a worker:
+
+| workers, policy | LUT at 32 / 64 / 128 bits, 1 burst | FF at 32 / 64 / 128 bits, 1 burst |
+|---|---|---|
+| 2, first-free | 449 / 513 / 641 | 156 / 236 / 396 |
+| 2, round-robin | 642 / 706 / 834 | 181 / 261 / 421 |
+| 4, first-free | 882 / 1,010 / 1,266 | 340 / 500 / 820 |
+| 4, round-robin | 1,365 / 1,493 / 1,749 | 482 / 643 / 963 |
+
+Unlike the arbiter's, its LUTs grow with the width, about one a bit a worker: each output has its own
+copy pipeline (the `INLINE` the arbiter's four-input hang taught). Round-robin's rotated search costs
+about 190 LUT more than first-free at 2 workers and 480 at 4. Four credits a worker instead of one add 24
+LUT and 15 FF at 2 workers and 49 LUT and 29 FF at 4 under first-free; under round-robin, no FF and 4
+to 8 LUT fewer. A second burst a job adds 46 LUT and `bitwidth + 5` FF a worker, at every point.
+
+At 16 workers and 128 bits (round-robin, 2-burst jobs, 4 credits) it routes at 6,611 LUT and 14,098 FF
+(a standalone top, its port slices included) and meets 4 ns with WNS +0.224 ns, its worst path one LUT
+inside an output's register slice, 96% routing (Vivado 2025.1). 8 and 16 workers are not filed: at 8 and
+up Vitis names the task plainly (`stream_dispatch_task`), the attribution gap the arbiter's records have.
 
 ## See also
 

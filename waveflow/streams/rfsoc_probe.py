@@ -43,10 +43,10 @@ from waveflow.build.composite_gen import RFSOC4X2_PART, RFSOC4X2_PERIOD_NS, tcl_
 
 @dataclass(frozen=True)
 class Probe:
-    """One top: a stream block as its RTL gate builds it (:func:`waveflow.streams.rtl.make`), the ring
-    stub's composite (``kind="ring_stub"``), or ``SsrFft`` with the ping-pong reorder as
-    :func:`waveflow.dsp.ssr_fft.rtl.generate` builds it (``kind="ssr_fft"``: *length*, *inverse*,
-    *direction*)."""
+    """One top: a stream block as its RTL gate builds it (:func:`waveflow.streams.rtl.make`; *credits*
+    a worker for ``dispatch`` and ``pool``), the ring stub's composite (``kind="ring_stub"``), or
+    ``SsrFft`` with the ping-pong reorder as :func:`waveflow.dsp.ssr_fft.rtl.generate` builds it
+    (``kind="ssr_fft"``: *length*, *inverse*, *direction*)."""
 
     kind: str
     n: int = 3
@@ -56,6 +56,7 @@ class Probe:
     inverse: bool = False
     direction: str = "fixed"
     bitwidth: int = 32
+    credits: int = 1
 
 
 #: The probes: the pair under both policies at 1- and 2-burst frames, the demux both ways as gated
@@ -82,6 +83,15 @@ PROBES: dict[str, Probe] = {
     # The overlap-save filter bank (plans/shared_kernel.md Stage 5): C channels on one SsrFft, the
     # composite as its gates build it (examples/os_filterbank, already at the RFSoC target).
     "os_filterbank": Probe("os_filterbank"),
+    # StreamDispatch (plans/stream_dispatch.md Stages 4 and 6): the dispatcher alone at 2 and 4 workers
+    # under both policies (2-burst jobs, 4 credits a worker), the resource sweep's post-route check at
+    # its largest (16 workers, 128 bits), and the pool -- dispatch -> links -> arbiter, m_sel back as the
+    # credits -- as its smallest and largest gates build it.
+    **{f"dsp{n}_{tag}": Probe("dispatch", n, 2, pol, credits=4)
+       for n in (2, 4) for tag, pol in (("ff", "first_free"), ("rr", "round_robin"))},
+    "dsp16_w128_rr": Probe("dispatch", 16, 2, "round_robin", bitwidth=128, credits=4),
+    "pool2_ff": Probe("pool", 2, 1, "first_free", credits=1),
+    "pool4_rr_c3": Probe("pool", 4, 2, "round_robin", credits=3),
 }
 
 
@@ -107,7 +117,8 @@ def generate(work: Path, probe: Probe) -> str:
         shutil.copytree(ob.HERE / "src", work / "src", dirs_exist_ok=True)   # the hand-written bodies
         return ob.generate(work)[0]
     from waveflow.streams import rtl
-    mod, _gate_top = rtl.make(probe.kind, probe.n, probe.bitwidth, probe.frame_bursts, probe.policy)
+    mod, _gate_top = rtl.make(probe.kind, probe.n, probe.bitwidth, probe.frame_bursts, probe.policy,
+                              credits=probe.credits)
     return rtl.generate_for(work, mod, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
 
 
