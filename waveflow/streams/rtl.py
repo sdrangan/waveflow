@@ -25,7 +25,16 @@ from typing import Any, ClassVar
 import numpy as np
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
-from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top, tcl_path
+from waveflow.build.composite_gen import (
+    DEFAULT_PART,
+    DEFAULT_PERIOD_NS,
+    GEN_DIR,
+    INCLUDE_DIR,
+    composite_top_spec,
+    render_tcl,
+    render_top,
+    tcl_path,
+)
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.clock import Clock
@@ -120,8 +129,12 @@ def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, polic
     raise ValueError(f"unknown stream block {kind!r}")
 
 
-def generate_for(root: Path, mod) -> str:
-    """Everything before csynth at *root* for *mod*: the headers, the bodies, the top and its ``.tcl``."""
+def generate_for(root: Path, mod, *, part: str = DEFAULT_PART,
+                 period_ns: float = DEFAULT_PERIOD_NS) -> str:
+    """Everything before csynth at *root* for *mod*: the headers, the bodies, the top and its ``.tcl``.
+
+    *part* / *period_ns* are the csynth target; the defaults are the gates' (``DEFAULT_PART`` at
+    100 MHz), and only a probe passes others (:mod:`waveflow.streams.rfsoc_probe`)."""
     root = Path(root).resolve()
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
@@ -136,7 +149,8 @@ def generate_for(root: Path, mod) -> str:
     gen = root / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
     (gen / f"{spec.top_name}.cpp").write_text(render_top(spec), encoding="utf-8")
-    tcl_path(root, spec.top_name).write_text(render_tcl(spec.top_name), encoding="utf-8")
+    tcl_path(root, spec.top_name).write_text(render_tcl(spec.top_name, part=part, period_ns=period_ns),
+                                             encoding="utf-8")
     return spec.top_name
 
 

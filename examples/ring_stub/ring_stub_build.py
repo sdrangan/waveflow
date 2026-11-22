@@ -22,6 +22,8 @@ from typing import Any, ClassVar
 from examples.ring_stub.ring_stub import SCHEMA_CLASSES, Inc, Post, RingStub, UInt64, W
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.composite_gen import (
+    DEFAULT_PART,
+    DEFAULT_PERIOD_NS,
     GEN_DIR,
     INCLUDE_DIR,
     composite_top_spec,
@@ -55,13 +57,17 @@ def gen_headers(root: Path = HERE) -> None:
         raise RuntimeError(f"header generation failed: {bad}")
 
 
-def gen_top(cls, root: Path = HERE) -> str:
+def gen_top(cls, root: Path = HERE, *, part: str = DEFAULT_PART,
+            period_ns: float = DEFAULT_PERIOD_NS) -> str:
+    """*cls*'s top and its ``.tcl`` at *root*.  *part* / *period_ns*: the csynth target -- the gates'
+    by default; only a probe passes others (:mod:`waveflow.streams.rfsoc_probe`)."""
     mod = cls(name=cls.cpp_kernel_name, sim=Simulation())
     spec = composite_top_spec(mod, width=W)
     gen = root / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
     (gen / f"{spec.top_name}.cpp").write_text(render_top(spec), encoding="utf-8")
-    tcl_path(root, spec.top_name).write_text(render_tcl(spec.top_name), encoding="utf-8")
+    tcl_path(root, spec.top_name).write_text(render_tcl(spec.top_name, part=part, period_ns=period_ns),
+                                             encoding="utf-8")
     return spec.top_name
 
 
@@ -103,7 +109,6 @@ def build_dag(work_dir=WORK_DIR) -> BuildDag:
 
 if __name__ == "__main__":
     from waveflow.build.cli import PLATFORM_ARGS, platform_config, run_dag_cli
-    from waveflow.build.composite_gen import DEFAULT_PART, DEFAULT_PERIOD_NS
 
     run_dag_cli(lambda a: build_dag(), description=__doc__.splitlines()[0], default_through="compare",
                 root_dir=HERE,
