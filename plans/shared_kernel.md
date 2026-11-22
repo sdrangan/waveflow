@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21; Stage 5 DONE 2026-11-21, RTL included (records at the end). Next: Stage 6.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21; Stage 5 DONE 2026-11-21, RTL included; Stage 6 DONE 2026-11-21, triggers 8 of 8 (records at the end). Stage 7 (the held-out evaluation) is left to the planning session, which runs it from outside the repository so the prompt stays unseen.**
 
 ## Why
 
@@ -461,6 +461,27 @@ done.
 
 Tests: `tests/examples/test_os_filterbank.py` (10 pysim, 6 RTL gates); `WANT_XSI_GATES` 272 -> 278.
 `CLAUDE.md`'s curated count 28 -> 29.
+
+## Stage 6 record (2026-11-21): the skill and the frame
+
+- **The skill** `waveflow/skills/waveflow-shared-kernel/SKILL.md` (copied to `.claude/skills/` and
+  `.agents/skills/` with `waveflow skills install --dir . --force`). It points to the page and the example
+  and does not restate them: a table of which page to read before which step, the reference design
+  (`os_filterbank`, with `ring_stub` for the bare mechanics), the extension rule, and a checklist.
+- **Hand-offs**: `waveflow-architecture` (step 2: one expensive kernel used by several channels, jobs or
+  passes, or fed back -> `waveflow-shared-kernel`; step 6's list), `waveflow-pipeline` (its description and
+  body). Step 2's example of a missing block ("a stream arbiter, an FFT whose direction changes per frame")
+  is gone: both exist now.
+- **The frame** `waveflow/mcp/frames/stream_shared/` (D2): `frame.toml` (choose_when against
+  `stream_pipeline`: does any stage take input from more than one producer, or feed a stage before it?),
+  `frame.md`, `process.md`, one prompt (`01_autocorrelation_bank.md`: FFT, `|X|^2`, inverse FFT per channel
+  on one FFT -- a practice spec, not the held-out problem). References `os_filterbank`, `block_eq`.
+- **Triggers**: `evaluation/skill_tests/shared_kernel/trigger_prompts.md`, four should-load and four
+  should-not, run with every shipped skill installed so `waveflow-pipeline` competes.
+  Run 2026-11-21 (`waveflow blind-test`, Claude Code's default model, Opus 5.5): **8 of 8 right.** Each
+  should-load prompt loaded `waveflow-shared-kernel` at its first tool call; the near misses loaded
+  `waveflow-start` then `waveflow-pipeline` (split a FIR), `waveflow-pipeline` (a copy each), `waveflow-schema`
+  (a schema), and nothing (a NoC arbiter). One run each: a first check, not a rate.
 
 ## Hand-off: continuing on the lab machine (2026-11-21)
 
