@@ -27,6 +27,17 @@ By default `SsrFft` has two ports:
 - **The output is wider than the input**, by `log2 L + 1` bits a sample: read `fft.m_out.bitwidth`
   rather than computing it.
 
+With `direction="runtime"` ([Parameters](parameters.md#the-direction-chosen-per-frame)) there is a
+third port:
+
+| port | direction | endpoint | word |
+|---|---|---|---|
+| `s_dir` | in | `StreamIFSlave` | 8 bits, one word a frame: bit 0 set = inverse |
+
+A frame's direction word must arrive no later than its first sample word: the input register reads
+both together at a frame's first word, and waits until both are there. A direction word sent early
+waits in the port's FIFO.
+
 This is the unit every edge *inside* the FFT carries, so the module needs no adaptor at either end,
 and a neighbour that produces or consumes `RadixWord`s -- a data converter streaming several samples a
 beat on one wide AXI-Stream port, say -- connects to it directly.

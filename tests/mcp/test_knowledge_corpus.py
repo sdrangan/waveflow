@@ -36,6 +36,7 @@ TOC_EXAMPLES = {
     "memcpy",
     "mimo_cg",
     "mm_fir",
+    "os_filterbank",
     "regmap",
     "rf_loopback",
     "rf_shot_loopback",

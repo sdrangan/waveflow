@@ -3,7 +3,7 @@ title: Agent Skills
 parent: AI Tooling
 nav_order: 2.7
 has_children: false
-summary: "Short SKILL.md instruction folders an AI coding agent loads when a task matches: the rules Waveflow's patterns depend on, and which guide page to read before which step. Shipped with Waveflow and installed into a project with `waveflow skills install`, for Claude Code and for agents that read .agents/skills. A skill per step of the design flow (start, schemas, kernels, kernel HLS bodies, devices, pipelines, systems); experimental, and being evaluated."
+summary: "Short SKILL.md instruction folders an AI coding agent loads when a task matches: the rules Waveflow's patterns depend on, and which guide page to read before which step. Shipped with Waveflow and installed into a project with `waveflow skills install`, for Claude Code and for agents that read .agents/skills. A skill per step of the design flow (start, schemas, kernels, kernel HLS bodies, devices, pipelines, shared kernels, systems); experimental, and being evaluated."
 ---
 
 # Agent Skills
@@ -35,6 +35,7 @@ other agents read it, each from its own folder.
 | `waveflow-kernel` | writing a kernel from the interfaces its user describes: each one mapped to a stream port and the adaptor it needs (a queue, a register bank, an interrupt, a memory reader or writer), how commands and data travel when the user does not say, the pysim behaviour (`run_iter`), and a harness test that asserts counts |
 | `waveflow-device` | building a device: a kernel's memory readers and writers (`MemRStream` / `MemWStream`, the writer's echo as "done"), the views a host reaches it through (queues, register bank, interrupts; `build_mm_device`), credit across a bus, BRAM, and what becomes the HLS top and sub-top |
 | `waveflow-pipeline` | building a composite kernel: when to split into stages, the children and links (`add_comp`, `add_if`), each link's depth, `StreamBroadcast` (drain your own copy before waiting on a sibling), a token per job, the last stage answering, and testing each stage then the whole |
+| `waveflow-shared-kernel` | sharing one expensive kernel among several clients, or feeding a kernel's output back to its own input: what to read before each step (the *Sharing a kernel* page, the arbiter, the demux, the FFT's per-frame direction), the reference design `os_filterbank`, and a checklist -- whole frames, a credit that bounds the loop, each client's outputs on their own ports, counts asserted |
 | `waveflow-system` | putting a design together and verifying it: `HwSystem(sim, dut)` and its derived testbench, each module alone in its harness, the build DAG (`add_system_steps` with a prefix per system, `run_dag_cli`, `--through`), the steps that need no toolchain and those that need Vitis / Vivado, a golden per module, error scenarios, and tests that count so a deadlock or a dropped word cannot pass |
 
 `waveflow skills list` prints each skill's description, which is what decides when an assistant loads

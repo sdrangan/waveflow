@@ -32,9 +32,9 @@ TASKS_H = "ssr_fft_tasks.h"
 
 def config_key(geo: Geometry) -> str:
     """Identifies one configuration: ``L64_16_2_18_2`` (L, input format, twiddle format), with
-    ``_inv`` for the inverse transform."""
+    ``_inv`` for the inverse transform and ``_rt`` for the direction chosen per frame."""
     key = f"L{geo.L}_{geo.in_w}_{geo.in_i}_{geo.tw_w}_{geo.tw_i}"
-    return key + "_inv" if geo.inverse else key
+    return key + ("_inv" if geo.inverse else "_rt" if geo.runtime else "")
 
 
 def config_namespace(geo: Geometry) -> str:
@@ -199,6 +199,9 @@ class TaskInstance:
 
 
 REORDERS = ("sob", "pingpong")
+#: A frame's direction, one word a frame: bit 0 set = inverse.
+DIR_W = 8
+DIR_STREAM = f"hls::stream<ap_uint<{DIR_W}> >&"
 
 
 def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob",
@@ -224,10 +227,20 @@ def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob",
     lane_in = [(f"s_in_{j}", stream("lane_in")) for j in range(geo.R)]
     lane_out = [(f"m_out_{j}", stream("lane_out")) for j in range(geo.R)]
     sob = f"hls::stream_of_blocks<ap_uint<{ns}::e_rc::W>[{geo.n_words}]>&"
+    if geo.runtime and lanes:
+        raise ValueError("a runtime-direction SsrFft has the RadixWord boundary only (lanes=False)")
     if lanes:
         out = [TaskInstance("lanes_in", "lanes_in",
                             f"ssr_fft_hls::ssr_fft_lanes_in_task<{ns}::e_lane_in, {ns}::e_in>",
                             (*lane_in, ("m_out", stream("in"))))]
+    elif geo.runtime:
+        # The input register also takes the frame's direction and hands one copy to every stage,
+        # each on its own FIFO (see ssr_fft_dir_in_task).
+        dirs = tuple((f"m_dir_{s}", DIR_STREAM) for s in range(geo.S))
+        out = [TaskInstance("in_reg", "dir_in",
+                            f"ssr_fft_hls::ssr_fft_dir_in_task<{ns}::e_in, {geo.n_words}>",
+                            (("s_in", stream("in")), ("s_dir", DIR_STREAM), ("m_out", stream("in")),
+                             *dirs))]
     else:
         # The boundary RadixWord port goes through a one-word register first: see
         # ssr_fft_pass_task for the timing reason.
@@ -240,8 +253,15 @@ def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob",
                                 (("s_in", stream(prev)), ("m_out", stream(f"tp{k}"))), d=d))
         prev = f"tp{k}"
     for s in range(geo.S):
-        out.append(TaskInstance(f"st{s}", "stage", f"ssr_fft_hls::ssr_fft_stage_task<{ns}::st{s}>",
-                                (("s_in", stream(prev)), ("m_out", stream(f"st{s}"))), s=s))
+        if geo.runtime:
+            out.append(TaskInstance(
+                f"st{s}", "stage",
+                f"ssr_fft_hls::ssr_fft_stage_dir_task<{ns}::st{s}, {geo.n_words}>",
+                (("s_in", stream(prev)), ("s_dir", DIR_STREAM), ("m_out", stream(f"st{s}"))), s=s))
+        else:
+            out.append(TaskInstance(f"st{s}", "stage",
+                                    f"ssr_fft_hls::ssr_fft_stage_task<{ns}::st{s}>",
+                                    (("s_in", stream(prev)), ("m_out", stream(f"st{s}"))), s=s))
         prev = f"st{s}"
         if s < geo.S - 1:
             d = geo.stage_d(s)

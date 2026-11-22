@@ -43,6 +43,10 @@ block_eq                    a composite kernel: one HLS top, three tasks
 Either shape can be synthesized as an HLS top: block_eq is one, and each stage is also a top of its
 own, run alone in its harness ([block_eq](../../examples/block_eq/index.md)).
 
+A composite's children need not form a line. One child can serve several others, and a child's output
+can come back to an earlier child -- a cycle inside the composite. That is how one expensive kernel is
+shared: [Sharing a kernel](shared_kernels.md).
+
 Three kinds of module are not kernels:
 
 - **An adaptor** -- a module with streams on one side and something that is not a stream on the other:

@@ -1,0 +1,33 @@
+# The stream_shared frame: one expensive kernel shared by several clients, or fed back its own output --
+# an arbiter in front of it, a tag beside it, credits on the loop, results routed back to each client.
+# The shape after stream_pipeline (stages in a line); no memory, no host on a bus.
+#
+# A frame is a bundle with no code of its own -- this file, frame.md, process.md, prompts/.  No
+# [template]: a shared kernel does not reduce to "stub one function".
+
+name = "stream_shared"
+synopsis = """One expensive kernel K used by several clients, or whose output comes back to its own \
+input, as a composite FreeRunMod: a StreamArbiter merging the clients' frames (feedback first), a tag \
+beside K saying whose each frame is, StreamDemux returning each result to its client, credits so \
+the stage after K never blocks, filters or other data resident in slots, and SsrFft with its \
+direction chosen per frame when K is an FFT used both ways.  Each client answers its own commands, \
+out of order across clients.  Each stage alone in its harness, then the composite, in pysim and at \
+RTL under XSI; a test shows the loop deadlocking without its credit."""
+
+pattern = "command_response"
+shape = "a composite with an arbiter in front of one shared kernel, a tag beside it, demuxes after it, and often a feedback cycle; streams only, no memory"
+flow = "each stage's harness, then the composite's, on the system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare"
+choose_when = """one unit -- an FFT, an engine, any kernel too large to replicate -- used by several channels, jobs or passes, or a stage whose output must go back through an earlier one (two passes through one FFT, an iteration).  The deciding questions against stream_pipeline: does any stage take input from more than one producer, or feed a stage before it?  If neither, it is stream_pipeline.  Replicating a small kernel per client is simpler and is that frame; data shared by address in memory is freerun_pipeline or bus_system."""
+
+# Primary first: os_filterbank is the shared FFT (an arbiter, the direction per frame, a tag, slots,
+# credits, demuxes); block_eq is the composite, its links and each stage in its own harness.
+reference_examples = ["os_filterbank", "block_eq"]
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_autocorrelation_bank.md"
+synopsis = "Per channel, FFT then |X|^2 then the inverse FFT, on one shared FFT: an arbiter, a feedback pass, credits."

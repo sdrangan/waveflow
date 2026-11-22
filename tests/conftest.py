@@ -251,7 +251,22 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: counts 258.
 #: 258 -> 259 on 2026-11-17 (plans/mem_stream_followups.md, item 1): every mem_copy completion follows
 #: its job's write response, checked on a traced run (tests/build/test_xsi_snapshot_xsi.py).
-WANT_XSI_GATES = 259
+#: 259 + 6 -> 265 on 2026-11-21 (plans/shared_kernel.md, Stage 1): the ring stub at RTL -- K alone, Post
+#: alone, the composite with its cycle on two scenarios, and the loop's exact timing on both
+#: (tests/examples/test_ring_stub.py).
+#: 265 + 4 -> 269 on 2026-11-21 (plans/shared_kernel.md, Stage 2): StreamDemux alone (by s_sel, by a
+#: header field) and StreamArbiter -> StreamDemux under both policies (tests/streams/test_arbiter_demux.py).
+#: 269 + 3 -> 272 on 2026-11-21 (plans/shared_kernel.md, Stage 3): SsrFft(direction="runtime") --
+#: bits per frame, interval, timing at 250 MHz (tests/dsp/ssr_fft/test_xsi.py, pingpong-runtime).
+#: 272 + 6 -> 278 on 2026-11-21 (plans/shared_kernel.md, Stage 5): the overlap-save filter bank on one
+#: shared SsrFft -- a front alone, post alone, the bank on two scenarios, and the bank's timing on both
+#: (tests/examples/test_os_filterbank.py).
+#: 278 + 1 -> 279 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes): StreamFramer in its harness
+#: (tests/streams/test_framer.py).  279 + 1 -> 280: the ring stub's `late` scenario, its first job
+#: delayed -- the XSI AxisMaster's start_gap_cycles (tests/examples/test_ring_stub.py).  280 + 1 -> 281:
+#: the arbiter-demux pair at 4 inputs on the long workload, the case the arbiter hung on before its
+#: copy_frame was INLINE (tests/streams/test_arbiter_demux.py; plans/shared_kernel_rfsoc_timing.md).
+WANT_XSI_GATES = 281
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

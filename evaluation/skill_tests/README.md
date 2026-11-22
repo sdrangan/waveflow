@@ -9,6 +9,17 @@ Waveflow follow its patterns?  Each test is a **blind run** (`waveflow blind-tes
 | **MCP** | the spec and the Waveflow MCP server -- what a student has today |
 | **MCP + skill** | the same, plus the skill folders in the trial folder's `.claude/skills/` |
 
+## Held-out problems are elsewhere
+
+The tests here measure whether an agent follows a pattern; their specs and answers can live in the
+repository, because a blind run works in an empty folder and a run whose transcript reads this folder is
+discarded. A **held-out design problem** is different: every agent that develops Waveflow works in this
+repository and would read it. So held-out problems -- their specifications, rubrics, transcripts and
+scores -- are kept in a separate, private evaluation repository (`sdrangan/waveflow-eval`), and only their outline and results are
+described here (`docs/evaluation/agent_skills/shared_kernel.md`). Do not copy a held-out problem into
+this repository. Researchers who want the material can ask the maintainer for read access (open an
+issue on the Waveflow repository).
+
 ## Code only, reviewed by eye
 
 The runs write code but do **not** synthesize or simulate it in Vitis.  C simulation would say whether

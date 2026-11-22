@@ -49,6 +49,20 @@ What the six show together:
   guarded by a test). A point that every run misses belongs in the skill (pipelines). After the fixes,
   every skill arm is at or within a point of the ceiling.
 
+**A different kind of test: a held-out design.** [Shared kernels](shared_kernel.md) asks a larger question
+than one skill's -- can an agent design and build a whole accelerator whose hard part is sharing one kernel,
+and how long does it take -- on a problem kept outside the repository, before and after the framework
+work it needed. Before, agents with and without Waveflow had the architecture on paper; after, every chat
+run used the new blocks correctly, and one build run reached passing pysim in 14 minutes and found four
+framework gaps.
+
+**Held-out problems are not in this repository.** Their specifications, rubrics, run transcripts and
+scores are kept in a separate, private evaluation repository (`sdrangan/waveflow-eval`), so that no agent working in this
+repository -- an agent under test, or one developing Waveflow -- can read them, and the problems stay
+unseen for later runs. This repository holds only the method and the results in outline. Researchers
+who want the full material for a held-out study can ask the maintainer for read access (open an
+issue on the Waveflow repository). A problem is released publicly once it is retired as a test.
+
 ## The question
 
 Waveflow's patterns -- every message is a schema, nothing is packed by hand, a kernel body is a
@@ -79,6 +93,7 @@ Each skill has its own page: what it contains, its test, and its results.
 | [`waveflow-device`](device.md) | adaptors and devices: memory readers and writers, the host's queues, register bank and interrupts, credit across a bus, BRAM, the HLS top and sub-top | one run per arm on Opus and Sonnet; skill arm 50 of 50 on both after two fixes; Sonnet without it 44 |
 | [`waveflow-pipeline`](pipeline.md) | composite kernels: stages, internal streams and their depths, broadcast (drain your own copy), a token per job, the last stage answers | one run per arm on Opus and Sonnet; MCP 44, skill 46 of 46 after one fix; turns -55% |
 | [`waveflow-system`](system.md) | `HwSystem(sim, dut)`, the harness and the cut, the build DAG, tests that count so a deadlock cannot pass | one run per arm on Opus and Sonnet; all four 48 of 48, every one catching both hidden faults; redundant for this task |
+| [`waveflow-architecture`, `waveflow-shared-kernel`](shared_kernel.md) | the map of a design; one kernel shared by several clients, a cycle in a composite | a held-out design, before and after the shared-kernel work: four chat runs (Opus, Sonnet) all right afterwards; a build run from an empty folder to passing pysim in 14 minutes, which found four framework gaps |
 
 The skills are grouped by step in the design flow, about six in all rather than one per guide page:
 sub-tasks that happen together share a skill, and fewer descriptions are easier for an agent to tell

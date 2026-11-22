@@ -218,6 +218,12 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
             si = StreamDriver(name=f"{port}_driver", sim=sim, bitwidth=ep.bitwidth,
                               in_bundle=f"vectors/{port}", has_tlast=tlast,
                               accept_bundle=f"vectors/{port}{ACCEPT_SUFFIX}")
+            # The workload's arrival times: each burst's gap_before, if any is set -- the first as the
+            # driver's start gap, the rest as its per-burst gaps (both backends play them).
+            gaps = [int(getattr(b, "gap_before", 0) or 0) for b in stim.get(port, [])]
+            if any(gaps):
+                si.start_gap_cycles = gaps[0]
+                si.burst_gaps = gaps[1:]
             pair = (si.stream_ep, ep)
         else:
             si = StreamSink(name=f"{port}_sink", sim=sim, bitwidth=ep.bitwidth,

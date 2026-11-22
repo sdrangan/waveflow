@@ -868,6 +868,45 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         return words
 
 
+def wait_any(*eps: QueuedTransferIFSlave) -> ProcessGen[int]:
+    """Block until one of *eps* holds a delivered burst; return the index of the first that does, in
+    the order given.  Takes nothing: the caller reads what it chooses, typically with ``get_nb`` in its
+    priority order.
+
+    The pysim form of a polling HLS body -- one that tests several inputs with ``empty()`` each firing
+    and acts on the first it can.  The HLS task spins; the model cannot (a harness runs until no event
+    is left), so it waits here instead, and one ``run_iter`` reads in the order the HLS checks::
+
+        yield from wait_any(self.s_fb, self.s_in)
+        tag = yield from self.s_fb.get_schema_nb(Tag)      # feedback first
+        if tag is None:
+            job = yield from self.s_in.get_schema(Job)
+
+    **Wait only on inputs the firing can act on.**  It returns at once while any of *eps* holds a burst,
+    so an input the body would then decline to read (a new job with no credit) makes a zero-time loop.
+    Leave such an input out of the call until the body can take it.
+
+    A burst whose transfer has only begun does not count: an HLS ``empty()`` turns false on a word, and
+    a pysim burst is read whole once delivered.  Each endpoint's arrival slot (``begin_read(pending_ok=
+    True)``'s) is borrowed for the wait, so no other reader may be waiting on one of *eps* meanwhile."""
+    if not eps:
+        raise ValueError("wait_any needs at least one endpoint")
+    while True:
+        for i, ep in enumerate(eps):
+            if ep.data_buffer.items:
+                return i
+        env = eps[0].env
+        for ep in eps:
+            if ep._arrival is not None:
+                raise RuntimeError(f"wait_any: another reader is already waiting on '{ep.name}'")
+            ep._arrival = env.event()
+        try:
+            yield env.any_of([ep._arrival for ep in eps])
+        finally:
+            for ep in eps:
+                ep._arrival = None
+
+
 @dataclass
 class QueuedTransferIFMaster(InterfaceEndpoint):
     """
@@ -1006,6 +1045,12 @@ class QueuedTransferIF(Interface):
         the remaining delay is never negative.
         """
         cycles = self.latency_init + words.shape[0]
+        # The largest burst this link has carried: a burst above the link's depth is admitted whole
+        # once the queue is empty (_admit_blocking), where RTL would stall its writer word by word --
+        # harmless in a pipeline, a hidden deadlock on a cycle (waveflow.hw.loop_check).
+        n = int(words.shape[0])
+        if n > getattr(self, "max_burst", 0):
+            self.max_burst = n
 
         bus = ep.bus
         hold = _bus_take(bus)                   # a free bus: taken now, no request event

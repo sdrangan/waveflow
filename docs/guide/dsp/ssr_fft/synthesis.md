@@ -50,6 +50,26 @@ A "cleaner" expression -- a full-precision complex product and one cast -- compu
 (measured wrong in 18 of 24 real parts). The stage's word counter `m` addresses its twiddle ROM at
 `m·q` for output lane `q`; the ROM holds only the entries this stage reads.
 
+### The direction per frame
+
+With `direction="runtime"` each stage is `ssr_fft_stage_dir_task`. It reads the frame's direction
+from its own FIFO at the frame's first word, and keeps the forward ROMs. For an inverse frame it makes
+the two moves that turn the forward arithmetic into the inverse's, exactly
+([Parameters](parameters.md#the-direction-chosen-per-frame)):
+
+```cpp
+const std::complex<out_t> v = (inv && (q & 1)) ? n[R - q] : n[q];   // outputs 1 and 3 swap
+if (C::ROTATE) {
+    const tw_t ti = C::tw_im(m * q);
+    std::complex<tw_t> w(C::tw_re(m * q), inv ? tw_t(-ti) : ti);   // the conjugate twiddle
+    y[q] = ssr_cmul<out_t, tw_t, out_t>(v, w);
+}
+```
+
+The input register (`ssr_fft_dir_in_task`) reads a frame's direction word together with its first
+sample word, then writes one copy to each stage's FIFO before passing the word on. The fixed-direction
+bodies are untouched, so a fixed build synthesizes exactly as before.
+
 ## The commutator
 
 Two triangles of delay lines and a lane switch ([what a commutator is](architecture.md#what-a-commutator-is)),
@@ -119,3 +139,16 @@ At `L = 64`: every loop II = 1; 24 DSPs, the vendor's `12·(S−1)` -- one twidd
 stage boundary, three DSPs per complex multiply; worst slack +0.06 ns at 250 MHz on the RFSoC 4x2.
 At `L = 4096` the worst slack is 0.00 ns -- met, with no margin. Resources per length, against the
 vendor core, are in the [example's resource page](../../../examples/ssr_fft/resource.md).
+
+The direction chosen per frame, against the fixed builds at `L = 64` with the ping-pong reorder
+(csynth estimates, xczu48dr at 250 MHz, Vitis 2025.1):
+
+| build | DSP | BRAM | FF | LUT | worst slack |
+|---|---|---|---|---|---|
+| forward (`inverse=False`) | 24 | 6 | 8306 | 10402 | +0.06 ns |
+| inverse (`inverse=True`) | 24 | 6 | 8303 | 10402 | +0.06 ns |
+| either, per frame (`direction="runtime"`) | 24 | 6 | 9168 (+10%) | 11537 (+11%) | +0.06 ns |
+
+No DSP and no memory: the swap and the twiddle's sign are multiplexers in front of the same
+multipliers, and the ROMs are the forward ones. One runtime build costs about 55% of a forward and an
+inverse build side by side.

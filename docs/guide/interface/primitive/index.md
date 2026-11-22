@@ -184,6 +184,12 @@ qualifies, and `_nb` says *when*, which is a property of the call rather than of
 | `get_nb` | a consumer that **must not** wait — one polling a progress channel, where empty means *"no news"*, not *"stop"* | try again later; nothing was lost |
 | `offer` | a producer that **physically cannot** wait — a data converter presents a beat whether or not the fabric is ready | the words that did not fit are **gone**, and `StreamIF.dropped` counts them |
 
+A consumer polling **several** inputs -- an HLS body that tests each with `empty()` and acts on the first it
+can -- waits in pysim with `wait_any(*slaves)` (`waveflow.hw.interface`, also `FreeRunMod.wait_any`), then
+reads with `get_nb` in its own priority order. It blocks until one of them holds a delivered burst and
+takes nothing. Wait only on the inputs the firing can act on: it returns at once while any of them holds a
+burst. [`StreamArbiter`](../../streams/arbiter.md) is the worked case.
+
 `_nb` says *the caller chose not to wait*, so a short answer is that caller's business to retry.
 `offer` says *the producer had no choice*, so there is no retry and the loss is a fact about the run
 rather than a return value. Filing both under one suffix would hide that.

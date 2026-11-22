@@ -1,6 +1,6 @@
 ---
 name: waveflow-pipeline
-description: Build a Waveflow composite kernel -- a pipeline of child kernels that run concurrently, wired by internal streams -- deciding when to split a kernel into stages, the children and links (add_comp, add_if, boundary), each link's depth and width, StreamBroadcast when two stages need one stream (drain your own copy before waiting on a sibling), a token per job through every stage, the command travelling with the data so the last stage answers, and testing each stage alone then the whole. Use whenever a Waveflow design has stages, a composite FreeRunMod, internal streams between kernels, or a pipeline that hangs.
+description: Build a Waveflow composite kernel -- a pipeline of child kernels that run concurrently, wired by internal streams -- deciding when to split a kernel into stages, the children and links (add_comp, add_if, boundary), each link's depth and width, StreamBroadcast when two stages need one stream (drain your own copy before waiting on a sibling), a token per job through every stage, the command travelling with the data so the last stage answers, and testing each stage alone then the whole. Use whenever a Waveflow design has stages, a composite FreeRunMod, internal streams between kernels, or a pipeline that hangs. For one kernel shared by several clients, or a stage fed back its own output, use waveflow-shared-kernel.
 ---
 
 # Waveflow pipelines: composite kernels
@@ -9,8 +9,9 @@ A **composite kernel** is a `FreeRunMod` with child kernels (`add_comp`) wired b
 and no body of its own; its children run concurrently, a task each, so job *j+1* is in one stage while
 job *j* is in the next (`systems/kernels.md`). Every stage is a kernel: a leaf is the `waveflow-kernel`
 skill (its HLS body `waveflow-kernel-hls`). A composite whose children include a memory reader or
-writer, or that sits behind bus views, is a **device**: that part is `waveflow-device`. This skill is the
-pipeline itself -- its links and the rules that keep it from hanging.
+writer, or that sits behind bus views, is a **device**: that part is `waveflow-device`. Several clients
+into one stage, or a stage fed back its own output (a cycle): `waveflow-shared-kernel`. This skill is
+the pipeline itself -- its links and the rules that keep it from hanging.
 
 ## The rules (all of them, every time)
 

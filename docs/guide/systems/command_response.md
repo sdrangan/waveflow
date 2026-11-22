@@ -239,6 +239,11 @@ Three things the pipeline form adds:
   must know there is room before it writes, or a full queue stalls the bus
   ([MM-streams with credit](../interface/axi_mm/credit_streams.md)).
 
+When one kernel serves several clients, or a job goes through the same kernel twice, the stage after it
+answers each client: the job's `tx_id` travels in a tag beside the kernel, and each client's `Resp` and
+`Status` echo it, out of order across clients if they finish out of order
+([Sharing a kernel](shared_kernels.md)).
+
 ## The examples, and where they stand
 
 The free-running polynomial follows this page exactly. The others predate it: they answer with a single
