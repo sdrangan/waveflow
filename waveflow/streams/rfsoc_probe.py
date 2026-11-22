@@ -53,6 +53,7 @@ class Probe:
     length: int = 0
     inverse: bool = False
     direction: str = "fixed"
+    bitwidth: int = 32
 
 
 #: The probes: the pair under both policies at 1- and 2-burst frames, the demux both ways as gated
@@ -70,6 +71,12 @@ PROBES: dict[str, Probe] = {
     **{f"fft{L}_{tag}": Probe("ssr_fft", length=L, inverse=inv, direction=d)
        for L in (64, 1024)
        for tag, inv, d in (("fwd", False, "fixed"), ("inv", True, "fixed"), ("rt", False, "runtime"))},
+    # The resource sweep's post-route spot checks (waveflow.streams.calib): each block alone, its
+    # largest point and a middle one, 2-burst frames.
+    "arb16_w128_rr": Probe("arbiter", 16, 2, "round_robin", bitwidth=128),
+    "arb4_w64_rr": Probe("arbiter", 4, 2, "round_robin", bitwidth=64),
+    "dmx16_w128_sel": Probe("demux", 16, 2, bitwidth=128),
+    "dmx4_w64_sel": Probe("demux", 4, 2, bitwidth=64),
 }
 
 
@@ -89,7 +96,7 @@ def generate(work: Path, probe: Probe) -> str:
         return fft_rtl.generate(work, probe.length, reorder="pingpong", inverse=probe.inverse,
                                 direction=probe.direction, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
     from waveflow.streams import rtl
-    mod, _gate_top = rtl.make(probe.kind, probe.n, 32, probe.frame_bursts, probe.policy)
+    mod, _gate_top = rtl.make(probe.kind, probe.n, probe.bitwidth, probe.frame_bursts, probe.policy)
     return rtl.generate_for(work, mod, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS)
 
 

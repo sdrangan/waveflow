@@ -3,8 +3,11 @@
 **Status: DONE 2026-11-21, on the lab machine, Vitis HLS / Vivado 2025.1.** It
 answers the item `plans/shared_kernel.md` leaves open in its Stage 2 record: "the 7.82 ns case is open ...
 the real target (250 MHz, xczu48dr) has not been tried". That plan is not edited here (another agent owns
-it); its Stage 2 record should link this page when it is next touched. Two parts: the stream blocks and
-the ring stub (below), then `SsrFft` with the direction chosen per frame against its fixed builds.
+it); its Stage 2 record should link this page when it is next touched. Three parts: the stream blocks and
+the ring stub (below); `SsrFft` with the direction chosen per frame against its fixed builds; and
+(2026-11-22) the stream blocks' resource records and the arbiter's cost per frame. That last part found an
+RTL hang in the arbiter (from 3 inputs alone, from 4 in the pair) and fixed its body. The first part's 3-input pair builds the same RTL
+with the fixed body (re-probed), so its numbers stand.
 
 ## The question
 
@@ -158,7 +161,9 @@ What the post-route numbers say about the csynth ones (Vivado / Vitis HLS 2025.1
 
 ## No rewrite
 
-The pair meets 4 ns, so nothing was rewritten. The bodies' "keep this loop's shape" comments stand, and
+The pair meets 4 ns, so nothing was rewritten for timing. (A later part, *Sharing against replicating*,
+adds `#pragma HLS INLINE` to the arbiter's `copy_frame` to fix an RTL hang; the loop keeps its shape.) The
+bodies' "keep this loop's shape" comments stand, and
 Stage 2's two faster loop rewrites, which hung at RTL, were not retried. On this part, the pair's 100 MHz
 estimate (7.82 ns over a 7.3 ns budget) does not carry over. The Stage 2 record's "open" item can close
 with this page: the blocks meet the RF clock on the RF part.
@@ -181,8 +186,8 @@ arbiter, the two in this machine's gate builds:
   blocks the unchanged schedule makes the same cycle counts likely; for the ring stub the changed mux makes
   different ones likely. Neither is measured. Moving a gate to the RFSoC means re-recording its pinned
   counts. That is a separate decision; this probe changes no gate.
-- Only what the gates build: 32-bit words, 3 clients. A wider word or a 16-input arbiter (`ready_bits`
-  and `SEARCH` grow with `n`) was not tried.
+- Only what the gates build: 32-bit words, 3 clients. Wider words and 16 ports are in the last part,
+  *Sharing against replicating*.
 - Out of context: no I/O timing, and no placement against neighbours. In a full RF design the ports join
   other logic, and the boundary paths above change.
 - The ring stub's K is the stub `Inc`, not `SsrFft`. `SsrFft` on this part, the direction per frame
@@ -296,3 +301,263 @@ What the post-route numbers add (Vivado / Vitis HLS 2025.1):
 - The extra latency cycle at L = 64 is located to two modules' depths but not traced to the one cycle the
   XSI run sees.
 - Out of context, as for the stream blocks: no I/O timing, no neighbours.
+
+## Sharing against replicating: the stream blocks' records and the arbiter's cost per frame (Vitis HLS / Vivado 2025.1)
+
+Asked by the planning session (2026-11-22): the resource and timing figures a design needs to weigh sharing
+a kernel (an arbiter, a demux, their FIFOs, a credit) against replicating it. There are three parts: csynth
+records filed in the platform library, post-route spot checks, and the arbiter's idle cycles between
+frames at RTL against pysim's.
+
+**The answer.**
+
+- **48 configurations are filed** in the packaged `xczu48dr_250mhz_vitis2025_1` (csynth, Vitis HLS 2025.1,
+  xczu48dr at 4 ns). They cover `StreamArbiter` and `StreamDemux` at 2 and 4 ports, 32, 64 and 128 bits,
+  1- and 2-burst frames, and both policies or routes. `LookupResourceModel` answers `EXACT` for each one.
+- **8 and 16 ports are not filed.** The filing cannot attribute them: Vitis names their RTL differently
+  (gap 1 below). Following the brief, the sweep stopped there instead of hand-writing records. No resource
+  model is fitted, because the fit cannot see the policy or the route (gap 2).
+- **16 inputs at 128 bits still meet 4 ns.** The round-robin arbiter routes with +0.342 ns of WNS, and the
+  16-output demux with +0.874 ns (Vivado 2025.1).
+- **pysim does not reproduce the arbiter's cost per frame.** At RTL, consecutive backlogged frames are
+  3 to 8 cycles apart, depending on `n_in` (default part at 100 MHz, Vitis HLS / xsim 2025.1). In pysim
+  they are 1 cycle apart. The model would need a delay of 2 to 7 cycles per firing. It is not changed.
+- **The arbiter hung at RTL, and is fixed.** With three or more inputs it stopped once input 0 ran dry.
+  Stage 2's gates (a 3-input pair) did not catch it. `#pragma HLS INLINE` on `copy_frame` fixes it. That
+  costs +37% to +45% routed LUT and +24% to +85% routed FF (Vivado 2025.1) where it applies. It leaves the
+  first section's 3-input pair unchanged, digit for digit (re-probed).
+
+### How
+
+`waveflow/streams/calib.py` is the sweep. It is a `waveflow.build.sweep` grid (`SweepRunner`, `ParamGrid`,
+`sweep_cli`), the same machinery the other calibrations use. Each point runs three steps:
+
+1. `codegen`: the block alone as its own `ap_ctrl_none` top, with every port an AXIS port. It targets the
+   platform's part and clock (`tcl_target`: xczu48dr at 4 ns).
+2. `csynth`.
+3. `InspectSynthStep` with `require_ii1=True`, which files one record under the block's module key.
+
+The records go to the untracked work tier. `Platform.resolve` treats the packaged platform as a read-only
+fallback, so a build writes under `<platforms_root>/<name>`. `waveflow_calib publish` then promotes them.
+Its dry run listed 144 new files, 48 keys times (`module.json`, `resource/`, `integration/`
+`records.jsonl`), with `platform.json` unchanged. Nothing outside the 48 `stream_arbiter-*` /
+`stream_demux-*` keys was touched.
+
+The module key is the elaborated structure, so `policy` and `route` get keys of their own even though
+neither is an `HwParam`. Their `module.json` lists only `n_in` / `n_out`, `bitwidth`, `frame_bursts`
+(and `sel_lsb` / `sel_bits`). `tests/streams/test_rfsoc_probe.py` checks that every swept configuration
+up to 4 ports is `EXACT`, on 24 distinct keys a block, and that 8 and 16 stay `UNCALIBRATED`.
+
+```bash
+python -m waveflow.streams.calib arbiter        # 48 points, ~16 s each (Vitis HLS 2025.1)
+python -m waveflow.streams.calib demux
+waveflow_calib publish work/stream_calib/calib/work/xczu48dr_250mhz_vitis2025_1 \
+                       waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1          # then --apply
+python -m waveflow.streams.rfsoc_probe work/rfsoc_probe --only arb16_w128_rr arb4_w64_rr \
+                       dmx16_w128_sel dmx4_w64_sel --steps csynth impl                # spot checks
+python -m waveflow.streams.arbiter_timing        # the gaps (XSI: VIV set to the Vivado install)
+```
+
+The probe gained four tops (`rtl.make` gained the arbiter alone, `kind="arbiter"`), all with 2-burst frames.
+`waveflow/streams/arbiter_timing.py` measures the gaps.
+
+### The records (csynth, Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns)
+
+Every loop is II = 1, and there is no DSP or BRAM anywhere. The arbiter's LUT count is the same at every
+width:
+
+| arbiter | LUT, 1-burst, Vitis 2025.1 | LUT, 2-burst, Vitis 2025.1 | FF, 1-burst, 32 / 64 / 128 bits, Vitis 2025.1 | FF, 2-burst, 32 / 64 / 128 bits, Vitis 2025.1 |
+|---|---|---|---|---|
+| 2 inputs, priority | 251 | 343 | 53 / 93 / 173 | 127 / 231 / 439 |
+| 2 inputs, round-robin | 357 | 449 | 64 / 104 / 184 | 138 / 242 / 450 |
+| 4 inputs, priority | 458 | 642 | 60 / 100 / 180 | 208 / 376 / 712 |
+| 4 inputs, round-robin | 677 | 861 | 100 / 140 / 220 | 248 / 416 / 752 |
+
+| demux | LUT, 1-burst, 32 / 64 / 128 bits, Vitis 2025.1 | LUT, 2-burst, Vitis 2025.1 | FF, 1-burst, Vitis 2025.1 | FF, 2-burst, Vitis 2025.1 |
+|---|---|---|---|---|
+| 2 outputs, by `s_sel` | 447 / 479 / 543 | 467 / 499 / 563 | 213 / 397 / 765 | 215 / 399 / 767 |
+| 2 outputs, by header field | 397 / 397 / 397 | 417 / 417 / 417 | 219 / 403 / 771 | 221 / 405 / 773 |
+| 4 outputs, by `s_sel` | 520 / 552 / 616 | 540 / 572 / 636 | 293 / 557 / 1,085 | 295 / 559 / 1,087 |
+| 4 outputs, by header field | 470 / 470 / 470 | 490 / 490 / 490 | 303 / 567 / 1,095 | 305 / 569 / 1,097 |
+
+Reading the tables (Vitis HLS 2025.1):
+
+- **Round-robin costs LUTs, and little else.** At 2 inputs it adds 106 LUT and 11 FF; at 4 inputs, 219 LUT
+  and 40 FF. It is the `next_k` search.
+- **A second burst adds about 46 LUT an input to the arbiter, and 20 LUT to the demux.** The arbiter's FF
+  grow about 4x faster with width at 2 bursts than at 1: each input's `COPY` pipeline is a stage deeper.
+- **The arbiter's estimate charges each input's `COPY` pipeline a fixed LUT count at any width,** for
+  example 73 LUT at 64 bits. Its FF do scale with width. The routed spot checks below show what the
+  fabric actually needs.
+- **The demux by header field has the fewest LUT, and they do not grow with width.** Routing by `s_sel`
+  costs 50 LUT more at 32 bits and 146 more at 128 bits.
+- **csynth does not count the AXIS register slices** that a standalone top gets on each port. In the
+  4 x 64 arbiter, its "Instance" FF (284 of 416) are the four `COPY` pipelines alone; only the muxes that
+  feed the slices appear. So the records are the block's own logic, which is what a composite pays, since
+  its internal ports are FIFOs. They are not the standalone top's routed size. Two `InspectSynthStep`
+  details: a record is the attributed task row, from `csynth.rpt`'s module table, and it reads up to
+  8 LUTs above `csynth.xml` for the same run (861 against 853 at 4 x 64 round-robin).
+
+### Post-route spot checks (Vivado 2025.1, out of context, xczu48dr-ffvg1517-2-e at 4 ns)
+
+All four have 2-burst frames. The arbiters are the fixed body.
+
+| top | est., Vitis 2025.1 | slowest state, Vitis 2025.1 | csynth FF / LUT, Vitis 2025.1 | routed LUT / FF, Vivado 2025.1 | CP routed, Vivado 2025.1 | WNS / WHS, Vivado 2025.1 | worst routed path, Vivado 2025.1 |
+|---|---|---|---|---|---|---|---|
+| arbiter, 16 x 128, round-robin | 2.487 ns | S3: the search's `next_k + j` add 0.789 -> compare 0.548 -> two selects, 0.384 + 0.384 | 5,363 / 3,913 | 5,319 / 9,252 | 3.658 ns | **+0.342** / +0.042 ns | `s_in_15` register slice state -> its data D; 1 LUT, 95% route |
+| arbiter, 4 x 64, round-robin | 2.633 ns | S2: the `win` selects 0.414 + 3 x 0.384 -> sparsemux 0.476 -> `m_sel` write | 416 / 853 | 794 / 1,120 | 3.145 ns | +0.855 / +0.044 ns | `s_in_1` register slice state -> its data D; 1 LUT, 93% route |
+| demux, 16 x 128, by `s_sel` | 2.829 ns | S1: `s_sel` empty test -> `idx >= N` compare 1.548 -> select `k` 0.414 | 3,038 / 1,174 | 2,835 / 7,436 | 3.126 ns | +0.874 / +0.030 ns | from `m_out_3`'s register slice; 5 LUTs, 79% route |
+| demux, 4 x 64, by `s_sel` | 2.046 ns | S1: the same, compare 1.088 | 559 / 570 | 596 / 1,341 | 2.865 ns | +1.135 / +0.042 ns | the demux FSM -> ...; 4 LUTs, 82% route |
+
+Every top met timing, with no failing endpoint for setup or hold. Each run took 6-8 minutes.
+
+- **Sixteen inputs meet 4 ns with room to spare.** The 16-input arbiter's worst path is a 1-LUT path in
+  an input's register slice, almost all routing. Its csynth chain, the round-robin search, is 2.487 ns, and
+  ranks below the 4-input arbiter's 2.633 ns. The 16-input task has 13 FSM states against the 4-input
+  task's 5, so its search is spread over more states. Its slowest state, S3, holds the search's add,
+  compare and selects; the 4-input task's S2 runs the search into the `m_sel` write (Vitis HLS 2025.1).
+- **Routed FF are about twice csynth's for a standalone top.** The difference is the AXIS register slices
+  csynth does not count (above): 9,252 routed against 5,363 at 16 x 128, and 7,436 against 3,038 for the
+  demux.
+- **The INLINE fix's cost, routed** (old body -> fixed, Vivado 2025.1). At 16 x 128 round-robin: LUT
+  3,661 -> 5,319 (+45%), FF 5,007 -> 9,252 (+85%), WNS +0.378 -> +0.342 ns. At 4 x 64 round-robin: LUT
+  580 -> 794 (+37%), FF 903 -> 1,120 (+24%), WNS +0.888 -> +0.855 ns. In csynth, the 16-input build goes
+  from 498 FF / 1,589 LUT to 5,363 / 3,913: one `copy_frame` module (135 FF, 73 LUT) becomes sixteen
+  `COPY` pipelines (302 FF, 128 LUT each, depth 3).
+
+**Sharing against replicating, from these numbers** (Vivado 2025.1, routed, standalone tops, so an upper
+bound). Sharing among 4 clients at 64 bits costs the arbiter and the demux, 794 + 596 = 1,390 LUT and
+1,120 + 1,341 = 2,461 FF, with no DSP or BRAM, plus the link FIFOs and the credit. Replicating means three
+more copies of the kernel. For `SsrFft` at L = 64 (forward, routed, the section above) that is 3 x 6,204 LUT,
+3 x 7,943 FF and 3 x 24 DSP. At 16 clients and 128 bits the two blocks route at 8,154 LUT and 16,688 FF, about
+1.3 L = 64 FFTs' LUT and 2.1 of their FF, against 15 more FFTs. Sharing wins by a wide margin whenever the
+kernel's interval can serve every client. The arbiter's cost per frame, next, is what eats into that
+interval.
+
+### The arbiter's cost per frame: RTL against pysim
+
+The setup: the arbiter alone, with every input pre-loaded with `frames_of(k, 1, "long")` (12 frames of
+8 words each) and `m_out` and `m_sel` always ready. The RTL runs on the default part at 100 MHz, as in its
+gates, through `system_xsi` (Vitis HLS 2025.1 csynth, Vivado 2025.1 xsim). The pysim run is the model alone,
+with deep links. A gap is the number of idle cycles between one frame's last word and the next frame's first,
+read from the `n_in`-th frame on. Every gap in a run was the same value, and no frame had an idle cycle
+inside it.
+
+| `n_in` | priority, RTL, Vitis / xsim 2025.1 | round-robin, RTL, Vitis / xsim 2025.1 | pysim, both policies | cycles per 8-word frame, RTL |
+|---|---|---|---|---|
+| 2 | 3 | 3 | 1 | 11 / 11 |
+| 4 | 3 | 4 | 1 | 11 / 12 |
+| 8 | 7 | 8 | 1 | 15 / 16 |
+| 16 | 8 | 7 | 1 | 16 / 15 |
+
+The order was right in every run. Priority takes input 0's 12 frames back to back, then input 1's, and so
+on. Round-robin cycles 0, 1, ..., n-1.
+
+**Where it comes from** (the 100 MHz schedules, Vitis HLS 2025.1):
+
+- **At 2 and 4 inputs:** a firing tests every input's `empty()` and searches, writes `m_sel`, and only
+  then enters the chosen input's `COPY` pipeline. That pipeline has depth 1, so a frame costs its words
+  plus 3 or 4 cycles.
+- **At 8 and 16 inputs:** Vitis HLS 2025.1 stops inlining `streamutils::write_boundary_word`, which
+  `streamutils_hls.h` declares `inline` but gives no pragma. It becomes a module of its own,
+  `write_boundary_word_axis_..._s` (latency 1), called for `m_sel` and inside every `COPY` loop, and the
+  `COPY` depth goes from 1 to 3. The same build loses its template-mangled name (gap 1).
+- **At 16 round-robin:** 7 is one less than at 8. It was measured, not traced.
+
+At 8-word frames the arbiter therefore runs at 73% of its port rate with 2 inputs, and at 50-53% with 8 or
+16. A kernel shared through it should be fed frames long enough that 3-8 cycles are small next to them.
+
+**What pysim would need. It is not changed, as asked.** pysim's `run_iter` waits on `wait_any`, writes
+`m_sel`, then copies, and has no decision cost of its own. The 1 cycle is the link's. To reproduce the RTL,
+a firing needs `gap - 1` more cycles: 2 / 2 / 6 / 7 for priority and 2 / 3 / 7 / 6 for round-robin, at
+n = 2 / 4 / 8 / 16. The repository already has the mechanism. `FreeRunMod.add_timing_model` plus
+`yield self.timeout(self.timed_delay({"n_in": n, "policy": ...}))` in `run_iter`, between the win and the
+`m_sel` write, are calibrated from RTL runs by `CollectTimingStep` (`plans/timing_model.md`). Two caveats
+for that calibration:
+
+- **These are 100 MHz numbers.** At 4 ns the 4-input `COPY` pipeline is depth 2, not 1 (the spot check
+  above). The RFSoC's gaps are likely a cycle larger at small `n`, so the calibration belongs to the
+  platform's clock.
+- **It is not yet measured at 2-burst frames, or at other widths.** With 2 bursts, `COPY` runs straight
+  across the burst boundary, so no gap is expected inside a frame. That was not checked.
+
+A cheaper fix for the step at 8 inputs is `#pragma HLS INLINE` in `write_boundary_word`. It is not done
+here: every kernel calls that function, so it needs every XSI gate re-run, and their pinned counts may move.
+
+### The hang, and the fix
+
+**The symptom.** While measuring the gaps, the arbiter alone stopped at RTL. Each case below is the
+default part, Vitis HLS 2025.1, xsim 2025.1, and the old body:
+
+| run | bursts delivered |
+|---|---|
+| 3 inputs, priority, long workload | 12 of 36 |
+| 3 inputs, round-robin | 34 of 36 |
+| 4 inputs, round-robin | 45 of 48 |
+| 16 inputs, round-robin | 177 of 192 |
+| 4 inputs, priority, Stage 2's test workload | 6 of 22 |
+
+In every case `m_sel`'s last word announces an input other than 0 right after input 0's last frame, and
+no word of that frame follows. 2 inputs complete. Through the pair (arbiter -> demux) the failures were:
+
+- 4 and 8 inputs, priority: input 0's 12 frames delivered, and nothing of the others'.
+- 4 inputs, round-robin: 11 of 12 frames on each of inputs 1-3.
+- 3 inputs, both workloads: no failure. That is why Stage 2's gates (`n = 3`) passed.
+
+**The cause, as far as it was traced.** For these builds, Vitis HLS 2025.1 does not inline
+`copy_frame`. It keeps one `copy_frame_<W>_<NB>_..._s` module for every input, with the input stream muxed
+into it per call. That module hangs on the first frame it copies from another input once input 0 has run
+dry. The trace stops there: the module's handshakes were not followed in a waveform.
+
+**The fix.** `#pragma HLS INLINE` in `copy_frame` (`waveflow/streams/src/stream_arbiter_task.h`, with a
+comment) gives each input its own `COPY` pipeline (`stream_arbiter_task_..._Pipeline_COPY`,
+`..._COPY1`, ...). The loop keeps the shape Stage 2's comment protects. The following complete under xsim
+(Vitis / Vivado 2025.1):
+
+- the lone arbiter: 3 inputs priority, 4 round-robin, 16 priority and 16 round-robin with the long
+  workload; 4 inputs priority with 2-burst frames;
+- the pair, with `compare` clean against pysim: 4 and 8 inputs priority and 16 round-robin with the long
+  workload; 4 inputs round-robin with 2-burst frames on the test workload;
+- `pytest tests/streams/test_arbiter_demux.py -m xsi`: 4 pass on the default part.
+
+The records above and all the gaps are the fixed body's; the old body's records were deleted before the
+re-sweep.
+
+**A gate is still missing.** It should be the pair at 4 inputs with the long workload
+(`rtl.build_block_dag(..., "pair", 4, workload="long")`). It is not added here: a new XSI gate raises
+`WANT_XSI_GATES` in `tests/conftest.py`, which Stage 3 and Stage 5 edit, and the count is theirs to keep.
+
+**The 3-input pair is unchanged by the fix.** The first section's four `pair_*` tops (3 inputs, 32 bits)
+were re-probed with the fixed body. They give the same module list, the same estimates, the same csynth FF
+and LUT, and the same routed LUT, FF and slack, to the digit (Vitis HLS / Vivado 2025.1). In the pair at
+3 inputs, Vitis 2025.1 had already given each arbiter input its own pipeline
+(`stream_arbiter_task_Pipeline_COPY`, `..._COPY1`, `..._COPY2`); the one shared `copy_frame_*` module
+there is the demux's. That is why Stage 2's 3-input gates never hung, and why the first section's numbers
+stand. The shared arbiter module appeared in the lone arbiter from 3 inputs, and in the pair from 4.
+
+### The gaps in the flow (proposed, not built)
+
+1. **Attribution, from 8 ports up.** `rtl_prefix` predicts the task's RTL name from its template arguments,
+   for example `stream_arbiter_task_32_1_0`. With 8 or more AXIS ports, Vitis HLS 2025.1 names the
+   module plain `stream_arbiter_task` / `stream_demux_task`, so `InspectSynthStep` finds no row and
+   (rightly) fails. It also reports a non-inlined `write_boundary_word_..._s` row that nothing claims. The
+   extension belongs in `waveflow/calib/synth_report.py` `_classify`: when no row matches the prefix, fall
+   back to the bare function name when exactly one such row exists, and give helper rows under the task
+   (`write_boundary_word_*`) to it as sub-blocks. It needs a unit test on a report with plain names, then
+   a re-run of the sweep at 8 and 16.
+2. **Fitting across a body choice.** `VitisResourceModel.corpus()` re-elaborates each row from
+   `module.json`'s parameters, and those are `HwParam`s only. `policy` and `route` are `build_fields`, so
+   two keys with the same parameters and different bodies are indistinguishable to a fit. The extension is
+   to record `build_fields` in `ModuleIdentity.params` and pass them back in the corpus re-elaboration. A
+   `resource_structure()` for each block (per-input `COPY` pipelines, the search, the demux's index test)
+   would then let a model predict 8 and 16 from 2 and 4. Until then, the lookup answers exactly what was
+   built, and nothing else.
+3. **The arbiter's decision cost in pysim** (above): a timing model through `timed_delay`, calibrated at
+   the platform's clock.
+
+### Not done (the stream blocks' records)
+
+- The 8- and 16-port records (gap 1). The routed spot checks are the only figures at 16.
+- No XSI at the RFSoC clock, so the gaps are 100 MHz numbers.
+- No gap measured at 2-burst frames or at widths other than 32.
+- Out of context, as before. The routed figures include the standalone top's AXIS register slices.

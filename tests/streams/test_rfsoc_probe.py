@@ -73,3 +73,38 @@ def test_the_schedule_report_parser(tmp_path):
     assert (sp["target_ns"], sp["uncertainty_ns"]) == (4.0, 1.08)
     assert [(s["state"], s["delay_ns"], len(s["ops"])) for s in sp["states"]] == [(1, 0.427, 2), (2, 2.92, 2)]
     assert sp["states"][1]["ops"][0].startswith("fifo read operation ('fb_read')")
+
+
+def test_the_stream_blocks_records_are_found_by_the_lookup():
+    """The records ``waveflow.streams.calib`` filed and ``waveflow_calib publish`` promoted into the packaged
+    ``xczu48dr_250mhz_vitis2025_1``: every swept configuration up to four ports is measured (``EXACT``),
+    the policy and the route each on its own key; eight and sixteen were not filed (the attribution's gap,
+    ``plans/shared_kernel_rfsoc_timing.md``), so they stay uncalibrated rather than interpolated."""
+    from waveflow.calib.platform import Platform, packaged_platforms_dir
+    from waveflow.calib.record_store import platform_store
+    from waveflow.calib.resource_model import LookupResourceModel
+    from waveflow.streams.calib import BLOCKS, PLATFORM
+
+    plat = Platform.resolve(packaged_platforms_dir(), PLATFORM)
+    rm = LookupResourceModel(store=platform_store(plat), platform=plat)
+    for block in BLOCKS.values():
+        keys = set()
+        for point in block.grid:
+            mod = block.module(point)
+            n = point.get("n_in", point.get("n_out"))
+            level = rm.confidence(mod).level.value
+            assert level == ("EXACT" if n <= 4 else "UNCALIBRATED"), (point, level)
+            if n <= 4:
+                keys.add(rm.get_params(mod)["module_key"])
+                assert rm.predict(mod)["lut"] > 0
+        assert len(keys) == 24
+
+
+def test_pysim_arbiter_spends_one_cycle_between_frames():
+    """pysim's ``StreamArbiter`` has no decision cost: one idle cycle between backlogged frames, whatever
+    ``n_in`` (the RTL spends 3 to 8 at 100 MHz, ``plans/shared_kernel_rfsoc_timing.md``)."""
+    from waveflow.streams.arbiter_timing import pysim_gaps
+
+    for n, policy in ((2, "priority"), (4, "round_robin")):
+        g = pysim_gaps(n, policy)
+        assert g["frames"] == 12 * n and set(g["gaps"]) == {1}

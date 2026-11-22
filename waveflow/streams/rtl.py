@@ -113,10 +113,16 @@ def block(n_out: int = 2, bitwidth: int = 32) -> StreamBroadcast:
 
 def make(kind: str, n: int = 2, bitwidth: int = 32, frame_bursts: int = 1, policy: str = "priority"):
     """A gated module and its top's name: ``broadcast``, ``demux`` (by ``s_sel``), ``demux_hdr`` (by
-    bits 16-23 of a frame's first word) or ``pair`` (:class:`ArbiterDemuxPair`)."""
+    bits 16-23 of a frame's first word) or ``pair`` (:class:`ArbiterDemuxPair`).  Also ``arbiter``, the
+    arbiter alone: it has no gate (its interleave is timing's), but its csynth is the block's own
+    resources and its RTL run the block's own timing (:mod:`waveflow.streams.calib`)."""
     sim = Simulation()
     if kind == "broadcast":
         return block(n, bitwidth), top_name(n, bitwidth)
+    if kind == "arbiter":
+        mod = StreamArbiter(name=StreamArbiter.cpp_kernel_name, sim=sim, n_in=n, bitwidth=bitwidth,
+                            frame_bursts=frame_bursts, policy=policy)
+        return mod, f"sarb{'rr' if policy == 'round_robin' else 'p'}{n}_w{bitwidth}_f{frame_bursts}"
     if kind in ("demux", "demux_hdr"):
         hdr = kind == "demux_hdr"
         mod = StreamDemux(name=StreamDemux.cpp_kernel_name, sim=sim, n_out=n, bitwidth=bitwidth,
@@ -204,7 +210,7 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("root", type=Path)
-    ap.add_argument("--block", default="broadcast", choices=("broadcast", "demux", "demux_hdr", "pair"))
+    ap.add_argument("--block", default="broadcast", choices=("broadcast", "demux", "demux_hdr", "pair", "arbiter"))
     ap.add_argument("--n", "--n-out", dest="n", type=int, default=2)
     ap.add_argument("--bitwidth", type=int, default=32)
     ap.add_argument("--frame-bursts", type=int, default=1)

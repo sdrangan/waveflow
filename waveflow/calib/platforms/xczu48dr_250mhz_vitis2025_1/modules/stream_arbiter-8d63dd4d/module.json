@@ -1,0 +1,11 @@
+{
+  "key": "stream_arbiter-8d63dd4d",
+  "cls_name": "StreamArbiter",
+  "cls_module": "waveflow.streams.arbiter",
+  "params": {
+    "bitwidth": 128,
+    "frame_bursts": 1,
+    "n_in": 4
+  },
+  "signature": "8d63dd4d51c0883e291b766766f89662d1ec5ed6c2916d5415ac55934d377f70"
+}

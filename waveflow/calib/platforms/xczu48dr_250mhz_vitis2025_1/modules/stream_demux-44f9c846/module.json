@@ -1,0 +1,13 @@
+{
+  "key": "stream_demux-44f9c846",
+  "cls_name": "StreamDemux",
+  "cls_module": "waveflow.streams.demux",
+  "params": {
+    "bitwidth": 128,
+    "frame_bursts": 1,
+    "n_out": 2,
+    "sel_bits": 8,
+    "sel_lsb": 16
+  },
+  "signature": "44f9c8464a0f6e4e970f72dc29e1fc070308ebc76eb6b9d58436a0b34c55599f"
+}
