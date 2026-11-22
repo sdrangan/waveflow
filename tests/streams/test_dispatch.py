@@ -124,6 +124,56 @@ def test_a_returned_credit_frees_its_own_worker_only():
     assert d.outstanding == [1, 0, 1] and max(d.peak) == 1
 
 
+@pytest.mark.parametrize("policy", ["first_free", "round_robin"])
+def test_a_job_announced_before_it_is_all_there_stalls_the_block(policy):
+    """Rule 2, as at RTL (``plans/stream_dispatch.md`` Stage 8): the block commits to a job on its first
+    word and copies it as the words arrive.  A job begun at cycle 10 and held open until 200 goes to worker
+    1 at its first word; the credit worker 0 returns at cycle 20 then waits on ``s_free`` -- not taken
+    back -- until the job is all there, and is taken back at once after."""
+    sim = Simulation()
+    clk = Clock(freq=1 / PER)
+    d = StreamDispatch(name="d", sim=sim, n_out=2, bitwidth=32, credits=1, policy=policy, clk=clk)
+    tx = {}
+    for port, ep in (("s_in", d.s_in), ("s_free", d.s_free)):
+        tx[port] = StreamIFMaster(name=f"t_{port}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"l_{port}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", tx[port])
+        link.bind("slave", ep)
+    out = {}
+    for k in range(2):
+        r = StreamIFSlave(name=f"r{k}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"o{k}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", d.m_out[k])
+        link.bind("slave", r)
+        out[k] = r
+    seen = {}
+
+    def drive():
+        yield from tx["s_in"].write(np.asarray([0xA0, 0xA1], dtype=np.uint32))     # job A: worker 0
+        yield sim.env.timeout((10 - sim.env.now / PER) * PER)
+        x = yield from tx["s_in"].begin(np.asarray([0xB0, 0xB1, 0xB2], dtype=np.uint32))
+        yield sim.env.timeout(190 * PER)                                          # B held open to 200
+        yield from tx["s_in"].end(x)
+
+    def credit():
+        yield sim.env.timeout(20 * PER)
+        yield from tx["s_free"].write(np.asarray([0], dtype=np.uint32))
+
+    def probe():
+        yield sim.env.timeout(100 * PER)
+        seen[100] = (list(d.outstanding), len(d.s_free.data_buffer.items), out[1].pending_burst is not None)
+        yield sim.env.timeout(110 * PER)
+        seen[210] = (list(d.outstanding), len(d.s_free.data_buffer.items))
+
+    for p in (drive(), credit(), probe()):
+        sim.env.process(p)
+    sim.run_sim()
+    assert d.sent == [1, 1]
+    assert seen[100] == ([1, 1], 1, True)        # B committed and on its way; the credit not taken back
+    assert seen[210] == ([0, 1], 0)               # B all there at 200, then the credit
+    assert d.bad_credits == 0
+
+
 # --- the pool: dispatch -> links -> arbiter, m_sel back as the credits -----------------------------------
 
 

@@ -26,6 +26,12 @@ Which worker takes a job depends on when credits come back, so a run's assignmen
 timing: pysim and RTL agree on what comes out, not on which worker did it.  The HLS body
 (``src/stream_dispatch_task.h``) tests ``s_free`` then ``s_in`` with ``empty()``; the model waits with
 ``wait_any`` on the same inputs in the same order, and on ``s_in`` only while some worker can take a job.
+
+**Word, not burst** (``plans/stream_dispatch.md`` Stage 8), as the arbiter: an input counts from its
+burst's first word (``wait_any(..., begun=True)``), and a job is copied as its words arrive
+(:func:`~waveflow.streams.arbiter.copy_burst`).  So in a pool the arbiter's credit comes back while the
+dispatcher is still copying, as at RTL, and a job announced before it is all there holds the block -- no
+credit taken back meanwhile -- until it is (the second rule).
 """
 from __future__ import annotations
 
@@ -39,6 +45,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
+from waveflow.streams.arbiter import copy_burst
 from waveflow.streams.body_step import StreamBodyStep
 from waveflow.streams.timing import (
     CREDIT,
@@ -156,13 +163,15 @@ class StreamDispatch(FreeRunMod):
 
     def run_iter(self):
         """One action: a returned credit if one waits; else a job to the first free worker in the
-        policy's order, whole; waiting on ``s_in`` only while some worker can take it.  On a calibrated
-        platform each action first spends its decision cycles (the choice is made, then time passes)."""
+        policy's order, whole, copied as its words arrive (:func:`~waveflow.streams.arbiter.copy_burst`);
+        waiting on ``s_in`` only while some worker can take it.  An input counts from its first word, as
+        ``empty()`` does.  On a calibrated platform each action first spends its decision cycles (the
+        choice is made, then time passes)."""
         free = self.free_workers()
         if free:
-            i = yield from self.wait_any(self.s_free, self.s_in)
+            i = yield from self.wait_any(self.s_free, self.s_in, begun=True)
         else:
-            i = yield from self.wait_any(self.s_free)
+            i = yield from self.wait_any(self.s_free, begun=True)
         if i == 0:
             words = yield from self.s_free.get()
             yield from decide(self, self.firing(CREDIT))
@@ -176,8 +185,7 @@ class StreamDispatch(FreeRunMod):
         self.peak[k] = max(self.peak[k], self.outstanding[k])
         yield from decide(self, self.firing(JOB))
         for _ in range(int(self.frame_bursts)):
-            words = yield from self.s_in.get()
-            yield from self.m_out[k].write(words)
+            yield from copy_burst(self.s_in, self.m_out[k])
 
     def workload(self, kind: str = "test") -> dict:
         """The block's own scenario: jobs whose words name the job and burst (job ``f``, burst ``b``,

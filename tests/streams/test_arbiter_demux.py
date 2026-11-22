@@ -84,6 +84,51 @@ def _backlogged(policy, n=3, frames=4, frame_bursts=1, hold=2000):
     return [int(s[0]) for s in got["m_sel"]], got["m_out"]
 
 
+def test_a_frame_announced_before_it_is_all_there_holds_the_others():
+    """The arbiter's first rule, as at RTL (``plans/stream_dispatch.md`` Stage 8): it commits to a frame on
+    its first word and copies it as the words arrive.  Input 1's frame, begun at cycle 0 and held open
+    until 200, wins at its first word; input 0's, written whole at cycle 5 (and the higher priority),
+    waits behind it until it is all there."""
+    sim = Simulation()
+    clk = Clock(freq=1 / PER)
+    arb = StreamArbiter(name="arb", sim=sim, n_in=2, bitwidth=32, policy="priority", clk=clk)
+    tx = []
+    for k in range(2):
+        t = StreamIFMaster(name=f"d{k}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"in{k}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", t)
+        link.bind("slave", arb.s_in[k])
+        tx.append(t)
+    got = {"m_out": [], "m_sel": []}
+    rx = {}
+    for port in got:
+        rx[port] = StreamIFSlave(name=f"r_{port}", sim=sim, bitwidth=32)
+        link = StreamIF(name=f"o_{port}", sim=sim, clk=clk, bitwidth=32, framed=True, depth=64)
+        link.bind("master", getattr(arb, port))
+        link.bind("slave", rx[port])
+
+    def slow():
+        x = yield from tx[1].begin(np.asarray([0x10, 0x11, 0x12], dtype=np.uint32))
+        yield sim.env.timeout(200 * PER)
+        yield from tx[1].end(x)
+
+    def fast():
+        yield sim.env.timeout(5 * PER)
+        yield from tx[0].write(np.asarray([0x00, 0x01], dtype=np.uint32))
+
+    def read(port):
+        while True:
+            words = yield from rx[port].get()
+            got[port].append((round(sim.env.now / PER), int(words[0])))
+
+    for p in (slow(), fast(), read("m_out"), read("m_sel")):
+        sim.env.process(p)
+    sim.run_sim()
+    assert [w for _, w in got["m_sel"]] == [1, 0]
+    assert [w for _, w in got["m_out"]] == [0x10, 0x00]
+    assert got["m_out"][0][0] >= 200 and got["m_out"][1][0] > got["m_out"][0][0]
+
+
 def test_strict_priority_drains_the_lowest_input_first():
     sel, _ = _backlogged("priority")
     assert sel[1:] == [0] * 3 + [1] * 4 + [2] * 4         # the first grant went before the backlog

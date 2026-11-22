@@ -251,9 +251,19 @@ def pysim_round_trip(n: int, policy: str, credits: int = 1) -> dict:
             return words
         ep.get = get
 
+    def copied(ep, key):
+        """The arbiter reads a burst in two halves (``copy_burst``): its stamp is whole at ``end_read``."""
+        orig = ep.end_read
+
+        def end_read(x, *a, **kw):
+            yield from orig(x, *a, **kw)
+            log[key].append((x.stamp.first / per, [int(v) for v in np.asarray(x.data).reshape(-1)],
+                             x.stamp.nominal / per))
+        ep.end_read = end_read
+
     stamped(pool.dsp.s_free, "credit")
     for k in range(n):
-        stamped(pool.arb.s_in[k], k)
+        copied(pool.arb.s_in[k], k)
     sysm.run()
     pairs = _pair([(t, w[0]) for t, w, _ in log["credit"]], {k: [t for t, _, _ in log[k]] for k in range(n)})
     spans = sorted((round(t), round(e)) for k in range(n) for t, _, e in log[k])

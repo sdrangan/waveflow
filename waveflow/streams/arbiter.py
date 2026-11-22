@@ -25,6 +25,12 @@ Two rules a design keeps (``docs/guide/streams/arbiter.md``):
 Which input wins depends on when frames arrive, so a run's output order is a fact about its timing: pysim
 and RTL agree per input, not on the interleave.  The HLS body (``src/stream_arbiter_task.h``) polls each
 input with ``empty()``; the model waits with ``wait_any`` on the same inputs in the same order.
+
+**Word, not burst** (``plans/stream_dispatch.md`` Stage 8).  The body commits to a frame on its first word
+and copies the words as they arrive.  So does the model: an input counts from its burst's first word
+(``wait_any(..., begun=True)``), and :func:`copy_burst` starts the output then and ends it no earlier than
+the input's last word.  Always, timed or not: a model that waited for the whole burst would return a
+pool's credit (``m_sel``) about a burst late, and would hide the first rule's stall.
 """
 from __future__ import annotations
 
@@ -42,10 +48,21 @@ from waveflow.streams.body_step import StreamBodyStep
 from waveflow.streams.timing import attach, decide, features, require_points
 from waveflow.utils.burst_io import StreamBurst
 
-__all__ = ["StreamArbiter", "StreamArbiterStep", "POLICIES"]
+__all__ = ["StreamArbiter", "StreamArbiterStep", "POLICIES", "copy_burst"]
 
 #: The policies and their code in the HLS body's ``RR`` template argument.
 POLICIES = {"priority": 0, "round_robin": 1}
+
+
+def copy_burst(src: FramedStreamIFSlave, dst: FramedStreamIFMaster):
+    """One TLAST burst from *src* to *dst* as the bodies' copy loop moves it, a word a cycle as the words
+    arrive: taken at its first word (begun or delivered), the output started at once, and ended -- its
+    last word delivered, room permitting -- no earlier than the input's last word.  The pysim form of
+    ``copy_frame`` / ``copy_job``'s loop for one burst; a frame is ``frame_bursts`` of them."""
+    x = yield from src.begin_read(pending_ok=True)
+    w = yield from dst.begin(x.data)
+    yield from src.end_read(x)
+    yield from dst.end(w)
 
 
 @dataclass
@@ -126,19 +143,20 @@ class StreamArbiter(FreeRunMod):
         return features(int(self.n_in), self.policy == "round_robin")
 
     def run_iter(self):
-        """Wait for any input to hold a frame; the first in :meth:`search_order` wins.  Its index on
-        ``m_sel``, then its ``frame_bursts`` bursts on ``m_out``.  On a calibrated platform the firing
-        first spends its decision cycles (the winner is chosen, then time passes, then ``m_sel``)."""
+        """Wait for any input to hold a frame's first word; the first in :meth:`search_order` wins.  Its
+        index on ``m_sel``, then its ``frame_bursts`` bursts on ``m_out``, each copied as its words arrive
+        (:func:`copy_burst`) -- so a frame announced before it is all there holds the block until it is.
+        On a calibrated platform the firing first spends its decision cycles (the winner is chosen, then
+        time passes, then ``m_sel``)."""
         order = self.search_order()
-        i = yield from self.wait_any(*(self.s_in[k] for k in order))
+        i = yield from self.wait_any(*(self.s_in[k] for k in order), begun=True)
         k = order[i]
         if self.policy == "round_robin":
             self.next_k = (k + 1) % int(self.n_in)
         yield from decide(self, self.firing())
         yield from self.m_sel.write(np.asarray([k], dtype=np.uint64))
         for _ in range(int(self.frame_bursts)):
-            words = yield from self.s_in[k].get()
-            yield from self.m_out.write(words)
+            yield from copy_burst(self.s_in[k], self.m_out)
 
     def workload(self, kind: str = "test") -> dict:
         """The block's own scenario: per input, frames whose words name their input and frame (input
