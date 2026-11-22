@@ -573,23 +573,47 @@ def _csynth_top(tcl_script: Union[str, Path]) -> Optional[str]:
 _SHELL_VARS_TO_DROP = ("MSYSTEM",)
 
 
+def _xsi_runner_vars() -> Dict[str, str]:
+    """``VIV`` for the Linux XSI runner, when it could not find Vivado by itself.
+
+    ``run.sh`` looks for Vivado in ``VIV``, then ``XILINX_VIVADO``, then a ``vivado`` on ``PATH``,
+    and stops with "cannot locate Vivado" otherwise.  Waveflow's own detection
+    (:func:`find_vivado_path`: ``WAVEFLOW_VIVADO_PATH``, beside Vitis, the standard install roots)
+    finds more than that, and the ``-m xsi`` gates check it before they run, so on a machine with
+    nothing on ``PATH`` every gate passed its check and then failed in the runner.  This hands the
+    runner the Vivado Waveflow found -- only in that case, so an environment that names one already
+    is left alone.  Windows: ``run.bat`` names its own path, nothing to add."""
+    if platform.system() == "Windows":
+        return {}
+    if os.environ.get("VIV") or os.environ.get("XILINX_VIVADO") or shutil.which("vivado"):
+        return {}
+    vivado = find_vivado_path()
+    if not vivado:
+        return {}
+    root = Path(vivado).parent.parent                # <root>/bin/vivado
+    return {"VIV": str(root)} if (root / "bin" / "xelab").is_file() else {}
+
+
 @overload
 def _tool_env(env: None) -> Optional[Dict[str, str]]: ...
 @overload
 def _tool_env(env: Dict[str, str]) -> Dict[str, str]: ...
 def _tool_env(env: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
-    """The environment for a tool subprocess: ours, without the shell variables above, plus
-    ``env``.  None, meaning inherit unchanged, when there is nothing to remove or add.
+    """The environment for a tool subprocess: ours, without the shell variables above, plus the
+    Vivado the XSI runner needs (:func:`_xsi_runner_vars`), plus ``env``.  None, meaning inherit
+    unchanged, when there is nothing to remove or add.
 
     Every launch of an AMD tool (Vitis, Vivado, xsim, an XSI runner) goes through this.  A
     caller that needs a full environment to edit passes ``{}``."""
     drop = [k for k in _SHELL_VARS_TO_DROP if k in os.environ] \
         if platform.system() == "Windows" else []
-    if env is None and not drop:
+    add = _xsi_runner_vars()
+    if env is None and not drop and not add:
         return None
     final_env = os.environ.copy()
     for key in drop:
         final_env.pop(key, None)
+    final_env.update(add)
     final_env.update(env or {})
     return final_env
 
