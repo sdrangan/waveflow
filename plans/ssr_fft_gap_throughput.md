@@ -13,6 +13,11 @@ commutator (`tp{S-2}`, block size `L/16`): its input frame stretches to `2L/R - 
 stream after it carries a frame every `2L/R`. At `L = 16` there is no throughput loss (an arrival-phase
 latency jitter of 40-43 cycles instead). `L = 4096` not yet measured.
 
+*Update (lab machine, 2026-11-22, `plans/osfb_pysim_fidelity.md` Section 6):* `L = 4096` is measured since -- the
+same rule, exact on every constant gap and 23 of 23 random intervals, set by `tp4`. And at `L = 16` constant
+gaps of 1-3 cycles do cost throughput, a little: the RTL alternates intervals of 8 and 4 at a 1-cycle gap
+(68 cycles over 11 frames against 55 for `L/R + g`); on random gaps its total is `L/R + g`'s.
+
 **What it costs at `L = 1024`, `R = 4`** (a frame is 256 cycles, 1.02 µs at 250 MHz):
 
 | gap before a frame | RTL interval | ideal `L/R + g` | throughput lost |
