@@ -124,8 +124,14 @@ OWNED = ("waveflow/linalg/", f"{PLATFORM}/")
 OWNED_HEADERS = re.compile(r"waveflow/build/(wf_|systolic_|cg_vector)\w*\.h$")
 
 
+#: The platform's per-module resource records: what any block's calibration sweep files (the stream
+#: blocks' since plans/shared_kernel.md), data rather than these phases' code, so outside the audit.
+NOT_OWNED = (f"{PLATFORM}/modules/",)
+
+
 def test_waveflow_gained_only_the_manifest():
-    gained = [p for p in _gained() if p.startswith(OWNED) or OWNED_HEADERS.match(p)]
+    gained = [p for p in _gained() if (p.startswith(OWNED) or OWNED_HEADERS.match(p))
+              and not p.startswith(NOT_OWNED)]
     assert set(gained) <= set(MANIFEST), sorted(set(gained) - set(MANIFEST))
     missing = [p for p in MANIFEST if not (ROOT / p).is_file()]
     assert not missing, missing
