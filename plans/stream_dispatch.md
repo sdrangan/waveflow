@@ -355,4 +355,21 @@ study uses at least 2 credits a worker.
 - **Left:** the in-pool credit firing (open question 5, decided: calibrate in context) is now the whole of
   the timed pool's excess -- about 2 cycles a job at 2 workers first-free (the table's credit firing 4,
   in the pool 2): 40 jobs, 77 cycles over the RTL's 524.
+- **os_filterbank's end cycle moved away from the RTL's** (asked by the planning session; measured, no
+  code changed). The run's end is its last word on any output. RTL, xczu48dr at 250 MHz, Vitis / xsim
+  2025.1: 1,067 (`test`), 2,424 (`long`). Untimed pysim, Stage 7 -> Stage 8: 969 (-9.2%) -> 885 (-17.1%),
+  and 1,934 (-20.2%) -> 1,766 (-27.1%). `OsFilterBank` has no `platform_dir`, so it cannot name the
+  platform. With the platform set on its arbiter from a script (the only block with a table; measured at
+  32 bits with 1-burst frames, against this arbiter's 128 bits with 2-burst frames): 973 (-8.8%) -> 901
+  (-15.6%), and 1,944 (-19.8%) -> 1,800 (-25.7%). Short before and after, never over.
+  **Why:** the arbiter's change; the bank has no dispatcher. Each frame's 16-word payload (26 frames in
+  `test`, 72 in `long`: every block crosses twice, forward from its front and inverse from the feedback
+  link) used to reach `pre` 13-17 cycles after its last word reached the arbiter. That is store and
+  forward: the payload was copied only once it was delivered. Now it arrives 0-3 cycles after (cut-through,
+  as the HLS body does). Frames queued at the start shifted by exactly 14 cycles each. The end moved by 84
+  and 168 cycles, 6 and 12 times that. pysim was already short, and the old extra burst per pass was a cost
+  the RTL arbiter does not have; it offset part of costs pysim does not model elsewhere in this loop. The
+  arbiter's decision cycles are a small part of that gap: timing them adds 16 and 34 cycles, which leaves
+  166 and 624 short. Those were not attributed here. `docs/examples/os_filterbank/index.md` quotes only
+  RTL cycles, so it is unchanged.
 
