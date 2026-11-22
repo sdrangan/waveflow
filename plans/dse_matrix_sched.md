@@ -187,12 +187,25 @@ slow*), worth reducing, but not what decides this study.
    measured 3 / 3 / 5 / 5 idle cycles a job at 2 / 4 / 8 / 16 workers first-free, 4 / 5 / 10 / 20 round-robin,
    at 100 MHz, Vitis / xsim 2025.1; pysim spends 0.
 
-   **Items 1 and 2 are in progress** (2026-11-22, on the lab machine, `plans/stream_dispatch.md` Stage 7): one
-   timing model for both blocks, the delay a `timeout` a firing (it does not slow pysim: its cost is per burst,
-   not per word), calibrated on `xczu48dr` at 250 MHz, **opt-in by naming the platform** (the user's decision),
-   the arbiter included (the user's decision: in a pool, which worker takes a job depends on when the arbiter
-   returns its credit). Done when pysim's idle cycles between jobs and frames equal the RTL's at every calibrated
-   point. **Ask that stage to carry a `require_calibrated` refusal like `VitisFft`'s** (Section 5).
+   **Items 1 and 2 are BUILT** (`plans/stream_dispatch.md` Stage 7, commit `8bd6f12`, on the lab machine):
+   `waveflow/streams/timing.py`, one lookup timing model a block on `xczu48dr_250mhz_vitis2025_1` (4 ns,
+   Vitis / xsim 2025.1), each firing waiting its measured cycles -- arbiter 3-8 idle cycles a frame, dispatcher
+   3-15 a job and 4-12 a credit firing; pysim reproduces every calibrated point. **Opt-in by `platform_dir`**;
+   an unmeasured point (ports, policy) or another clock is **refused at construction**. Three caveats, with
+   the user's decisions (2026-11-22):
+   - **Inside a composite** a firing can cost less than alone (the pool's credit firing, 2-4 cycles less: a
+     bare pool runs 7-17% long, a worst case of 8-word jobs; ~0.1% at CG job sizes). *Decided:* no general fix;
+     calibrate the study's engine in context, by tracing it (Phase 2's gate shows whether it matters).
+   - **Word against burst.** The RTL blocks commit on a frame's first word and return a credit during the copy;
+     pysim moves a burst whole, so a credit comes back late by about one result burst -- with one credit a
+     worker, a few percent of a ~3,400-cycle CG job, where the deadline decides. *Decided:* fix it in pysim
+     (commit on a begun burst) -- `plans/stream_dispatch.md` **Stage 8, sent to the lab machine 2026-11-22**.
+     **Until it lands, this study uses at least 2 credits a worker** (the second hides the round trip).
+   - **Width and frame.** The tables are at 32 bits, 1-burst frames; at 128 bits with 2-burst frames every gap
+     is a cycle longer. *Decided:* calibrate at the study's own width and frame.
+
+   The blocks refuse what they are told about; a design that never names `platform_dir` still runs untimed,
+   silently. So the study's harness keeps its own refusal (Section 5).
 3. **The A53 scheduler's run time** priced by the calibrated platform (`docs/guide/cpu/`), since it eats the 5 ms.
 4. **The engine redesigned** (dse_cg's interconnect problem) -- likely a pool of CG units behind a
    `StreamDispatch` with results merged by a `StreamArbiter`, `m_sel` back as the credits
@@ -225,7 +238,7 @@ but too slow to search with (dse_cg saw pysim read
 | 0 | The open decisions of Section 9 answered by the user; this plan accepted | the decisions recorded here |
 | 1 | **The algorithm, untimed (Python):** the user scheduler (fixed), candidate sets per window, R̂(S) for any set S, the closest-superset rule, the no-whitening fallback, the genie, the SINR loss; over the Sionna Denver drops (`examples/ltbf_cg_mem_dse/data/drops/`, cached; numpy only) | the brackets (all exact / none) and two scripted policies scored |
 | 2 | **The engine** (Section 7, item 4): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts; then **its fast mode** (Section 7, item 6) | the engine at RTL bit-exact against pysim, its cycles within the targets; the fast mode equal to the interpreter-backed pysim, bits and cycles, and a window in tens of ms |
-| 3 | **Preconditions 1-3** (pysim's decision gaps -- `plans/stream_dispatch.md` Stage 7, in progress; the A53 pricing of a scheduler); the `require_calibrated` refusal in the study's harness | pysim's idle cycles equal RTL's at every calibrated point; an uncalibrated run refused |
+| 3 | **Preconditions 1-3**: pysim's decision gaps (Stage 7 built; Stage 8, word against burst, at the lab); the decision tables at the study's width and frame; the A53 pricing of a scheduler; the harness's refusal of an untimed run | pysim's idle cycles equal RTL's at the study's configuration; an uncalibrated run refused |
 | 4 | **One policy, both backends** (Section 5) | a scripted policy runs unchanged in pysim and at RTL, the same RBs covered |
 | 5 | **Scripted baselines:** greedy coverage by probability; insurance superset first; iteration-count sweeps. The agent must beat these | their scores on held-out windows |
 | 6 | **Sizing.** Ground truth: the evaluator's long RTL runs for a tail (windows needed for a p99 at the target's precision, RTL hours a design). The agent's side: pysim's wall time a window with the fast mode, so a policy evaluation fits the budget (Section 6: ~7 h a 10,000-window tail without it) | the cost a submitted design and a policy evaluation, and whether both are affordable |
