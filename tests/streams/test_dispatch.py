@@ -339,7 +339,11 @@ def test_rtl_pool_returns_every_job_once(n, frame_bursts, credits, policy, workl
     root.mkdir(parents=True, exist_ok=True)
     dag, top = rtl.build_block_dag(root / "xw", "pool", n, 32, frame_bursts, pol, workload=workload,
                                    credits=credits)
-    res = dag.run(BuildConfig(root_dir=root, params={"synth": "build"}), through="system_xsi")
+    cfg = BuildConfig(root_dir=root, params={"synth": "build"})
+    res = dag.run(cfg, through="system_xsi")
+    # ``through`` runs a step and its ancestors only, and ``pysim`` is not one of ``system_xsi``'s; the
+    # gate checks pysim's recording too, so run it (``compare``, which would pull it in, is no gate here).
+    res.update(dag.run(cfg, through="pysim"))
     bad = {k: r.message for k, r in res.items() if not r.success}
     assert not bad, bad
     mod, _ = rtl.make("pool", n, 32, frame_bursts, pol, credits)
