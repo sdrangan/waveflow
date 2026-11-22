@@ -103,3 +103,106 @@ s_in --> [ StreamDispatch ]--m_out_1--> worker 1 --+--> [ StreamArbiter ] --m_ou
 | 2026-11-22 | 2 | `DispatchPool` (`rtl.make("pool", ...)`): every job once and whole at n = 2..4, C = 1..3, 1- and 2-burst jobs, both policies; it states no `golden` (the in-order step would fail on a timing-decided order) but `expected_frames`, a multiset. The pool's top has both tasks, the loop, and the credit link at `n * C` (12 at 4 x 3). The link is named `credit`: `free` would shadow the C library's. Through the system DAG to `pysim` (4 workers, C 3, 2-burst jobs, the long workload): the trace's multiset is the inputs'. **Data-dependent workers** (a test worker 20 cycles a word; 18 jobs, every third 16 words, the rest 2; three workers): first-free, C 1, last result at cycle 1,012, jobs 8/5/5; a fixed split (round-robin, C 16), 2,065, jobs 6/6/6 -- 2.0x. |
 | 2026-11-22 | 3 | `docs/guide/streams/dispatch.md`; rows in `streams/index.md` and `systems/library.md`; *A pool of workers* in `systems/shared_kernels.md` and a pointer in its "Replicate K first"; the shared-kernel skill (a table row, the checklist's replicate item, its description) and the `stream_shared` frame's deciding question. `waveflow kb search "split jobs across several workers pool"` finds the page first. |
 | 2026-11-22 | 4 | The four `-m xsi` gates written (`tests/streams/test_dispatch.py`: pool2 first-free; pool3 round-robin C 2 with 2-burst jobs; pool4 first-free and pool4 round-robin C 3 on the long workload), run through `system_xsi` and checked as a multiset, RTL and pysim. `WANT_XSI_GATES` 281 -> 285. **Not run: no Vitis / Vivado here.** For the lab: `pytest tests/streams/test_dispatch.py -m xsi`; then csynth resources at 2 and 4 workers and the dispatch cost per job (the arbiter's `arbiter_timing.py` is the model) onto the guide page. |
+
+## Lab hand-off: Stages 4-6 on a machine with Vitis / Vivado 2025.1
+
+**For the agent on the lab machine.** Stages 0-3 are done (commit `701e3da`, this branch,
+`ccr-62d70dbe-679k63`); this section is your task. Read first, whole: this plan (D1-D6, the three
+rules, the progress log), `docs/guide/streams/dispatch.md`, `waveflow/streams/dispatch.py`,
+`waveflow/streams/src/stream_dispatch_task.h`, `DispatchPool` in `waveflow/streams/rtl.py`, and
+`tests/streams/test_dispatch.py`. Work on this branch; commit and push after every step, so progress is
+visible without the session.
+
+**Toolchain:** Vitis HLS / Vivado **2025.1**; name the version next to every number recorded. Build in a
+short directory on Windows (csynth fails silently past the path limit). Any job that must outlive your
+session goes under `setsid` / `nohup`, never as a session background task (G1's measuring processes died
+with their session, `plans/dse_cg.md` 2026-11-09).
+
+**State:** model, body, step, `DispatchPool`, 28 fast tests passing; the four `-m xsi` gates written and
+**never run**; `WANT_XSI_GATES` already 285, so a full `-m xsi` run fails until they run.
+
+### Step 1: the baseline
+
+```bash
+pip install -e ".[dev]"
+pytest tests/streams -m "not vitis and not xsi"      # expect all pass (82)
+```
+
+### Step 2: the RTL gates (Stage 4)
+
+```bash
+pytest tests/streams/test_dispatch.py -m xsi -v
+pytest tests/streams/test_arbiter_demux.py -m xsi -v   # regression: rtl.py's BODY_STEPS changed
+```
+
+Each pool gate runs through `system_xsi`, then asserts that the RTL's `m_out` and pysim's each hold
+exactly the inputs' jobs, as a multiset: whole, none lost, none doubled (D6; not `compare`, because which
+worker takes a job is timing's).
+
+**If a gate fails, classify it first; never weaken, skip or change what a gate asserts.**
+- **csynth fails.** Suspects: `#pragma HLS reset` on the packed `ap_uint<8*N>` register `held`, the
+  variadic output pack, the `range()` writes in the unrolled loops. Fix the body, and keep the g++ check
+  (`test_the_body_decides_as_the_model`) passing.
+- **A hang** (short counts, the run stops). First the copy loop: it is the arbiter's and must keep its
+  exact shape and `INLINE` (`stream_arbiter_task.h` says why). Then the credit link's depth (`n * credits`).
+  If n = 4 hangs and n = 2 passes, compare with the arbiter's four-input hang
+  (`plans/shared_kernel_rfsoc_timing.md`).
+- **A wrong multiset** (a job lost, doubled or split): a body bug. Reproduce it in the g++ check, if it
+  can be, before fixing.
+
+Any fix keeps the model and the body agreeing: credits first, one action a firing, the same search order.
+If a gate cannot pass without changing D1-D6, push the diagnosis and stop: that decision is the user's.
+
+### Step 3: resources (Stage 4)
+
+- Add a kind `"dispatch"` to `rtl.make()`: the dispatcher alone as its own `ap_ctrl_none` top, as
+  `"arbiter"` is (no gate; its csynth is the block's resources, its RTL run the block's timing).
+- Add `dispatch` to `waveflow/streams/calib.py`, as `demux` is, and file records in the packaged platform
+  `xczu48dr_250mhz_vitis2025_1` (csynth at 4 ns) for n_out 2 and 4; bitwidth 32, 64, 128; frame_bursts 1
+  and 2; credits 1 and 4; both policies.
+- One routed run at n_out 16, 128 bits: LUT, FF, WNS.
+- Tables on `dispatch.md` under *Its resources*, in `demux.md`'s format.
+
+### Step 4: the cost per job (Stage 4)
+
+- `waveflow/streams/dispatch_timing.py`, modelled on `arbiter_timing.py`: the dispatcher alone, a backlog
+  of jobs, credits ample so none is ever waited on, every output read as it comes. Measure the idle
+  cycles between one job's last word and the next's first, across the outputs, at RTL and in pysim, for
+  n_out 2, 4, 8, 16 under both policies.
+- The credit round trip: the pool at C = 1, the idle cycles a worker between jobs.
+- Record both on the guide page under *What it costs a job*. **Do not** add the decision latency to the
+  pysim model (the arbiter's is not modelled either): report the gap, and list "model it or not" in
+  *Open questions* below for the user.
+
+### Step 5: the RFSoC probe (Stage 6)
+
+Extend `waveflow/streams/rfsoc_probe.py` with the dispatcher: 250 MHz on `xczu48dr-ffvg1517-2-e`, out
+of context; csynth's estimate, the routed critical path and WNS at 2 and 4 workers.
+
+### Step 6: the curated example (Stage 5) -- ask the user before starting
+
+Report Steps 2-5 first. If the user agrees, `examples/worker_pool/`, following `examples/os_filterbank`:
+- jobs of data-dependent length (for example an iterative kernel whose iteration count its data sets);
+- a worker kernel with its own HLS body (`docs/guide/vectorization/hls/loop_optimization.md`);
+- M workers behind `StreamDispatch`, merged by `StreamArbiter`, `m_sel` back as the credits;
+- results carrying the job's `tx_id` in a `Resp` header, in completion order, and a `Status` stream
+  (`docs/guide/systems/command_response.md`); a golden checked per `tx_id`;
+- pysim and RTL, an exact cycle-count gate on a fixed scenario;
+- one worker against M, and first-free against a fixed split;
+- `docs/examples/worker_pool/index.md` with an `example_dir:` key.
+
+### Step 7: record and push
+
+- A progress-log row a step (numbers with the tool version); update the status line at the top.
+- `docs/guide/systems/library.md`'s `StreamDispatch` row (timing and resources now "not measured").
+- Any `-m xsi` test added or removed: `WANT_XSI_GATES` in `tests/conftest.py`, with a dated note.
+- `pytest -m "not vitis and not xsi and not gem5 and not sionna"` and `pytest tests/streams -m xsi`;
+  commit, push, and report what passed, what failed (with its output) and what was skipped.
+
+**Throughout:** never hand-edit a generated file; never pack words by hand; when Waveflow lacks
+something, propose the extension rather than work around it; stop and ask before any change to D1-D6.
+
+## Open questions
+
+1. Whether pysim models the dispatcher's decision cycles between jobs (Step 4 measures them).
+2. A `least_loaded` policy (D2): only if a design needs it.
