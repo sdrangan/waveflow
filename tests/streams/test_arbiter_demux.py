@@ -143,6 +143,20 @@ def test_the_arbiter_body_and_ports():
     assert kt.signature == a.ports and kt.framed == a.ports and kt.template_args == (64, 2, 1)
 
 
+@pytest.mark.parametrize("lsb", [0, 70, 120])
+def test_the_header_demux_reads_its_field_in_a_word_wider_than_64_bits(lsb):
+    """A word wider than 64 bits travels as 64-bit chunks, chunk 0 the low bits: the field is read
+    across them (examples/os_filterbank routes 184-bit answers by a header field)."""
+    d = StreamDemux(name="d", sim=Simulation(), n_out=4, bitwidth=184, route="header", sel_lsb=lsb,
+                    sel_bits=8)
+    others = ((1 << 184) - 1) & ~(0xFF << lsb)          # every bit outside the field set
+    for k in range(4):
+        word = others | (k << lsb)
+        chunks = np.asarray([(word >> (64 * i)) & ((1 << 64) - 1) for i in range(3)], dtype=np.uint64)
+        assert d.index_of(chunks) == k
+    assert d.index_of(np.uint64(2)) == (2 if lsb == 0 else 0)              # a plain word still works
+
+
 def test_the_demux_bodies_and_ports():
     d = StreamDemux(name="d", sim=Simulation(), n_out=2, bitwidth=32)
     assert d.ports == ("s_in", "s_sel", "m_out_0", "m_out_1")

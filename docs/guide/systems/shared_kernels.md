@@ -147,6 +147,25 @@ def run_iter(self):
 It waits on `s_in` only while it holds a credit. Waiting on an input it cannot act on would wake it
 at once, forever.
 
+## The example: one FFT for every channel
+
+[One FFT shared by every channel](../../examples/os_filterbank/index.md) is a three-channel overlap-save
+filter bank on one `SsrFft`. Each block goes through it forward, is multiplied by its channel's filter,
+and comes back through it inverse. It uses every part above once:
+
+| part | in the filter bank |
+|---|---|
+| shared unit | `SsrFft(direction="runtime")` |
+| arbiter | `StreamArbiter`, priority: input 0 the feedback, then the channels |
+| direction per frame | the arbiter's index: input 0 is a product going back, so inverse |
+| tag beside K | `Tag(tx_id, ch, blk, nblk, npass)`, from the stage before the FFT to the stage after it |
+| resident data (option 4) | each channel's filter, loaded once into a slot in the stage after the FFT |
+| credits (option 3) | two blocks a channel in the loop; the stage after the FFT returns one per block |
+| results back to the client | three `StreamDemux` on the channel field: answers, statuses, credits |
+
+Its channels finish out of order, but each channel's own outputs do not depend on timing, so each gets
+its own port and the RTL recordings equal pysim's.
+
 ## Why not AMD's blocks
 
 Two vendor blocks merge streams. Neither fits between the tasks of one composite:
@@ -164,9 +183,8 @@ So `StreamArbiter` and `StreamDemux` are Waveflow's own ([StreamArbiter](../stre
 
 ## When a block is missing
 
-These blocks were added because a design needed them: an agent given a shared-FFT problem found no
-arbiter, and no FFT whose direction could change per frame. That is the general rule (the
-repository's `AGENTS.md`): when the right design needs
+The arbiter, the demux and the FFT's run-time direction were added because designs needed them and
+Waveflow had none. That is the general rule (the repository's `AGENTS.md`): when the right design needs
 something Waveflow lacks, do not bend the design around the gap. Propose the extension -- what it is,
 where it lives, its parts (a bit-exact model, the pysim module, the HLS body, tests, a guide page) --
 following the closest existing block, as these followed `StreamBroadcast`.

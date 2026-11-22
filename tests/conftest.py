@@ -258,7 +258,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: header field) and StreamArbiter -> StreamDemux under both policies (tests/streams/test_arbiter_demux.py).
 #: 269 + 3 -> 272 on 2026-11-21 (plans/shared_kernel.md, Stage 3): SsrFft(direction="runtime") --
 #: bits per frame, interval, timing at 250 MHz (tests/dsp/ssr_fft/test_xsi.py, pingpong-runtime).
-WANT_XSI_GATES = 272
+#: 272 + 6 -> 278 on 2026-11-21 (plans/shared_kernel.md, Stage 5): the overlap-save filter bank on one
+#: shared SsrFft -- a front alone, post alone, the bank on two scenarios, and the bank's timing on both
+#: (tests/examples/test_os_filterbank.py).
+WANT_XSI_GATES = 278
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

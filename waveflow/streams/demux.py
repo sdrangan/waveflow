@@ -109,8 +109,11 @@ class StreamDemux(FreeRunMod):
                           template_args=(w, nb, int(self.sel_lsb), int(self.sel_bits)), framed=self.ports)
 
     def index_of(self, first_word) -> int:
-        """``route="header"``: the output a frame names in its first word."""
-        return (int(first_word) >> int(self.sel_lsb)) & ((1 << int(self.sel_bits)) - 1)
+        """``route="header"``: the output a frame names in its first word.  A word wider than 64 bits
+        arrives as its 64-bit chunks, chunk 0 the low bits."""
+        chunks = np.asarray(first_word, dtype=np.uint64).reshape(-1)
+        word = sum(int(c) << (64 * i) for i, c in enumerate(chunks))
+        return (word >> int(self.sel_lsb)) & ((1 << int(self.sel_bits)) - 1)
 
     def run_iter(self):
         """One frame: its index (an ``s_sel`` word, or the first word's field), then its bursts to that

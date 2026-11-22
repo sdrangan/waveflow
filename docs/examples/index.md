@@ -39,38 +39,41 @@ The core path, in order: each one is the next rung of the [Flow Overview](../gui
    by an id, and the choice of adaptor topology.
 10. [Two kernels on a bus](markov/index.md) -- a kernel as a bus master: a credit stream across the
     crossbar, a shared memory, four bus masters.
+11. [One FFT shared by every channel](os_filterbank/index.md) -- a kernel shared by several
+    clients and fed back to itself: an arbiter, a tag beside it, credits on the loop, results routed
+    back by channel.
 
 ## Measuring and exploring
 
-11. [Vector multiply resource modeling](vecmult/index.md) -- a parameter sweep and a resource
+12. [Vector multiply resource modeling](vecmult/index.md) -- a parameter sweep and a resource
     model fitted from it.
-12. [What a crossbar costs](xbar_profile/index.md) -- vendor IP measured into a platform's record
+13. [What a crossbar costs](xbar_profile/index.md) -- vendor IP measured into a platform's record
     store: a census, not a design.
-13. [CG massive-MIMO detector](mimo_cg/index.md) -- the capstone: linear-algebra components
+14. [CG massive-MIMO detector](mimo_cg/index.md) -- the capstone: linear-algebra components
     composed into a bit-exact fixed-point detector.
 
 ## Libraries and domains
 
-14. [Waveflow's FFT, at full rate](ssr_fft/index.md) -- a full-rate streaming FFT from free-running
+15. [Waveflow's FFT, at full rate](ssr_fft/index.md) -- a full-rate streaming FFT from free-running
     modules.
-15. [Wrapping vendor IP: the Vitis FFT](vitis_fft/index.md) -- a vendor block as a module,
+16. [Wrapping vendor IP: the Vitis FFT](vitis_fft/index.md) -- a vendor block as a module,
     calibrated as a black box.
-16. [RF loopback](rf_loopback/index.md) -- the RF data converter boundary.
-17. [Playing a stored waveform](rf_shot_tx/index.md) -- a waveform played out of memory at the
+17. [RF loopback](rf_loopback/index.md) -- the RF data converter boundary.
+18. [Playing a stored waveform](rf_shot_tx/index.md) -- a waveform played out of memory at the
     converter's rate.
-18. [Capturing without losing anything](rf_shot_rx/index.md) -- a capture into two memory regions,
+19. [Capturing without losing anything](rf_shot_rx/index.md) -- a capture into two memory regions,
     with every loss reported.
-19. [Measuring a delay with an address](rf_shot_loopback/index.md) -- the two buffers closed through
+20. [Measuring a delay with an address](rf_shot_loopback/index.md) -- the two buffers closed through
     one converter, a delay read as an address difference.
-20. [Micro-scheduler on a CPU](cpu_sched/index.md) -- software on a calibrated processor beside
+21. [Micro-scheduler on a CPU](cpu_sched/index.md) -- software on a calibrated processor beside
     hardware.
-21. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
+22. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
     harness, measured at RTL against its bounds, and the stage that binds found from a trace.
-22. [Toy vector programs](vecunit/index.md) -- three kernels of a few instructions each for the
+23. [Toy vector programs](vecunit/index.md) -- three kernels of a few instructions each for the
     programmable vector unit, checked by the assembler and bit-exact with a NumPy golden.
-23. [CG as a vector program](vecunit_cg/index.md) -- an algorithm as three programs for a
+24. [CG as a vector program](vecunit_cg/index.md) -- an algorithm as three programs for a
     programmable unit, ordered so the unit fuses it, against a dedicated kernel.
-24. [A matched filter as a vector program](vecunit_mf/index.md) -- a streaming kernel on the same
+25. [A matched filter as a vector program](vecunit_mf/index.md) -- a streaming kernel on the same
     unit, broadcast and conjugate operands, measured against its input floor.
 
 ## Legacy

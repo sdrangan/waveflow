@@ -1,6 +1,6 @@
 # Plan: sharing a kernel -- arbiter, tags, credits, feedback -- and the guide, skill and example that teach it
 
-**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21 (records at the end). Next: Stage 5.**
+**Status: ACCEPTED 2026-11-21 (decisions D1-D4 as proposed). Stage 0 DONE 2026-11-21; Stage 1 DONE 2026-11-21, RTL included; Stage 2 DONE 2026-11-21, RTL included, one timing estimate open; Stage 3 DONE 2026-11-21, RTL at L = 64; Stage 4 DONE 2026-11-21; Stage 5 DONE 2026-11-21, RTL included (records at the end). Next: Stage 6.**
 
 ## Why
 
@@ -408,6 +408,59 @@ need not be a line), `streams.md` (*Between kernels*), `command_response.md` (on
 `dsp/ssr_fft/parameters.md`. Glossary: a *Sharing a kernel* table -- shared kernel, client, arbiter, demux,
 tag, credit (end to end), slot, feedback frame. `waveflow kb search` returns the page first for "one FFT
 shared by several channels with feedback". The example section waits for Stage 5.
+
+## Stage 5 record (2026-11-21): the example `os_filterbank` -- pysim and RTL
+
+`examples/os_filterbank/` (curated: `docs/examples/os_filterbank/index.md`, *One FFT shared by every
+channel*, in the examples index after markov). Three channels, overlap-save at `L = 64`, `M = 17` taps
+(`P = 16` kept, `B = 48` new a block), on one `SsrFft(direction="runtime")`:
+
+- `front_c` (one a channel, `ch` a template argument so each has its own statics): a credit (`CR = 2`), the
+  block read whole, then `Tag` + overlap + new words to the arbiter;
+- `StreamArbiter` (4 inputs, priority, input 0 the feedback, 2-burst frames);
+- `pre`: the arbiter's index sets `s_dir` (input 0 = inverse), the tag goes beside the FFT, the words in;
+- `post`: the three filters loaded once into slots (`s_coef`), then pass 0 multiplies (`ssr_cmul` into the
+  FFT's input format) and sends the product back whole, pass 1 answers the block, a `Status` after a job's
+  last block, and a credit;
+- three `StreamDemux(route="header")` on the `ch` field: answers, statuses, credits. Each channel has its own
+  output and status port, so every RTL recording is comparable although the channels finish out of order.
+
+The golden is the FFT's model forward, the `complexMultiply` model, the model inverse; it is within 0.35% of
+`np.convolve` in floating point (`float_check`).
+
+| gate | result |
+|---|---|
+| pysim: the bank on `test` / `long`, a front alone, `post` alone | bit-exact; every block and status counted |
+| pysim: credit made ineffective, loop links shortened | some jobs never answered; the run returns cleanly |
+| RTL, `test`: 13 blocks, 26 FFT frames | clean compare; last status per channel 821 / 1067 / 888; FFT busy 39% |
+| RTL, `long`: 36 blocks, 72 FFT frames | clean compare; 2349 / 2371 / 2424; FFT busy 48% |
+| RTL: a front alone, `post` alone | clean compare |
+| csynth, the bank (xczu48dr at 250 MHz) | 40 DSP, 80 BRAM, 16193 FF, 19243 LUT; worst slack 0.00 ns |
+
+Vitis 2025.1 throughout. `post` takes 43 cycles a frame against the FFT's 16 (read and multiply, then write
+the product back): it, not the FFT, sets the rate. Splitting it is noted on the page as the next step, not
+done.
+
+**Found and fixed on the way (framework):**
+
+- **`StreamDemux(route="header")` read a word wider than 64 bits wrong in pysim** (`index_of` took a chunk
+  row as a scalar). It now joins the chunks; `test_the_header_demux_reads_its_field_in_a_word_wider_than_64_bits`.
+- **A system top with ports of several widths left a narrow output's upper bits undriven.** The stream nets
+  are the widest port's width (`HwSystem.data_width`); a 32-bit status port beside 184-bit answers drove only
+  its low 32 bits, and the XSI testbench refused the X in the first accepted beat. `system_top._instance` now
+  connects a narrower output to the low bits and drives the rest 0
+  (`test_the_system_top_drives_a_narrow_output_in_full`). The same applies to every class with
+  `endpoint_port_widths` (`SystolicEngine`, `VecUnit`): their RTL gates re-run after the change,
+  `tests/examples/test_systolic.py` (4) and `tests/vecunit/test_unit_xsi.py` (7), all pass.
+- **A leaf with ports of several widths must set `endpoint_port_widths`**, or the system flow describes its
+  ports at the system's one width while its own top (built with `port_widths`) has the real ones: `post`
+  alone failed the same way until it was set. Nothing compares the two; a check that the csynth'd ports
+  match the spec the system top is built from would catch it.
+- **A system top must not be named as its kernel** (`os_filterbank` around `os_filterbank`: "illegal
+  recursive instantiation" at elaboration). Named `*_top`, as the ring stub's; the generator could refuse it.
+
+Tests: `tests/examples/test_os_filterbank.py` (10 pysim, 6 RTL gates); `WANT_XSI_GATES` 272 -> 278.
+`CLAUDE.md`'s curated count 28 -> 29.
 
 ## Hand-off: continuing on the lab machine (2026-11-21)
 
