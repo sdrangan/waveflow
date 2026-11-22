@@ -3,7 +3,7 @@ title: Evaluation
 parent: Waveflow
 nav_order: 3.5
 has_children: true
-summary: "An honest assessment of Waveflow, measured rather than claimed: what each potential gain is, how it was tested, the numbers -- including where Waveflow is slower or does less than the alternative -- and what to improve. Starts with simulation speed; agentic design and design-space exploration will follow. Every number names the script that produced it, and the section is expected to change as the measurements do."
+summary: "An honest assessment of Waveflow, measured rather than claimed: what each potential gain is, how it was tested, the numbers -- including where Waveflow is slower or does less than the alternative -- and what to improve. Starts with simulation speed, agent skills and timing fidelity; agentic design and design-space exploration will follow. Every number names the script that produced it, and the section is expected to change as the measurements do."
 ---
 
 # Evaluation
@@ -34,6 +34,11 @@ measured and on what machine.
   follow its patterns. Six design skills, one test each, one run per arm on Opus and Sonnet: most
   tasks reach the ceiling with the MCP server alone, and the skill's effect shows on the weaker model,
   on details no worked example shows, and on the cost.
+
+- [Timing fidelity](timing_fidelity/index.md) -- whether pysim's cycles match the RTL's, for compositions and
+  not only blocks, and what checking it finds: a ledger of every discrepancy, classified as a pysim error,
+  a real cost, a design flaw or a wrong conclusion drawn from RTL alone. So far 17, of which 5 design flaws
+  and 3 wrong conclusions had passed their RTL gates.
 
 Planned: agentic design end to end (an agent building a block from the docs), and design-space
 exploration (how many design points per hour each fidelity allows).
