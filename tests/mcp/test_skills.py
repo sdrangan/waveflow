@@ -27,6 +27,15 @@ def test_every_shipped_skill_has_a_name_and_a_description():
         assert (sk.SKILLS_DIR / s["name"] / "SKILL.md").is_file()     # name == folder name
 
 
+def test_no_skill_points_into_the_evaluation_folder():
+    """``evaluation/skill_tests/`` holds every skill test's reference answers.  A skill that points an
+    agent there (the device skill once named a worked trial under ``evaluation/skill_tests/results/``)
+    leads it to list the folder and see the answers' file names: two blind runs were discarded for it,
+    2026-11-21.  Point to the guide and the curated examples instead."""
+    for skill_md in sorted(sk.SKILLS_DIR.glob("*/SKILL.md")):
+        assert "evaluation/" not in skill_md.read_text(encoding="utf-8"), skill_md
+
+
 def test_every_skills_front_matter_is_valid_yaml():
     """An agent's loader parses the front matter as YAML; a value it cannot parse loses the skill its
     description -- the text that decides when the skill is loaded -- while ``_front_matter`` here,
@@ -290,3 +299,4 @@ def test_the_system_tests_reference_passes_and_catches_both_broken_devices(tmp_p
     assert r.returncode == 0, r.stdout + r.stderr
     assert "variants caught: 2 of 2; given run passes" in r.stdout, r.stdout
     assert not (work / "_variants.py").exists()
+

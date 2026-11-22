@@ -38,6 +38,9 @@ memory while the lookups are broken: fix them first. Setup details: `ai_tooling/
 
 ## 2. Begin a design
 
+- **The big picture first**: the `waveflow-architecture` skill -- systems, devices, kernels, adaptors,
+  streams -- and how to map an algorithm onto them. Asked "how would I build X", give that map in chat
+  and stop; build (the steps below) only when the person asks.
 - To build an accelerator, **choose the architecture, then follow its process** before writing
   anything: `waveflow_list_frames` (the menu), then `waveflow_get_process(frame)`. If no frame fits,
   pick the closest reference example and follow the generic process (`waveflow_get_process()`).
@@ -57,6 +60,7 @@ step. If a skill is not installed, read its page instead.
 
 | the piece | skill | or read |
 |---|---|---|
+| the big picture: system, DUT, devices, adaptors, kernels; an algorithm mapped onto them | `waveflow-architecture` | `systems/index.md` |
 | a message: a `DataSchema`, fixed point, serializing it in Python and HLS | `waveflow-schema` | `schema/index.md` |
 | a kernel in Python: its streams, the protocol, `run_iter`, its harness test | `waveflow-kernel` | `systems/kernels.md`, `systems/hwmodule.md` |
 | a leaf kernel's HLS body: loops, the lane loop, pragmas, state and reset | `waveflow-kernel-hls` | `vectorization/hls/loop_optimization.md` |
@@ -69,6 +73,13 @@ step. If a skill is not installed, read its page instead.
 - Anything Waveflow generates is never hand-edited: change the Python source and regenerate.
 - Messages and sample bursts are serialized through their schema or the generated array utilities,
   never packed into words by hand.
-- If Waveflow cannot express something, stop and say so rather than working around it.
+- Never work around a gap: no hand-made substitute for a missing block or interface, no edit to a
+  generated file, no word packed by hand.
+- Waveflow is early and meant to grow. When the right design needs something it does not have -- a
+  block, an option, an interface, a generator feature -- do not bend the design around the gap:
+  propose the extension, saying what it is, where it would live and its parts (a bit-exact model,
+  the pysim module, the HLS body, tests, a guide page), following the closest existing block
+  (`StreamBroadcast`, `SsrFft`). Inside the Waveflow repository, build it that way; in a design of
+  your own, ask the user before changing Waveflow.
 - Python simulation needs only Python. Vitis HLS / Vivado (2025.1) are needed only for synthesis and
   RTL simulation; say so rather than skipping a step silently when they are missing.

@@ -157,4 +157,4 @@ ValueError: reorder='fifo': one of ('sob', 'pingpong')
 
 Also refused, in `Geometry`: a radix other than 4, and a scaling mode other than `NO_SCALING` -- the
 modes the per-stage model has measured.  And `pysim="flat"` with `reorder="sob"`: that reorder's
-frames queue inside the chain, which one process would not reproduce. The inverse transform is not built yet.
+frames queue inside the chain, which one process would not reproduce.

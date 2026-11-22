@@ -29,6 +29,7 @@ other agents read it, each from its own folder.
 | skill | use it for |
 |---|---|
 | `waveflow-start` | any task that uses Waveflow: how to look up its API and guide (the MCP tools, or the same commands in a shell), installing Waveflow when a session does not have it, and how to begin a design |
+| `waveflow-architecture` | the big picture of a Waveflow design -- a system around a DUT of devices, memories and the interconnect; a device as kernels plus adaptors; kernels on streams only, leaf or composite -- and how to map an algorithm onto it in a short chat answer: the stages and a rate check, the kernels, what each talks to, the devices, the system, the build order and the skill for each piece |
 | `waveflow-schema` | defining a message as a `DataSchema` (`DataList`, `EnumField`, `FixedField`, arrays) and moving it in Python and in Vitis HLS: serializing it, reading and writing it on a stream or memory, and generating its C++ header |
 | `waveflow-kernel-hls` | writing a Vitis HLS kernel body: one firing per message, the lane loop over packed samples with the generated array utils, `PIPELINE II=1`, state kept across commands, fixed-point datapaths, and the deadlocks and reset traps C simulation does not show |
 | `waveflow-kernel` | writing a kernel from the interfaces its user describes: each one mapped to a stream port and the adaptor it needs (a queue, a register bank, an interrupt, a memory reader or writer), how commands and data travel when the user does not say, the pysim behaviour (`run_iter`), and a harness test that asserts counts |

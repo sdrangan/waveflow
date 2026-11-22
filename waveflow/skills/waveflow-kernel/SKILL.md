@@ -57,8 +57,9 @@ readers and writers, the bus views, a device's HLS top), `waveflow-pipeline` (a 
    the command names it (`mm_fir`'s `cfg_id`), never a count kept at both ends.
 8. **Tests assert counts**: bursts on every output, statuses, `tx_id`s in order, nothing after a fatal
    error. A deadlock in simulation looks like a run that finished.
-9. **If Waveflow cannot express an interface, stop and say so** (check `interface/axi_mm/slave.md`,
-   "What is not built yet"). Do not work around it with a hand-made substitute.
+9. **If Waveflow cannot express an interface, do not work around it** with a hand-made substitute
+   (check `interface/axi_mm/slave.md`, "What is not built yet", first). Propose the extension that
+   would express it, as `waveflow-start`'s rules say: Waveflow is early and meant to grow.
 
 ## Choosing how commands and data travel -- and saying so
 

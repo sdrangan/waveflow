@@ -43,8 +43,8 @@ system around them and the tests that keep them honest.
 9. **At RTL, `compare` is the gate** (RTL against pysim, word for word, from the same scenario; a host's
    traces byte for byte), plus an **exact cycle count** with the tool version beside it, and hostile
    stand-ins (`add_robustness_steps`, `flows/units_hostile.md`). None proves timing (`systems/calibration.md`).
-10. **If Waveflow cannot express it, stop and say so** (`build/xsi_system.md`, *What it does not do
-    yet*), rather than wiring around it.
+10. **If Waveflow cannot express it, do not wire around it** (`build/xsi_system.md`, *What it does not
+    do yet*): say so and propose the extension that would express it (`waveflow-start`, its rules).
 
 ## Which page to read before which step
 

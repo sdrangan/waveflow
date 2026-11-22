@@ -38,9 +38,10 @@ Words that matter: **kernel** (streams only) vs **adaptor** vs **device**; a com
 | `waveflow-schema` | DataSchema, fields, fixed point, tagged unions, HLS serialize, array utils, header generation | done; blind-tested (51-54 of 54 both arms) |
 | `waveflow-kernel` | a kernel in Python: the stream for each thing it talks to, command-response, `run_iter`, the harness test that asserts counts | done (renamed from `waveflow-module`, #326); blind-tested as the module skill (49-52 of 52) |
 | `waveflow-kernel-hls` | a leaf kernel's HLS body: loop shapes, the lane loop, state and reset, deadlocks | done (renamed from `waveflow-hls-body`, #326); blind-tested (43-44 of 44) |
-| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | **written, test and reference written (#326); no blind runs yet** |
-| `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | **written, test and reference written (#326); no blind runs yet** |
-| `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | **written, test and reference written (#326; the test hides a deadlock and a dropped word); no blind runs yet** |
+| `waveflow-device` | adaptors and devices: memory readers and writers, slave adaptors, credit, BRAM, `MemoryMod`, the HLS top and sub-top | done; blind-tested 2026-11-21 (MCP 49 / 44, skill 50 / 50 of 50 after two fixes) |
+| `waveflow-pipeline` | composite kernels: stages, internal depths, `StreamBroadcast`, a token per job, the last stage answers | done; blind-tested 2026-11-21 (MCP 44 / 44, skill 46 / 46 of 46 after one fix) |
+| `waveflow-system` | `HwSystem`, the harness and the cut, the build DAG, tests that count | done; blind-tested 2026-11-21 (all four 48 of 48, both hidden faults caught by every run; redundant for this task) |
+| `waveflow-architecture` | the step before all the others: the architecture question for an algorithm, answered in chat in under a minute (the structure that collapses the work, a block diagram, the key trade-offs, one rate and one memory check, a recommendation) | written 2026-11-21 (with `systems/library.md`); the four-document plan dropped the same day; **no test yet** |
 
 **Done since the last rewrite:** the migration (renames, the installer's `RETIRED` map removing
 unchanged retired copies, tests and docs renamed, result files annotated) and the link sweep for the
@@ -53,11 +54,19 @@ agent's loader dropped the description -- the text that decides when a skill loa
 `fix/skill-front-matter`. **The module skill's four blind runs used that broken description**: it
 loaded anyway (on its name, at the second call), but its trigger was never tested.
 
+**Blind runs for device, pipeline and system (2026-11-21):** four each plus reruns of the skill arms
+after fixes; results in `evaluation/skill_tests/results/{device01,pipeline01,system01}_2026-11-21.md`
+and `docs/evaluation/agent_skills/{device,pipeline,system}.md`. The device skill's pointer into
+`evaluation/` leaked the answers' file names (two runs discarded;
+`test_no_skill_points_into_the_evaluation_folder` now guards it); the device self-check gained the protocol and "what RTL still
+needs"; the pipeline skill gained the token-id check and the cost of each broadcast option. The MCP
+arms of device and pipeline stop at the frame's Stage 1 review and need one `--resume --message
+"Approved. Continue."`; the skill arms never stop (an open question for the frames process).
+
 ## Next
 
-1. **Blind runs for device, pipeline and system** -- four each (Opus, Sonnet x MCP, MCP + skill), the
-   recipe below. Their tests, references and review sheets are in `evaluation/skill_tests/{device,
-   pipeline,system}/`; the references pass in `tests/mcp/test_skills.py`.
+1. **Harder second tests** where no worked example carries the MCP arm (device: two readers or a
+   credit stream; pipeline: three stages sized together; system: an overlapping host window).
 2. **Trigger prompts** for every skill (`evaluation/skill_tests/*/trigger_prompts.md`), never run.
    Now that the descriptions parse, this is the first real test of whether each skill loads when it
    should. Run on Sonnet.
@@ -68,6 +77,107 @@ loaded anyway (on its name, at the second call), but its trigger was never teste
    them; 6, `MemStreamStep` copies other examples' bodies into a user's `include/`; 8, the smaller
    points (the generated top's `m_done` has no TLAST with `done_framed=True`; no frame for "one kernel
    plus memory"; `vecmult` misleads by its name).
+4. **The architecture skill**: a tier-1 test -- a PRACH-style question timed to the first answer, scored
+   on the structure found, the trade-offs named and the sourced checks.
+
+## The architecture skill (planned, 2026-11-21)
+
+**Who it is for.** A communications / wireless engineer with no hardware experience who takes an
+algorithm from a paper and asks an agent to "make it hardware". The skill's job is to give them a solid
+plan -- the agent does the work, the user confirms the decisions.
+
+**The gap.** Unprompted, a frontier model goes straight to code: one kernel that mirrors the paper's
+equations, float or arbitrary fixed-point widths, and no question about the rate, the deadline or the
+part. It can do each piece of architectural reasoning when asked; it does not start there. Nothing in
+Waveflow starts there either: every skill above begins from a decided architecture (`waveflow-kernel`
+"from the interfaces a user describes"), and the frames' Stage 1 assumes the frame -- the architecture --
+is already chosen. This skill comes first, and its output is what Stage 1 takes.
+
+**The output: four documents, in order** (under `plans/` in the user's design folder; content
+prescribed, prose free; a small design may put the sections in one file, but not reorder them). The
+hwdesign course's project-outline rubric (function precise, why hardware, sub-modules, interfaces with
+their kind and contents, no monolith, existing IP, next steps) is the **floor** of `spec.md` + `arch.md`;
+the skill does more than the course asks of students.
+
+1. **`spec.md` -- what.** Defined before anything is sized.
+   - Inputs and outputs: each one's type, shape and precision.
+   - The operation, precisely enough that two engineers would build the same function: equations, edge
+     cases (n = 0, a singular matrix, overflow), and the **golden model** as its executable definition
+     (the golden Stage 1 wants anyway).
+   - Why it suits hardware, **as numbers**: op count, arithmetic intensity, and the CPU baseline priced by
+     the A53 platform's `SwFunction` models (`docs/guide/cpu/`) against the requirement.
+   - Requirements: rate, block size, latency budget, antennas / users / layers, part and clock (for NR,
+     from the numerology). Each a number with its assumption.
+   - **Workload**: what actually arrives -- the sizes, the mix of commands, the range of `n`, how often
+     the expensive path runs. Papers rarely state it; the agent proposes it. Requirements say what must
+     be met; the workload makes `eval.md` honest (a detector sized for the worst-case antenna count that
+     mostly runs 2x2 has a different utilization).
+   - **Checkpoint**: the user confirms the operation, the requirements and the workload.
+2. **`arch.md` -- how.** Two or three **alternatives**, each:
+   - the HW / SW split with a reason (rate-critical inner loops to kernels; control and rare paths to
+     `SwFunction` threads on `Processor`);
+   - blocks as kernels, adaptors and devices in the concept pages' words (`systems/kernels.md`,
+     `devices.md`), none monolithic;
+   - an interface table: each connection's kind, what it carries (a schema sketch), its width and the rate
+     it must sustain; command-response by default (`command_response.md`);
+   - **existing Waveflow blocks first**: for each block, search the library before designing one --
+     `docs/guide/dsp/` (`SsrFft`, `SystolicEngine`, `SystolicEngineMem`, `VecUnit`), `docs/guide/vitis_l1/`
+     (AMD's blocks wrapped), the memory adaptors (`MemRStream`, `MemWStream`), the RF edge (`Rfdc`), the
+     CPU (`Processor`); `waveflow kb search` in the user's words. Name the block, the guide page, and
+     whether it has a calibrated timing / resource model. A block built by hand is a stated choice
+     ("no library block does X").
+   - **Checkpoint**: the user picks among the alternatives -- after `eval.md` has priced them.
+3. **`eval.md` -- does it fit.** For each alternative, no simulation: op counts weighted by the workload;
+   per block II, latency and resources; the bottleneck; the pipelining or replication that meets the
+   rate; utilization. A library block's numbers come from its model; for now the skill reads them from
+   the block's guide page and cost module, and **later the timing and resource skills** (not yet written)
+   do that lookup -- the skill names them as the place to go once they exist. Not fitting sends the
+   design back to `arch.md`; this loop is the design work.
+4. **`blocks/<name>.md` -- a spec per block**: ports, messages, rate, II and latency budget, resources,
+   and the library block it uses if any; handed to the matching frame's Stage 1.
+
+Each document ends with **open questions** -- what the user still has to decide, most important first.
+
+**The rule that makes it Waveflow's: every number names its source** -- a calibrated model
+(`waveflow/linalg/cost.py` for the systolic engine, `waveflow/vecunit/calib.py`, the CPU platform's
+`SwFunction` models, the platform bus calibration, the resource model `docs/guide/resource_model/`), a
+formula from `docs/guide/vectorization/hls/loop_optimization.md` (the lane loop: words per iteration,
+II=1), or a stated assumption. A block no model covers is **"unknown -- needs a csynth probe"**, never a
+guess. Confident made-up numbers are the failure this rule exists for. `eval.md` prices points of
+`systems/dse.md` ("models price a point without building it"); a sweep is the later step.
+
+**The test** (the recipe below): two or three algorithms from papers -- e.g. MMSE MIMO detection (the
+systolic engine and VecUnit fit: tests reuse), OFDM least-squares channel estimation (the SSR FFT fits),
+an LDPC decoder (no library block, no calibrated model: tests the "unknown" rule). Each spec gives the
+paper's algorithm and the application, not the numbers. Review-sheet items: the course rubric's items
+for `spec.md` + `arch.md`, plus: requirements and workload stated with assumptions and confirmed; ops
+counted and the real bottleneck found; the CPU baseline priced; alternatives compared in `eval.md`; the
+fitting library blocks found and named with their pages; a source for every number; per-block II within
+~2x of csynth (Vitis 2025.1) on the reference; the uncovered block marked unknown; stops at each
+checkpoint and before code. Run without the skill as well -- the point is whether the MCP arm does this
+unprompted (the expectation: it does not).
+
+**Depends on, later:** the timing and resource skills, which `eval.md` hands its library-block lookups to.
+**A gap to check first:** there is no single catalog of library blocks with their models' state (calibrated
+timing? resources?); `docs/guide/dsp/index.md` lists the DSP blocks but not the rest, nor the models. If
+`waveflow kb search` does not find the right block from a comms engineer's words, add one page that does.
+
+**Written (2026-11-21).** `waveflow/skills/waveflow-architecture/SKILL.md`; the gap was real (`waveflow kb
+search` found no catalog for "matrix inverse", "LDPC decoder" or "which library blocks exist"), so
+`docs/guide/systems/library.md` (*Library blocks and their models*) lists every reusable block in a comms
+engineer's words with the state of its models, what no block covers, how to price a point (the calls,
+the formulas), and the part's capacity; linked from the flow table, the glossary and the DSP index.
+**Then the written plan was dropped** (the user, 2026-11-21): not obviously a good plan in general, and it
+slows the fast interactions agents are good at. The four-document version, and its MMSE test and
+reference (golden, `price.py`), are kept outside the repo as a student-project handout; they are in git
+history at commit e882291.
+Decided: a skill, not a frame (a frame's process starts from a chosen frame; this skill ends by naming
+one per block). Not added: a numerology table -- the skill says to derive from the standard's tables and
+cite them; the blind runs will show whether agents get NR's numbers right without one.
+
+**Open questions (as planned).** Whether this is a skill or a frame (`waveflow frames`: an "architecture" frame whose
+process ends where the others begin); whether the requirements step needs a small table of standard
+numerologies to keep agents from inventing them.
 
 ## The recipe for one skill
 
@@ -110,6 +220,10 @@ loaded anyway (on its name, at the second call), but its trigger was never teste
 - **Front matter must be valid YAML.** An unquoted `: ` in a description drops it in the agent's
   loader while Waveflow's own line parser reads it fine; `tests/mcp/test_skills.py` now checks.
 - **Small models may not load the skill at all** (Haiku 4.5 never did).
+- **Never point a skill into `evaluation/`**: the answers live there, and an agent that follows the
+  pointer lists the folder (device v1, two runs discarded). Point to the guide and curated examples.
+- **A point every run misses is the skill's to give** (pipeline B4 / D2: all four runs, both arms).
+- **Check the transcript for reads of the checkout** (`evaluation/`, `answers/`) before scoring a run.
 - **`--setting-sources project` does not hide built-in or account-plugin skills**; both arms see the
   same set, so the comparison holds.
 - No wall-clock times on this laptop (it is in use): report turns and tokens.
