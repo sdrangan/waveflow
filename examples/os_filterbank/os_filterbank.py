@@ -51,6 +51,7 @@ from waveflow.hw.interface import (FramedStreamIFMaster, FramedStreamIFSlave, St
                                    StreamIFSlave)
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.streams import StreamArbiter, StreamDemux
+from waveflow.streams.arbiter import copy_burst
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils as fp
 from waveflow.utils.burst_io import StreamBurst
@@ -306,6 +307,32 @@ def _ep(cls, owner, name: str, bw: int):
     return ep
 
 
+#: What the stages' bodies spend beyond a word a cycle, in cycles: each loop's entry or exit, read off the
+#: bank's traced RTL (Vitis / xsim 2025.1, xczu48dr at 250 MHz; ``python -m examples.os_filterbank.fidelity``),
+#: at its least -- the stage idle, nothing queued (``plans/osfb_pysim_fidelity.md``, causes C and D).
+#: The words themselves move a word a cycle as the bodies move them: a buffered burst is read at a word a
+#: cycle (``end_read(charge_beats=True)``), post's inverse pass copied through as its words arrive.
+STAGE_CYC = {
+    "front_job": 11,    # front: the Job header read -> the block's READ loop (the CLEAR loop, a new firing)
+    "front_tag": 1,     # front: the block's last word read -> the tag written (READ loop exit)
+    "front_frame": 2,   # front: the tag -> the frame's first word (WRITE loop entry)
+    "post_mul": 4,      # post, pass 0: the FFT frame's last word read -> the feedback tag (MUL loop drain)
+    "post_fb": 2,       # post, pass 0: the feedback tag -> its first word (FB loop entry)
+    "post_ans": 5,      # post, pass 1: the FFT frame's first word -> the answer's first (OUT loop: PW words dropped)
+}
+
+
+def _cycles(mod, key: str):
+    """Wait ``STAGE_CYC[key]`` of *mod*'s cycles (nothing at all for 0)."""
+    if STAGE_CYC[key] > 0:
+        yield mod.env.timeout(STAGE_CYC[key] * mod.clk.period)
+
+
+def _until(mod, t: float):
+    if t > mod.env.now:
+        yield mod.env.timeout(t - mod.env.now)
+
+
 @dataclass
 class OsFront(FreeRunMod):
     """Channel ``ch``'s front: per block, wait for a credit, read its ``BW`` new words, and send the frame
@@ -337,17 +364,25 @@ class OsFront(FreeRunMod):
                           framed=ports)
 
     def run_iter(self):
+        """As the body: a Job header (then its ``CLEAR`` loop); a credit when ``CR`` blocks are out; the
+        block read a word a cycle (``READ``), then the tag and the frame (``WRITE``), with the loops'
+        entries and exits the RTL spends (:data:`STAGE_CYC`)."""
         if self.left == 0:
             self.job = yield from self.s_in.get_schema(Job)
             self.left, self.blk = int(self.job.nblk), 0
             self.hist = np.zeros_like(self.hist)
+            yield from _cycles(self, "front_job")
         if self.inflight == CR:
             yield from self.s_crd.get_schema(Crd)
             self.inflight -= 1
-        new = np.asarray((yield from self.s_in.get()), dtype=np.uint64)
+        x = yield from self.s_in.begin_read()
+        yield from self.s_in.end_read(x, charge_beats=True)
+        new = np.asarray(x.data, dtype=np.uint64)
         frame = np.concatenate([self.hist, new])
+        yield from _cycles(self, "front_tag")
         yield from self.m_blk.write(Tag(tx_id=self.job.tx_id, ch=int(self.ch), blk=self.blk,
                                         nblk=self.job.nblk, npass=0))
+        yield from _cycles(self, "front_frame")
         yield from self.m_blk.write(frame)
         self.hist = frame[-PW:]
         self.inflight += 1
@@ -394,12 +429,14 @@ class OsPre(FreeRunMod):
                           template_args=(NW,), framed=("s_frm", "s_sel", "m_tag"))
 
     def run_iter(self):
+        """As the body: the index, the tag (on to ``post``), the direction, then the ``NW`` words copied to
+        the FFT as they arrive (``copy_burst``: the HLS ``COPY`` loop reads a word and writes it), not
+        once the whole frame is in (``plans/osfb_pysim_fidelity.md``, cause B)."""
         sel = np.asarray((yield from self.s_sel.get()), dtype=np.uint64).reshape(-1)
         tag = yield from self.s_frm.get_schema(Tag)
-        words = yield from self.s_frm.get()
         yield from self.m_tag.write(tag)
         yield from self.m_dir.write(np.asarray([1 if int(sel[0]) == 0 else 0], dtype=np.uint64))
-        yield from self.m_x.write(np.asarray(words, dtype=np.uint64))
+        yield from copy_burst(self.s_frm, self.m_x)
 
 
 @dataclass
@@ -434,14 +471,15 @@ class OsPost(FreeRunMod):
         return KernelTask("os_post_task", "os_post_task.h", ports, template_args=(C, NW, PW),
                           framed=("s_coef", "s_tag", "m_fb", "m_ans", "m_st", "m_crd"))
 
-    def _frame(self):
-        """Exactly ``NW`` words off the FFT, which frames by count (``get`` may deliver them in pieces)."""
-        parts, have = [], 0
+    def _rest(self, have: int):
+        """The rest of an FFT frame, which frames by count (``get`` may deliver it in pieces), past the
+        *have* words already read."""
+        parts = []
         while have < NW:
             got = np.asarray((yield from self.s_y.get(nwords_max=NW - have)), dtype=np.uint64)
             parts.append(got.reshape(-1, _chunks(W_ANS)))
             have += parts[-1].shape[0]
-        return np.concatenate(parts)
+        return np.concatenate(parts) if parts else np.zeros((0, _chunks(W_ANS)), dtype=np.uint64)
 
     def run_iter(self):
         if self.nloaded < C:
@@ -451,16 +489,35 @@ class OsPost(FreeRunMod):
             self.nloaded += 1
             return
         tag = yield from self.s_tag.get_schema(Tag)
-        y = yield from self._frame()
         ch = int(tag.ch)
+        # As the body: the FFT's frame read a word a cycle as it arrives (MUL / OUT loops), with the loops'
+        # entries and exits the RTL spends (STAGE_CYC).  A frame that comes in pieces is read whole first.
+        x = yield from self.s_y.begin_read(pending_ok=True)
+        whole = x.nwords == NW
         if int(tag.npass) == 0:
+            yield from self.s_y.end_read(x, charge_beats=True)
+            y = (np.asarray(x.data, dtype=np.uint64).reshape(-1, _chunks(W_ANS)) if whole
+                 else np.concatenate([np.asarray(x.data, dtype=np.uint64).reshape(-1, _chunks(W_ANS)),
+                                      (yield from self._rest(x.nwords))]))
             yr, yi = unpack(y, E_OUT)
             pr, pi = multiply(yr, yi, self.h_re[ch], self.h_im[ch])
+            yield from _cycles(self, "post_mul")
             yield from self.m_fb.write(Tag(tx_id=tag.tx_id, ch=ch, blk=tag.blk, nblk=tag.nblk, npass=1))
+            yield from _cycles(self, "post_fb")
             yield from self.m_fb.write(pack(pr, pi, E_IN))
             return
         yield from self.m_ans.write(Resp(ch=ch, tx_id=tag.tx_id, blk=tag.blk))
-        yield from self.m_ans.write(y[PW:])
+        if whole:                    # the OUT loop: the answer's words leave as the frame's arrive
+            y = np.asarray(x.data, dtype=np.uint64).reshape(-1, _chunks(W_ANS))
+            yield from _until(self, x.first + STAGE_CYC["post_ans"] * self.clk.period)
+            w = yield from self.m_ans.begin(y[PW:])
+            yield from self.s_y.end_read(x, charge_beats=True)
+            yield from self.m_ans.end(w)
+        else:
+            yield from self.s_y.end_read(x)
+            y = np.concatenate([np.asarray(x.data, dtype=np.uint64).reshape(-1, _chunks(W_ANS)),
+                                (yield from self._rest(x.nwords))])
+            yield from self.m_ans.write(y[PW:])
         if int(tag.blk) == int(tag.nblk) - 1:
             yield from self.m_st.write(Status(ch=ch, tx_id=tag.tx_id, status=StatusCode.OK))
         yield from self.m_crd.write(Crd(ch=ch))

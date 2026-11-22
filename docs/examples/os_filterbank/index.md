@@ -103,12 +103,18 @@ Every recording equals pysim's, and none is empty.
 481, before channel 0's first (three blocks, cycle 737); channel 1, with one five-block job, finishes
 last. `test_rtl_timing_is_exact` pins each channel's last status.
 
-**The FFT is busy under half the time, and `post` is why.** A frame takes the FFT 16 cycles (`L/R`). It
-takes `post` 43: it reads and multiplies the frame (16), then writes the whole product back (17), one
-after the other, as the store-and-forward rule asks. "FFT busy" is the frames times 16 over the run,
-from the counts, not a measurement at the FFT's ports. Splitting `post` in two -- a multiply stage, and
-a stage that writes the feedback frame from a buffer -- would let the FFT run nearer its rate. The
-example keeps the simpler stage.
+**The FFT is busy under half the time, and the FFT's own interval after a gap is why.** A frame takes the
+FFT 16 cycles (`L/R`) back to back, but a frame that follows its predecessor after any idle cycle leaves
+`max(2L/R, L/R + g)` after it ([its timing](../../guide/dsp/ssr_fft/timing.md)), and here `pre` leaves at
+least a cycle between frames: in the traced RTL the FFT's frames leave exactly 32 cycles apart throughout
+`long`, so it can be at most half busy. `post` comes next: 39-40 cycles a forward frame (it reads and
+multiplies the frame, 16, then writes the whole product back, 17, one after the other, as the
+store-and-forward rule asks) and 19-22 an inverse one, about 30 on average, so it is busy 91% of `long`
+and would bind if the FFT kept its rate. "FFT busy" is the frames times 16 over the run, from the counts.
+(Measured on the traced run, Vitis / xsim 2025.1: `python -m examples.os_filterbank.fidelity`,
+`plans/osfb_pysim_fidelity.md`; this paragraph used to name `post` alone.) Both are open: the FFT's half
+rate after a gap (`plans/ssr_fft_gap_throughput.md`), and splitting `post` in two -- a multiply stage, and
+a stage that writes the feedback frame from a buffer. The example keeps the simpler stage.
 
 csynth (estimates) for the bank: 40 DSP (24 in the FFT, 16 in `post`'s multiply), 80 BRAM (mostly the
 loop's FIFOs, the feedback link's 102 words the largest), 16193 FF, 19243 LUT. Every loop at II = 1,

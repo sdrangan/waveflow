@@ -662,6 +662,78 @@ def fft_tasks(length: int = 64, direction: str = "runtime", gap: int = 1, n_fram
     return out
 
 
+# --- an experiment for the user's decision: how SsrFft's rule counts a gap ----------------------------------------
+
+
+def rule_variants() -> dict:
+    """**An experiment, for a decision** (``plans/osfb_pysim_fidelity.md``): the bank's end cycle with
+    ``SsrFft``'s gap rule counting a gap three ways, the FFT's pysim flat (the rule at its input, where the
+    source's stamps are), and each against the recorded driver runs (the pins).  It PATCHES ``GapRhythm`` and
+    the bank's FFT inside this process only; no file changes.
+
+    ``relative`` (the model as built): the gap is the input's raw spacing less a frame, the frame starts
+    ``prev + max(2L/R, L/R + gap)``.  ``net``: the bubble from the previous frame's delivery (where pysim
+    released the source) to this frame's first word, counted the same way.  ``absolute``: the frame starts
+    ``max(arrival, prev + 2L/R)`` after a gap, ``prev + L/R`` back to back."""
+    import tempfile
+
+    from waveflow.dsp.ssr_fft import hw
+    from waveflow.dsp.ssr_fft.testbench import pysim_frame_cycles, run_pysim
+    from waveflow.hw.harness import harness
+
+    mode = {"v": "relative"}
+    orig_start, orig_init, orig_fft = hw.GapRhythm.start, hw.SsrFft.__post_init__, fb.SsrFft
+
+    def start(self, arrival, earliest):
+        ep = getattr(self, "ep", None)
+        if mode["v"] == "relative" or ep is None:
+            return orig_start(self, arrival, earliest)
+        frame, per = self.n * self.per, self.per
+        if self.prev_arrival is None:
+            s = earliest
+        elif mode["v"] == "net":
+            bubble = (arrival - per) - self.prev_delivered
+            s = max(earliest, self.prev_start + (frame if bubble < 0.5 * per else max(2 * frame, frame + bubble)))
+        else:
+            gap = arrival - (self.prev_arrival + frame)
+            s = max(earliest, self.prev_start + (frame if gap < 0.5 * per else 2 * frame))
+        self.prev_arrival, self.prev_start, self.prev_delivered = arrival, s, ep.last_stamp.delivered
+        return s
+
+    def post_init(self):
+        orig_init(self)
+        if getattr(self, "_flat_rhythm", None) is not None:
+            self._flat_rhythm.ep = self.tasks[0].s_in
+
+    rtl = {k: rtl_ends(k)["end"] for k in KINDS}
+    out = {}
+    hw.GapRhythm.start, hw.SsrFft.__post_init__ = start, post_init
+    fb.SsrFft = lambda **kw: orig_fft(pysim="flat", **kw)
+    try:
+        for v in ("relative", "net", "absolute"):
+            mode["v"] = v
+            row = {}
+            for kind in KINDS:
+                sysm = harness(fb.OsFilterBank, workload=kind, n_cycles=N_CYCLES[kind])
+                sysm.run()
+                row[kind] = round(sysm.sim.env.now / sysm.clock().period)
+            for length in (64, 256, 1024):
+                d = json.loads((WORK / f"fft_rule_L{length}_runtime.json").read_text(encoding="utf-8"))
+                g, want = d["random"]["gaps"], d["random"]["rtl_interval"]
+                with tempfile.TemporaryDirectory() as r:
+                    tb = run_pysim(Path(r), length=length, n_frames=len(g) + 1, burst_gaps=g, reorder="pingpong",
+                                   direction="runtime", dirs=list(FFT_DIRS), pysim="flat")
+                    got = [round(float(x)) for x in np.diff(pysim_frame_cycles(tb))]
+                row[f"driver_L{length}_exact"] = sum(a == b for a, b in zip(got, want))
+            out[v] = row
+            print(f"{v:9s}: " + ", ".join(f"{k} {row[k]} ({pct(row[k], rtl[k])})" for k in KINDS)
+                  + "; driver random runs exact: "
+                  + ", ".join(f"L{n} {row[f'driver_L{n}_exact']}/23" for n in (64, 256, 1024)), flush=True)
+    finally:
+        hw.GapRhythm.start, hw.SsrFft.__post_init__, fb.SsrFft = orig_start, orig_init, orig_fft
+    return out
+
+
 # --- main ----------------------------------------------------------------------------------------------------
 
 
@@ -675,7 +747,14 @@ def main(argv=None) -> int:
                     help="only SsrFft alone (cause A; Vitis / xsim): at each L, frames a constant gap apart, "
                          "random gaps frame by frame, and a traced run's per-task rhythm")
     ap.add_argument("--direction", default="runtime", choices=("runtime", "fixed"))
+    ap.add_argument("--rule-variants", action="store_true",
+                    help="only the experiment: the bank under three countings of SsrFft's gap (patched here)")
     a = ap.parse_args(argv)
+    if a.rule_variants:
+        res = rule_variants()
+        WORK.mkdir(parents=True, exist_ok=True)
+        (WORK / "rule_variants.json").write_text(json.dumps(res, indent=1) + "\n", encoding="utf-8")
+        return 0
     if a.fft_gaps is not None:
         WORK.mkdir(parents=True, exist_ok=True)
         for length in a.fft_gaps or [fb.L]:

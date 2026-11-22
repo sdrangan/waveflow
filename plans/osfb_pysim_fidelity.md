@@ -1,10 +1,10 @@
 # Plan: why os_filterbank's pysim runs 17-27% short of its RTL, and a gate so it cannot drift again
 
 **Status: ACCEPTED 2026-11-22 (the user), for a lab machine with Vitis / Vivado 2025.1. Steps 1-3 DONE
-2026-11-22 (`examples/os_filterbank/fidelity.py`; the record is Section 5). Cause A's fix APPROVED by the user
-2026-11-22, rule first (Section 6): confirmed exact and deterministic at `L = 64, 256, 1024` (the last
-transposer commutator sets it), but at `L = 16` the intervals SPREAD (an arrival-phase jitter, no throughput
-lost) -- so, as the approval says, STOPPED before modelling, for the user.**
+(`examples/os_filterbank/fidelity.py`; Section 5). Step 4: cause A modelled in `SsrFft` (Section 6, exact
+against every driver measurement at `L = 64 .. 4096`), B, C, D done in the example's stages, open question 2
+re-measured and the page corrected; STOPPED for the user on two decisions (Section 8): how `SsrFft`'s rule
+counts a gap (the bank lands at -2.6% / +0.0% one way, +19.9% / +17.2% the other), and E, F, H (framework).**
 Written by the cloud planning session from `plans/stream_dispatch.md` Stage 8's record (commits `4552413`,
 `03a9b4f`). Branch `ccr-62d70dbe-679k63`; pull first, commit and push after each step.
 
@@ -136,6 +136,10 @@ recorded number moves.
 | 2026-11-22 | 4 (A, rule first) | The user approved cause A's fix, the rule confirmed first (Section 6). `fidelity.py --fft-gaps 64 16 256 1024` (`SsrFft` alone, constant and random gaps, a traced run; Vitis / xsim 2025.1; every frame bit-exact): **exact and deterministic at `L = 64, 256, 1024`** -- every constant gap and 23 of 23 random intervals follow `max(2L/R, L/R + g)` -- set by the last transposer commutator (`tp1`, `tp2`, `tp3`). **At `L = 16` the intervals spread**: 16 of 23 random intervals, off by -4 to -1; there the FFT loses no throughput (its intervals sum to `L/R + g`, which today's pysim matches in total) but each frame's latency moves 40-43 cycles with the gaps before and after it, an arrival-phase effect. **Stopped before modelling**, as the approval says, for the user (proposal in Section 6). Two open questions noted (Section 7). |
 | 2026-11-22 | 4 (A, the model) | The user approved the rule where `L >= 64`, `L = 16` as it is. **`L = 4096` measured** (`fidelity.py --fft-gaps 4096`, Vitis / xsim 2025.1): every constant gap and 23 of 23 random intervals follow the rule, set by `tp4`. **The model** (`waveflow/dsp/ssr_fft/hw.py`, `GapRhythm`): `tp{S-2}` at `L >= 64`, and the flat pysim at its boundary (its pin against the chain holds); pysim now equals the RTL on **every** measured interval at `L = 64, 256, 1024, 4096` (constant and random gaps). `tests/dsp/ssr_fft/test_hw.py`: `test_composite_pysim_keeps_the_rtl_interval_after_a_gap` (64, 256, 1024, 4096) and `test_composite_pysim_at_l16_is_within_three_cycles_a_frame`; the back-to-back pins did not move (138 FFT tests pass). **`L = 16` corrected**: within 3 cycles a frame and the same total on random gaps, but at constant gaps of 1-3 cycles the RTL falls up to 13 cycles behind over 11 frames (it alternates 8 and 4 at a 1-cycle gap) -- not "exact in total"; so stated in the model and `timing.md`, which now gives the rule, its tables, and no longer says "`L/R` by construction". |
 | 2026-11-22 | 3 again (after A) | `fidelity.py --timeline --attribute`, the RTL unchanged. **End cycle, RTL / pysim before A / after A**: `test` 1,067 / 901 (-15.6%) / **1,228 (+15.1%)** with the arbiter timed, 885 (-17.1%) / 1,263 (+18.4%) untimed; `long` 2,424 / 1,800 (-25.7%) / **2,540 (+4.8%)** timed, 1,766 (-27.1%) / 2,621 (+8.1%) untimed. pysim now **overshoots**. Attribution after A (timed; sums exact): `test` (gap -161) A -48, A2 -119, B -39, C +21, D +15, E +5, F +4, G +12, H -12; `long` (gap -116) A -97, A2 +1, B -13, C -11, E +1, F +3, G +12, H -12. Why A now overshoots in the bank: the FFT's frames leave 32 cycles apart at RTL throughout `long`, but in pysim 33, 34 or 47 at times (24 of 71): the rule counts a gap as its source made it -- right for a source the FFT stalls (every driver measurement, exactly) -- and pysim's `pre` is neither stalled by the FFT (its links hold a whole frame, its tasks four) nor cut-through (cause B), so its own spacing, at times over 32, is charged in full. The diagnosis, to be tested by B: A's residual here comes from how pysim's `pre` feeds the FFT (B, and the back-pressure pysim lacks, H4), not from the FFT's rule. Fast suite: 6,094 passed, 9 failed (the known environment set). |
+| 2026-11-22 | 4 (B) | `pre` copies the frame to the FFT as its words arrive (`copy_burst`, as the HLS `COPY` loop), no longer once the whole frame is in. End cycle with the arbiter timed, after A / after B: `test` 1,228 / 1,212 (+13.6%), `long` 2,540 / 2,524 (+4.1%). B's share: -39 -> +9 (`test`), -13 -> +3 (`long`). |
+| 2026-11-22 | 4 (C, D) | `post` and `front` do what their bodies do (`os_filterbank.STAGE_CYC`, read off the traced RTL at each loop's least): `front` reads its block a word a cycle (`end_read(charge_beats=True)`), its Job header's `CLEAR` loop 11 cycles, its loops' exit and entry 1 and 2; `post` reads the FFT's frame as it arrives, pass 0 the `MUL` loop's drain 4 and the `FB` loop's entry 2, pass 1 the `Resp` first and the answer copied through, from the frame's first word plus 5. Checked: every `post` hop's least now the RTL's (y last -> feedback tag 5, tag -> words 3; y first -> answer 6, its end 2 after y's). G (the first frame's start) +12 -> +1, D +15 -> +3. End cycle (timed): `test` 1,279 (+19.9%), `long` 2,841 (+17.2%): the stages are right, and with `post` as slow as the RTL's the loop backs up in pysim and A's counting charges the back-up again (A -414 of -417 on `long`). Attribution (timed): `test` A -76, A2 -185, B +9, C +39, D +3, E +5, F +4, G +1, H -12 (gap -212); `long` A -414, A2 +1, B +3, C 0, E +1, F +3, G +1, H -12 (gap -417). |
+| 2026-11-22 | 4 (A, counting) | **An experiment for the decision** (`fidelity.py --rule-variants`: patches the rule in its own process, the FFT flat): counting a gap from the previous frame's start (as built), the bank ends at 1,277 / 2,839 (+19.7% / +17.1%); from the arrivals (`max(arrival, prev + 2L/R)`), **1,039 / 2,425 (-2.6% / +0.0%)**; net of pysim's own stall, as built (pysim's `pre` is not stalled). The arrival counting misses the driver measurements, though: 17, 19, 19 of 23 random intervals at `L = 64, 256, 1024` (as built: 23 of 23). Why: at RTL a stalled driver offers its next frame only its gap after the FFT took its last word, and pysim's links (a whole frame each) do not stall it so; in the bank `pre`'s frames come when their data does. Section 8. |
+| 2026-11-22 | open question 2 | Re-measured on the traced RTL (Vitis / xsim 2025.1): the FFT's frames leave 32 cycles apart throughout `long` (cause A: at most half busy; busy 48%), while `post` takes 39-40 cycles a forward frame and 19-22 an inverse one, about 30 on average, busy 91% of `long`. So the FFT's own half rate after a gap is why it is under half busy; `post` would bind next. `docs/examples/os_filterbank/index.md` corrected (it named `post` alone). |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -257,3 +261,36 @@ error), rather than a mean with an error for every length. `L = 4096` is not mea
    against cause A. A first look (Step 3): on the RTL's critical path the binding hop is the FFT's own
    32-cycle rhythm (71 of 149 hops on `long`), and `post` averages about 31 cycles a frame (about 43 on a
    forward pass, about 20 on an inverse), under the FFT's 32. Not yet re-measured as the page would need.
+
+## 8. Where Step 4 stopped (2026-11-22): two decisions for the user
+
+**1. How `SsrFft`'s gap rule counts a gap.** The rule is measured exactly (Section 6); what pysim cannot see is
+when the source would offer its next frame at RTL, because pysim's links hold a whole frame and do not stall a
+source word by word (H4). Two countings, each exact for one kind of source:
+
+| counting | the drivers (the pins) | the bank, `test` / `long` (after B, C, D) |
+|---|---|---|
+| from the previous frame's start (as built): `prev + max(2L/R, L/R + g)` | exact, 23 of 23 at every `L` | 1,277 / 2,839 (+19.7% / +17.1%) |
+| from the arrivals: `max(arrival, prev + 2L/R)` | 17-19 of 23 (6-8% short in total) | **1,039 / 2,425 (-2.6% / +0.0%)** |
+
+A driver that waits its gap after the FFT takes its last word needs the first; a source whose frames come when
+their data does (the bank's `pre`) needs the second. Exact for both needs pysim to stall a source as the RTL
+does -- a change to how links admit a burst (`waveflow/hw/interface.py`), which this plan asks about first.
+Options: (a) the arrival counting, the pins restated against driver stalls pysim does not model (their 6-8%
+named as that); (b) keep the start counting, the bank's +17-20% named as the same limit; (c) a link stall in
+`interface.py` (a framework change, large); (d) a per-use choice on `SsrFft` (a build field: which source it
+has). The recommendation: (a), since a design's FFT is fed by its kernels, not a testbench driver, and the bank
+lands on its RTL.
+
+**2. E, F, H need framework changes**, none made:
+- **E** (+5 / +1): the arbiter's decision table is at 32 bits and 1-burst frames; the bank's is 128 bits and
+  2-burst. `plans/stream_dispatch.md` open question 7 decided "a design calibrates at its own width and
+  frame", but the table's basis has no width, so that needs the calibration's basis extended
+  (`waveflow/streams/timing.py`, the stream-block fixture).
+- **F and H** (+4 / +3 and -12): `StreamDemux` in pysim decides at once and stores and forwards; its body
+  decides in a few cycles and copies through. The fix is the demux's own model -- commit on a first word and
+  copy as words arrive, as Stage 8 did for the arbiter and the dispatcher -- and a decision table calibrated as
+  Stage 7's. A library block's model, as the plan allows, but a change to its pysim semantics and its
+  calibration machinery, so asked first.
+
+G is D's (the first block's read, fixed with it). After these, Step 5 (the gate and its tolerance).
