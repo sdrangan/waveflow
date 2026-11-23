@@ -1,10 +1,12 @@
 # Plan: why os_filterbank's pysim runs 17-27% short of its RTL, and a gate so it cannot drift again
 
-**Status: ACCEPTED 2026-11-22 (the user), for a lab machine with Vitis / Vivado 2025.1. Steps 1-3 DONE
-(`examples/os_filterbank/fidelity.py`; Section 5). Step 4 DONE: cause A modelled in `SsrFft` (Section 6),
-counted from the arrivals (the user's option (a), Section 8); B, C, D in the example's stages; E, F, H in the
-stream blocks (approved). Every stream block timed, the bank is at -2.0% (`test`) and exact (`long`). Step 5:
-the gate written and passing; its tolerance PROPOSED and STOPPED for the user to confirm (Section 9).**
+**Status: DONE 2026-11-22.** Accepted by the user for a lab machine with Vitis / Vivado 2025.1. Steps 1-3
+(`examples/os_filterbank/fidelity.py`; Section 5); Step 4: cause A modelled in `SsrFft` (Section 6), counted
+from the arrivals (the user's option (a), Section 8), B, C, D in the example's stages, E, F, H in the stream
+blocks; Step 5: the gate, 3% on `test` and 1% on `long` (the user; Section 9); Step 6: the record, the speed,
+the general lesson (Section 10). **The bank, every stream block timed: each channel within 2.7% (`test`) and
+0.6% (`long`) of its RTL, from 16% and 26% short; 1-4% more wall time.** Open: ledger row 21 (14 cycles of a
+`post` wait); word-by-word back-pressure rejected (open question 3).
 Written by the cloud planning session from `plans/stream_dispatch.md` Stage 8's record (commits `4552413`,
 `03a9b4f`). Branch `ccr-62d70dbe-679k63`; pull first, commit and push after each step.
 
@@ -145,6 +147,7 @@ recorded number moves.
 | 2026-11-22 | 4 (F, H) | Approved by the user. `StreamDemux` gets Stages 8 and 7: it commits on a frame's first word (`begin_read(pending_ok=True)`) and copies as words arrive (`copy_burst`), and with `platform_dir` each frame spends its measured decision cycles (`timing.COMPONENTS["demux"]`, basis `n, hdr, w, fb`). Measured at RTL (the demux alone, xczu48dr at 4 ns, Vitis HLS / xsim 2025.1; `stream_blocks --blocks demux`, 10 points): **3 idle cycles between frames at every point** -- 2, 4, 8, 16 outputs by `s_sel` and by a header field at 32 bits, and the bank's three-output header demuxes at 32 bits / 1 burst and 184 bits / 2 bursts; converged in 2 passes, exact. Tests: the demux commits on a first word (fails on the previous model), timed at its points and refused off them, one new `-m xsi` gate (`demux4_hdr`; `WANT_XSI_GATES` 288 -> 289). `fidelity.py` times the demuxes too. **The bank, every stream block timed: `test` 1,038 (-2.7%), `long` 2,421 (-0.1%)**; each channel's last status, RTL / pysim: `test` 821 / 797, 1,067 / 1,037, 888 / 884; `long` 2,349 / 2,332, 2,371 / 2,356, 2,424 / 2,420. Attribution: `test` (gap +29) A 0, A2 +2, B +9, C +16, D +3, E +2, F -2, G +1, H -2; `long` (gap +3) A 0, A2 +1, B +3, C 0, E 0, F 0, G +1, H -2. Ledger row 16 closed. |
 | 2026-11-22 | 3 again (after E, F, H) and B refined | B's residual (+9 on `test`) was `pre`'s `COPY` loop entry: 6 cycles at RTL from a frame's tag word to its first word into the FFT, 3 in pysim; `STAGE_CYC["pre_copy"]` = 3. **Every stream block timed: `test` 1,046 (-2.0%), `long` 2,424 (exact)**; untimed 1,035 / 2,418. Attribution (timed): `test` (gap +21) A 0, A2 +3, B 0, C +16, D +3, E +2, F -2, G +1, H -2; `long` (gap 0) A 0, A2 +1, B 0, C 0, E 0, F 0, G +1, H -2. Each channel's last status, RTL / pysim (beats): `test` 821 / 799 (-2.7%), 1,067 / 1,044 (-2.2%), 888 / 886 (-0.2%); `long` 2,349 / 2,334 (-0.6%), 2,371 / 2,358 (-0.5%), 2,424 / 2,422 (-0.1%). Of C's +16 on `test`, 14 are one hop: `post` begins an inverse frame 38 cycles after the FFT's first word of it at RTL, 24 in pysim -- a wait behind its previous frame not yet explained. |
 | 2026-11-22 | 5 (proposed) | The gate written (a fast test: each channel's last status, every stream block timed, against `LAST_STATUS`), passing at the proposed 3%; the untimed bank fails it. Worst 2.68% (`test` channel 0), mean 1.05%. Tolerance proposed in Section 9; stopped for the user. Ledger rows 20 (`pre_copy`, closed) and 21 (`post`'s 14-cycle wait, open) added. |
+| 2026-11-22 | 6 | The record (Section 10): the speed, Stage 7 (`8bd6f12`) against this plan's end, `examples/os_filterbank/speed.py`, the same script, alternating fresh processes, the best of 25 runs: **1-4% more wall time, 11-12% more SimPy events, the same 17,067 words in 1,794 bursts on `long`** (0.50 events a word, from 0.45); the bank from 20% short to exact on `long`. `docs/evaluation/timing_fidelity/os_filterbank.md` written; `docs/guide/timing_model/composites.md`, the general lesson; notes in `plans/dse_matrix_sched.md` (precondition 4) and `plans/dse_arch.md` (held-out topologies); the example's page gains its pysim row; the index's counts by status. **Plan closed.** |
 | 2026-11-22 | open question 3 decided | The user (relayed by the cloud session): word-by-word back-pressure in pysim's links is **rejected** -- too slow, it defeats the point of pysim. pysim keeps moving bursts; the driver pins' 6-8% (`SsrFft`'s gap counted from the arrivals, against a source the FFT stalls) stays a named limit, not modelled. Marked DECIDED in Section 7, `docs/guide/dsp/ssr_fft/timing.md`, ledger row 18 and `GapRhythm`'s docstring. |
 | 2026-11-22 | 5 (DECIDED) | The user chose the tolerance per scenario: **3% on `test`, 1% on `long`** (`PYSIM_TOL`). The gate committed: `test_pysim_timing_is_within_tolerance_of_the_rtl[test, long]`, passing (worst -2.68% and -0.64%). Ledger row 21 stays open. Section 9. |
 
@@ -351,3 +354,40 @@ allows about 70 cycles, where the error now is 15 at most. A tighter alternative
 
 What it does not close: #21, left open; the gate records the gap that remains (pysim short by up to
 2.7%), so it cannot grow unnoticed.
+
+## 10. Step 6: the record (2026-11-22)
+
+**Speed** (`examples/os_filterbank/speed.py compare`, committed with this step; the lab machine idle, 8 cores,
+Python 3.12, SimPy 4.1.2): Stage 7 (`8bd6f12`, before Stage 8 and this plan) against this plan's end
+(`f2704b00`), each tree extracted from git, the same script on both; 5 rounds of fresh processes alternating
+the trees, 5 runs a process, timed around `sysm.run()` alone; the best of the 25. Events (`env.step`), bursts
+and words (`QueuedTransferIF._transfer`) from one more, counted run a process -- the same in every process.
+Timed: the blocks each tree can time (the arbiter at Stage 7; the arbiter and the three demuxes at the end).
+
+| scenario | mode | wall, best, Stage 7 -> end | SimPy events | end cycle (RTL 1,067 / 2,424) |
+|---|---|---|---|---|
+| `test` | untimed | 130.2 -> 134.1 ms (+3.0%) | 2,882 -> 3,213 (+11.5%) | 969 -> 1,035 |
+| `test` | timed | 131.6 -> 136.2 ms (+3.5%) | 2,914 -> 3,226 (+10.7%) | 973 -> 1,046 |
+| `long` | untimed | 355.2 -> 359.3 ms (+1.1%) | 7,615 -> 8,555 (+12.3%) | 1,934 -> 2,418 |
+| `long` | timed | 354.2 -> 365.5 ms (+3.2%) | 7,698 -> 8,585 (+11.5%) | 1,944 -> 2,424 |
+
+Both trees move the same data, 6,205 words in 661 bursts (`test`) and 17,067 in 1,794 (`long`), every link
+of the bank and inside the FFT: 0.50-0.52 events a word at the end, against 0.45-0.47 -- about half an event
+more a burst (the begun bursts and the decision waits), not one a word. At Stage 7 the bank, the arbiter
+timed, was 9% (`test`) and 20% (`long`) short at its end cycle, each channel 10-22% short; now 2.0% and exact,
+each channel within 2.7% and 0.6%. A first, scratch run of the same measurement (the same logic, before the
+script was committed) gave the same counts and walls within 1%.
+
+**Written:**
+- `docs/evaluation/timing_fidelity/os_filterbank.md` -- the page the ledger index promised: the attribution
+  at the start and the end, each fix with its before and after, the gate and its tolerance, the speed, what
+  remains. The index: row 10 closed, the counts by status, claim 1 stated with its condition.
+- `docs/guide/timing_model/composites.md` (*Timing a composite*) -- the general lesson, where a designer
+  reads it: every task in the loop timed, not only the library's; each block calibrated on the input
+  patterns it sees in the composite, gapped frames included; cut-through at burst granularity; a cycle gate
+  against the RTL. Linked from the Timing Models index and `docs/guide/systems/shared_kernels.md`.
+- `plans/dse_matrix_sched.md`, precondition 4 (the engine): the four conditions, the gate as the engine's
+  acceptance test. `plans/dse_arch.md`, *held-out topologies*: the claim stated with its condition (the
+  calibration covers the patterns the composition makes), and the study to check coverage.
+- `docs/examples/os_filterbank/index.md`: the pysim row beside the RTL one, and the gate in its gate list.
+- `docs/evaluation/timing_fidelity/stream_blocks.md`: rows 16 and 17 marked closed where it listed them open.

@@ -80,7 +80,9 @@ the demuxes, and every port's recording is the same in pysim and at RTL.
 - pysim: the chain against the filter (`float_check`); the bank on two scenarios against the golden,
   every block answered and every job's status counted; a front alone and `post` alone in their
   harnesses; more blocks than credits on every channel; the deadlock witness; the generated top
-  carrying the loop as an ordinary channel.
+  carrying the loop as an ordinary channel; and **its timing against the RTL's**: every stream block timed
+  on the packaged platform, each channel's last status within 3% (`test`) and 1% (`long`) of the cycle the
+  RTL gate pins (`test_pysim_timing_is_within_tolerance_of_the_rtl`, no vendor tools).
 - RTL (`-m xsi`): a front alone, `post` alone, and the bank on both scenarios, every recording equal to
   pysim's.
 
@@ -98,6 +100,18 @@ Every recording equals pysim's, and none is empty.
 |---|---|---|---|---|
 | `test` | 13 | 26 | 2 / 1 / 3 (821 / 1067 / 888) | 39% |
 | `long` | 36 | 72 | 3 / 1 / 4 (2349 / 2371 / 2424) | 48% |
+
+**pysim against it**, the bank's stream blocks timed on the platform (the arbiter and the three demuxes, by
+`platform_dir`, as the gate sets it):
+
+| scenario | statuses' last cycle, pysim | against the RTL's |
+|---|---|---|
+| `test` | 799 / 1044 / 886 | -2.7% / -2.2% / -0.2% |
+| `long` | 2334 / 2358 / 2422 | -0.6% / -0.5% / -0.1% |
+
+It used to run 16-26% short; how it was closed, cause by cause, is
+[Timing fidelity: os_filterbank](../../evaluation/timing_fidelity/os_filterbank.md). Untimed, pysim is
+within 3.4% / 0.9%.
 
 **The channels answer out of order.** In `test`, channel 2's first job (one block) is answered at cycle
 481, before channel 0's first (three blocks, cycle 737); channel 1, with one five-block job, finishes

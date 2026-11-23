@@ -16,7 +16,9 @@ section asks the other half: **is it right** -- and what does checking it find?
 1. **pysim's cycles match the RTL's within a stated tolerance, for compositions, not only for blocks.**
    Each block is calibrated alone; a design is a composition. Whether block-level calibration carries over
    to compositions it was not measured in is the key technical claim of the architecture study
-   (`plans/dse_arch.md`, *held-out topologies*), and the first loop checked did not, at first (below).
+   (`plans/dse_arch.md`, *held-out topologies*). The first loop checked did not, at first: it does now,
+   within 2.7% and 0.6%, once its calibration covered the patterns the loop makes and every task in it
+   was timed ([os_filterbank](os_filterbank.md)) -- so the claim holds with that condition, on one design.
 2. **Where pysim and the RTL disagree, attributing the difference finds real performance bugs.** A
    designer working only in RTL has the right cycle counts but no statement of what they *should* be, so a
    slow design and a wrong explanation both pass unnoticed. A calibrated simulator is an executable
@@ -64,7 +66,7 @@ Every discrepancy found so far, oldest first. Measured with Vitis HLS / Vivado /
 | 7 | 2026-11-22 | `StreamDispatch` | at one credit a worker, first-free at RTL sends every job to worker 0 | real cost (a load-balance behaviour) | comparing which worker took each job, RTL against pysim | modelled (#8); stated on the block's page | [Stream blocks](stream_blocks.md) |
 | 8 | 2026-11-22 | both blocks | pysim moved a burst whole; the RTL commits on a frame's first word and copies as words arrive, so pysim returned credits late and spread first-free's jobs 20 / 20 | pysim error | #7 | both blocks commit on a begun burst | [Stream blocks](stream_blocks.md) |
 | 9 | 2026-11-22 | both blocks | inside a composite a firing costs 2-4 cycles less than alone, so a bare timed pool runs 6-15% long | pysim error (calibration context) | the pool's end cycle against the RTL | open: calibrate a design in context | `plans/stream_dispatch.md`, open question 5 |
-| 10 | 2026-11-22 | `os_filterbank` | #8's fix moved the bank's pysim **away** from its RTL (-9% to -17%, -20% to -27%): the arbiter's store-and-forward, a cost the RTL does not have, had been hiding a larger gap | pysim error (masking) | asking which way the end cycle moved | the attribution of `plans/osfb_pysim_fidelity.md` | `plans/stream_dispatch.md`, Stage 8 record |
+| 10 | 2026-11-22 | `os_filterbank` | #8's fix moved the bank's pysim **away** from its RTL (-9% to -17%, -20% to -27%): the arbiter's store-and-forward, a cost the RTL does not have, had been hiding a larger gap | pysim error (masking) | asking which way the end cycle moved | closed: attributed (rows 11-21) and fixed; each channel within 2.7% (`test`) and 0.6% (`long`) of the RTL, gated at 3% / 1% | `plans/stream_dispatch.md`, Stage 8 record; [os_filterbank](os_filterbank.md) |
 | 11 | 2026-11-22 | `SsrFft` | after any gap of 1 to `L/R` cycles the RTL's frame interval is `2L/R`, not `L/R + gap`: half rate. The last transposer commutator commits to a frame-long bubble group | design flaw | #10's attribution: 92-103% of the gap | modelled; the HLS fix is `plans/ssr_fft_gap_throughput.md` | `plans/osfb_pysim_fidelity.md`, Section 6 |
 | 12 | 2026-11-22 | `SsrFft` | its documented interval, "`L/R`, by construction", held only for the patterns measured (back to back, isolated) | wrong conclusion | #11 | `docs/guide/dsp/ssr_fft/timing.md` corrected | the same |
 | 13 | 2026-11-22 | `os_filterbank` | `pre` leaves a cycle or more between frames, which is what puts the FFT at half rate (#11) | design flaw | #11's trace | open: feed the FFT back to back | `plans/ssr_fft_gap_throughput.md`, fix 1 |
@@ -78,11 +80,15 @@ Every discrepancy found so far, oldest first. Measured with Vitis HLS / Vivado /
 | 21 | 2026-11-22 | `os_filterbank` | `post` begins its last inverse frame on `test` 38 cycles after the FFT's first word of it at RTL, 24 in pysim: 14 of the 23 cycles left at `test`'s end event (cause C; none on `long`) | not yet explained | Step 3 again, after #20 | open | `plans/osfb_pysim_fidelity.md`, Step 5 |
 
 **So far:** 5 design flaws (#1, 4, 6, 11, 13), 5 real costs (#3, 5, 7, 19, 20), 7 pysim errors (#8, 9, 10,
-15, 16, 17, 18), 3 wrong conclusions (#2, 12, 14) and 1 not yet explained (#21). Every design flaw and wrong conclusion was in hardware or
-documentation that had passed its RTL gates.
+15, 16, 17, 18), 3 wrong conclusions (#2, 12, 14) and 1 not yet explained (#21). Every design flaw and
+wrong conclusion was in hardware or documentation that had passed its RTL gates. By status: 14 closed
+(fixed, modelled or corrected); #11 modelled in pysim, its hardware fix planned; #6 accepted; #18 and #19
+stated limits, not modelled; 3 open (#9, 13, 21).
 
-`os_filterbank` gets its own page once `plans/osfb_pysim_fidelity.md` closes: the attribution, each fix
-with its before and after, the gate and its tolerance.
+`os_filterbank` has its own page, [Timing fidelity: os_filterbank](os_filterbank.md): the attribution, each
+fix with its before and after, the gate and its tolerance, what it cost in speed and what remains. Its
+lessons for the next composite are a checklist in the guide,
+[Timing a composite](../../guide/timing_model/composites.md).
 
 ## What is not shown
 
@@ -102,3 +108,5 @@ with its before and after, the gate and its tolerance.
 
 - [Stream blocks](stream_blocks.md) -- `StreamArbiter` and `StreamDispatch`: their decision cycles, word
   against burst, the pool's fidelity, and what each fix cost in simulation speed.
+- [os_filterbank](os_filterbank.md) -- a loop around one shared FFT: from 16% and 26% short to within 2.7%
+  and 0.6% per channel, cause by cause, gated; 1-4% more wall time, no word-level events.

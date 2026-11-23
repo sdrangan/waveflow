@@ -78,9 +78,13 @@ quarter more, still per burst, not per word. The decision models add one `timeou
 
 ## What is not covered
 
-- **Width and frame (row 17).** The tables are at 32 bits and 1-burst frames; at 128 bits and 2 bursts
-  every gap is a cycle longer. A design calibrates at its own width and frame.
-- **`StreamDemux` is untimed** (row 16).
+- **Width and frame (row 17), closed since.** The tables were at 32 bits and 1-burst frames; at 128 bits and
+  2 bursts every arbiter gap is a cycle longer. The arbiter's table is now keyed by width and frame and
+  calibrated at `os_filterbank`'s 128 bits and 2-burst frames (4 / 5 cycles, priority / round-robin); a design
+  calibrates at its own width and frame, and an unmeasured one is refused.
+- **`StreamDemux` (row 16), closed since.** It commits on a first word and copies through, as row 8's fix
+  did for these blocks, and has its own decision table: 3 idle cycles a frame at every point measured
+  (`docs/guide/streams/demux.md`). Both in [os_filterbank](os_filterbank.md).
 - **Only these pools.** Workers here are links; a pool of real workers (CG units on a shared memory) is the
   next test, and its gate is `plans/dse_matrix_sched.md`'s Phase 2.
 

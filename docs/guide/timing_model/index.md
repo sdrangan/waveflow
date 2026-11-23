@@ -52,6 +52,12 @@ What modules do not declare is timed by the platform and the framework, calibrat
 - [Polling Overhead](./poll.md) -- the loosely-timed model of `MMIFMaster.poll_until`: the bandwidth a
   poll loop steals from its bus and the discovery latency.
 
+## Compose it
+
+- [Timing a composite](./composites.md) -- what a pipeline's, a loop's or a pool's pysim needs beyond
+  calibrated blocks: every task in it timed, each block calibrated on the patterns it sees there (gapped
+  frames included), cut-through at burst granularity, and a cycle gate against the RTL.
+
 Software is timed the same way, on a processor rather than a component: a
 [processor model](../cpu/index.md) prices a Python function's work counters with models calibrated
 on gem5.

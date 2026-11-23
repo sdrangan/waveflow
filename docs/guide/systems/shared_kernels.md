@@ -210,6 +210,11 @@ and comes back through it inverse. It uses every part above once:
 Its channels finish out of order, but each channel's own outputs do not depend on timing, so each gets
 its own port and the RTL recordings equal pysim's.
 
+Its cycles are another matter: equal recordings say nothing about time, and the bank's pysim once ran 27%
+short of its RTL with every gate passing. What a loop like this needs for its pysim to be timed right --
+every task in it timed, each block calibrated on the gapped frames the loop makes, cut-through at burst
+granularity, and a cycle gate -- is [Timing a composite](../timing_model/composites.md).
+
 ## What the blocks cost on the RFSoC
 
 At 250 MHz on the xczu48dr (Vitis HLS / Vivado 2025.1, out of context), every block and the ring stub
