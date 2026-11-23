@@ -10,6 +10,7 @@ on both scenarios -- every recording equal to pysim's -- and the bank's timing p
 """
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +70,94 @@ def test_each_stage_alone_matches_the_golden(cls):
     sysm = harness(cls, workload="test")
     sysm.run()
     _assert_golden(sysm)
+
+
+def _pre_alone_x():
+    """``pre`` alone on ``test``, every frame waiting (the harness's stand-ins send at once): the golden
+    met, and each frame on ``x`` as ``(first beat, last beat)`` -- a burst started at ``t0`` and delivered
+    at ``td`` has its beats at ``t0 + 1 .. td - 1`` (``examples/os_filterbank/fidelity.py``)."""
+    sysm = harness(fb.OsPre, workload="test")
+    dut = sysm.dut()
+    per, rows = dut.clk.period, []
+    iface = dut.m_x.interface
+    orig = iface._transfer
+
+    def _transfer(ep, words, cycles, tstart):
+        stamp = yield from orig(ep, words, cycles, tstart)
+        rows.append((round(stamp[0] / per) - 1, round(stamp[2] / per) - 1, int(np.asarray(words).shape[0])))
+        return stamp
+    iface._transfer = _transfer
+    sysm.run()
+    for port, want in sysm.golden_outputs().items():          # m_x frames by count: compare the words
+        got = np.concatenate([np.asarray(b, dtype=np.uint64).reshape(-1)
+                              for b in sysm.stand_ins[port].words])
+        np.testing.assert_array_equal(got, np.concatenate([np.asarray(w, dtype=np.uint64).reshape(-1)
+                                                           for w in want]), err_msg=port)
+    return rows
+
+
+def test_pre_feeds_the_fft_back_to_back_when_frames_wait():
+    """``plans/ssr_fft_gap_throughput.md``, fix 1, in pysim: with every frame waiting, each frame's first
+    word follows the previous frame's last on the next cycle -- no idle cycle between frames, which costs
+    the FFT a frame-time -- and a frame is ``NW`` words in ``NW + 1`` cycles (the tag's cycle, inside the
+    frame, between words 0 and 1)."""
+    rows = _pre_alone_x()
+    assert len(rows) == 2 * _n_blocks("test") and all(n == fb.NW for _f, _l, n in rows)
+    assert all(last - first == fb.NW for first, last, _n in rows)
+    assert all(b[0] == a[1] + 1 for a, b in pairwise(rows))
+
+
+def _pre_body(events: list[str], n: int, tmp_path: Path) -> list[tuple[int, str, int]]:
+    """``os_pre_body::step`` (``src/os_pre_task.h``) under g++ with stand-in headers, a cycle at a time
+    (``os_filterbank_cpp/pre_check.cpp``): ``(cycle, stream, value)`` of every word it writes."""
+    import subprocess
+
+    here = Path(__file__).resolve().parent
+    exe = tmp_path / "pre_check"
+    cc = subprocess.run(["g++", "-std=c++17", "-Wall", "-Wno-unknown-pragmas", f"-I{here / 'os_filterbank_cpp'}",
+                         f"-I{here.parent / 'streams' / 'cpp_mock'}", f"-DNW_={fb.NW}",
+                         str(here / "os_filterbank_cpp" / "pre_check.cpp"), "-o", str(exe)],
+                        capture_output=True, text=True, check=False)
+    assert cc.returncode == 0, cc.stderr
+    run = subprocess.run([str(exe)], input="\n".join([*events, f"run {n}"]) + "\n", capture_output=True,
+                         text=True, check=False)
+    assert run.returncode == 0, run.stderr                    # a read of an empty stream aborts
+    return [(int(c), s, int(v)) for c, s, v in (ln.split() for ln in run.stdout.splitlines())]
+
+
+def _frames_x(out, nw=fb.NW):
+    xs = [c for c, s, _v in out if s == "x"]
+    return [(xs[i], xs[i + nw - 1]) for i in range(0, len(xs), nw)]
+
+
+@pytest.mark.skipif(__import__("shutil").which("g++") is None, reason="no g++: the body's logic check")
+def test_pre_body_moves_words_as_its_model(tmp_path):
+    """The HLS body's loop under g++ (logic only, not Vitis csim): every word, tag and direction out in
+    order, and on the cycles the pysim model charges -- frames waiting: back to back, ``NW + 1`` cycles a
+    frame, as ``test_pre_feeds_the_fft_back_to_back_when_frames_wait``; words arriving a cycle apart
+    (cut-through): the first word out the cycle it is readable, the last one cycle after; and an isolated
+    frame's last word is not held for a next frame that never comes."""
+    sels = [3, 0, 1, 0]
+    ev = []
+    for k, s in enumerate(sels[:3]):                       # three frames, all here at cycle 0
+        ev += [f"0 sel {s}", f"0 tag {1000 + k}"] + [f"0 w {100 * k + i}" for i in range(fb.NW)]
+    t0 = 200                                               # then one alone, its words a cycle apart
+    ev += [f"{t0} sel {sels[3]}", f"{t0} tag 1003"] + [f"{t0 + 1 + i} w {300 + i}" for i in range(fb.NW)]
+    out = _pre_body(ev, t0 + fb.NW + 20, tmp_path)
+    assert [v for _c, s, v in out if s == "x"] == [100 * k + i for k in range(4) for i in range(fb.NW)]
+    assert [v for _c, s, v in out if s == "tag"] == [1000, 1001, 1002, 1003]
+    assert [v for _c, s, v in out if s == "dir"] == [1 if s == 0 else 0 for s in sels]
+    fr = _frames_x(out)
+    for a, b in pairwise(fr[:3]):                      # waiting: back to back, NW words in NW + 1
+        assert b[0] == a[1] + 1 and b[1] - b[0] == fb.NW
+    assert fr[3] == (t0 + 1, t0 + fb.NW + 1)               # alone: last word read at t0 + NW, out next
+    # Each frame's direction is written with its first word (the FFT reads it at its head word).
+    dirs = [c for c, s, _v in out if s == "dir"]
+    assert dirs == [f for f, _l in fr]
+    # The same cycles as the model's, frames waiting (pysim's beats are offset by the harness's start).
+    rows = _pre_alone_x()[:3]
+    assert [(f - rows[0][0], la - rows[0][0]) for f, la, _n in rows] == \
+        [(f - fr[0][0], la - fr[0][0]) for f, la in fr[:3]]
 
 
 def test_more_blocks_than_credits():

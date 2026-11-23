@@ -1,8 +1,13 @@
 # Plan: SsrFft's throughput after a gap -- a future optimization
 
-**Status: PROPOSED 2026-11-22 (the user: post it as a plan for later, not now).** Found by
+**Status: IN PROGRESS 2026-11-23 -- fix 1 started (the user), stopped for the user at Step 2.** `pre`'s HLS
+body and its model are changed (Section "Fix 1: the record"); pysim, as it stands, cannot show the fix, because
+its `SsrFft` never back-pressures `pre` -- so its prediction (no gain) is not one to trust, and the gate now
+fails on `test` channel 0 (-3.05%, against today's RTL of the old body). A decision for the user, below
+("Where fix 1 stopped"). Branch `claude/vibrant-meitner-3dlgxu`, from PR #340's `ccr-62d70dbe-679k63`.
+Found by
 `plans/osfb_pysim_fidelity.md` (cause A, Sections 5-6 of its record); the pysim *model* of today's behaviour
-is that plan's work. This plan is the *hardware* (or design-pattern) fix. Nothing here is started.
+is that plan's work. This plan is the *hardware* (or design-pattern) fix.
 
 ## The finding (lab machine, Vitis / xsim 2025.1, `SsrFft` alone, every frame bit-exact)
 
@@ -97,3 +102,115 @@ Do 1 first (cheaper, and it may be enough); do 2 if a design cannot keep its pro
 - The chosen fix measured at RTL: `os_filterbank`'s FFT busy fraction and end cycles before and after (today
   39-48% busy, ends at 1,067 / 2,424); the gap sweep at every `L`.
 - The guide (`ssr_fft/timing.md`, `shared_kernels.md`) and the model match the hardware; gates pass.
+
+## Fix 1: progress log
+
+| date | step | what happened |
+|---|---|---|
+| 2026-11-23 | -- | Started by the user: fix 1, no FFT code; design and evaluate in pysim first; stop before any change to `SsrFft`, the stream blocks or other framework code, before re-pinning an RTL number, and before trading accuracy for speed. Branch `claude/vibrant-meitner-3dlgxu` from `ccr-62d70dbe-679k63` (PR #340, not yet merged). |
+| 2026-11-23 | design | **Where the tag's cycle goes decides what it costs.** `pre` reads a frame's tag and its `L/R` words off one stream (`s_frm`), so a frame is `L/R + 1` reads and one cycle a frame carries no word to the FFT. Between frames it costs a frame-time (the rule). Inside a frame it costs one cycle at some positions and a frame at others: `examples/os_filterbank/hole_cost.py`, a cycle model of the chain from `cycle_ref.CommutatorTask` (checked against the RTL's gap sweep: exact at gaps 3-24, optimistic at 1-2). A hole between words 0 and 1 costs one cycle at `L = 64, 256, 1024`; one before the last word -- the obvious "hold the last word for the next tag" -- costs a frame. |
+| 2026-11-23 | 1 | `src/os_pre_task.h`: one `while (1)` loop at II=1 that never exits (the FFT's own task shape; `rf_samp_buf_player_task.h`'s measured licence), `empty()` tested before every read; a one-word skid -- every word but a frame's first leaves one cycle after it is read, the first bypasses it, and the iteration that reads the next tag writes the previous frame's last word. `OsPre.run_iter` charges the same from the loop's structure (`STAGE_CYC["pre_skid"] = 1`; `pre_copy` is gone with the loop it timed). Tests: `test_pre_feeds_the_fft_back_to_back_when_frames_wait` (pysim, `pre` alone, every frame waiting: back to back, `NW + 1` cycles a frame) and `test_pre_body_moves_words_as_its_model` (the body's loop under g++ with stand-in headers, `tests/examples/os_filterbank_cpp/`: every word, tag and direction in order, on the model's cycles; an isolated frame's last word not held). No vendor tools on this machine: no csim, no csynth. |
+| 2026-11-23 | 2 | **pysim's prediction (every stream block timed), against today's RTL: no gain.** The FFT still a frame every 32 cycles, no gap of 0 into it; end cycles 1,046 -> 1,038 (`test`) and 2,424 -> 2,421 (`long`). Why: pysim's `SsrFft` takes frames into its tasks (up to `MAX_INFLIGHT = 4` each) without stalling `pre`, so in pysim no frame ever waits at `pre`, and its frames reach the FFT at the arbiter's pace (21 cycles: 17 words, 4 idle) -- a gap of 4 every frame. At RTL the FFT stalls `pre` through FIFOs two to four words deep, which is what makes frames wait there, and what fix 1 uses. So this prediction is not one to trust. The gate fails on `test` channel 0, -3.05% (796 against 821): the new body's head is 4 cycles shorter than the old one's 6. **Stopped for the user** ("Where fix 1 stopped"). |
+
+## Fix 1: the record (2026-11-23)
+
+### The body (`examples/os_filterbank/src/os_pre_task.h`)
+
+One iteration a cycle, forever (`while (1)`, `PIPELINE II=1`; the step is `os_pre_body::step`, its own
+inline function so the g++ check can run it a cycle at a time):
+
+- **the head**, when no frame is being read: if a word is held, write it (the previous frame's last); if
+  `s_sel` and `s_frm` both hold a word, read the index and the tag, write the tag, keep the direction;
+- **a frame's first word**: read and written at once, the direction beside it (the FFT's `in_reg` reads its
+  direction at a frame's first word);
+- **every other word**: written one iteration after it is read (`held`). Word 1's iteration writes nothing:
+  that is the tag's cycle, between words 0 and 1.
+
+So with frames waiting, a frame is `L/R` words in `L/R + 1` cycles and the next frame's first word follows
+the previous one's last on the next cycle. With nothing waiting, the last word leaves the cycle after it was
+read, alone. The decision (both heads present) and its copies are one iteration; the direction is computed
+there and written the next, with the first word (the timing rule). Statics under `#pragma HLS reset`;
+nothing is written that was not read. Not synthesized here (no Vitis on this machine): its II, its clock at
+250 MHz and its resources are the lab's to check.
+
+**Why the hole goes between words 0 and 1** (`python -m examples.os_filterbank.hole_cost`; intervals of a
+run of frames, a 1-cycle hole before word `p` of every frame, otherwise back to back):
+
+| L | `p = 1` | `p = 2` | `p = L/8` | `p = L/R - 1` |
+|---|---|---|---|---|
+| 64 | 17 every frame | 17 | a 32 among 16s | a 32 every 6 frames |
+| 256 | 65 | 65 | 128 every third | 128 every 7 |
+| 1024 | 257 | 257 | 512 every third | 512 every 8 |
+
+A hole moves through each commutator by `(R-1)*D` words; reaching a frame-sized group's boundary (`tp{S-2}`,
+`cm0`, `rc`) it costs a frame. The model is optimistic at gaps of 1-2 cycles between frames (it absorbs one
+frame in two or three that the RTL does not), so a cost it reports is a lower bound, and a cost of one cycle
+is the RTL's to confirm.
+
+### `pre`'s model (`OsPre.run_iter`)
+
+A frame a firing, at burst granularity, as the loop: the head (`_head`) once both are here and the previous
+frame's words are read; the first word the next iteration (`begin_read`, then `m_dir.begin` and `m_x.begin`
+together); the words copied as they arrive, read a word a cycle (`end_read(charge_beats=True)`); the next
+iteration takes the next frame's head if it is already here (`_head(wait=False)`, both streams' buffers
+tested, as the body tests `empty()`), and the burst ends `1 + STAGE_CYC["pre_skid"]` cycles after the last
+word's read. Its beats against the body's, `pre` alone with every frame waiting: the same cycles
+(`test_pre_body_moves_words_as_its_model`). In the bank, cut-through: the first word one beat after it
+reaches `pre`, the last two (the old body: 5 and 5, the tag to the first word 6).
+
+### The pysim prediction (pysim, not RTL; every stream block timed)
+
+| | `test`: today's RTL | pysim, old `pre` | pysim, new `pre` | `long`: today's RTL | pysim, old | pysim, new |
+|---|---|---|---|---|---|---|
+| end cycle | 1,067 | 1,046 | 1,038 | 2,424 | 2,424 | 2,421 |
+| last status, ch 0 / 1 / 2 | 821 / 1,067 / 888 | 799 / 1,044 / 886 | 796 / 1,036 / 883 | 2,349 / 2,371 / 2,424 | 2,334 / 2,358 / 2,422 | 2,331 / 2,355 / 2,419 |
+| gaps of 0 into the FFT | -- (a cycle or more) | 0 of 25 | 0 of 25 | -- | 0 of 71 | 0 of 71 |
+| gaps into the FFT, min / median | -- | 5 / 17 | 4 / 16 | -- | 5 / 17 | 4 / 16 |
+| FFT interval | 32 | 32 | 32 | 32 | 32 | 32 |
+| FFT busy (`L/R` x frames / end) | 39% | 40% | 40% | 48% | 48% | 48% |
+| `post` busy (pysim: the frame's first word in to its last out) | -- | 70% | 70% | 91% (RTL) | 83% | 83% |
+
+The bottleneck in pysim stays the FFT at half rate. **This is pysim's limit, not a prediction of the
+hardware** (next section).
+
+### Where fix 1 stopped (2026-11-23): a decision for the user
+
+**pysim's `SsrFft` does not stall its source, so in pysim fix 1 has nothing to act on.** Each of its tasks
+takes up to `MAX_INFLIGHT = 4` frames before it writes one (`waveflow/dsp/ssr_fft/hw.py`), so `pre`'s
+writes into the FFT never wait: in the bank `pre` copies each frame through as the arbiter delivers it, a
+frame every 21 cycles, and the FFT's rule (`GapRhythm`, counted from the arrivals) sees a gap of 4 every
+frame. At RTL the FFT's input FIFOs are two to four words deep: after a gapped frame the FFT holds `pre`
+(the input stretches to 28-31 cycles a frame, Section 5 of `plans/osfb_pysim_fidelity.md`), `frm` fills,
+and the next frame is waiting when the last word goes in -- the case fix 1 is for. So the RTL should run
+faster than pysim says; by how much pysim cannot say. Bounds: the arbiter feeds a frame every 21 cycles at
+best, `pre` every 17, and `post` takes about 30 a frame on average (busy 91% of `long` at RTL); so at most
+`post`'s limit, roughly `2,424 x 30/32`, a few percent on `long` (`post` becomes the bottleneck).
+
+This is the "source the FFT stalls" limit `GapRhythm` names (word-by-word back-pressure rejected,
+2026-11-22), now on the bank's critical path. Options:
+
+- **(a) Model `SsrFft`'s input back-pressure at frame granularity** (framework: `hw.py`, the `SsrTask` slots
+  in front of `tp{S-2}` and the boundary of the flat pysim): the FFT takes a frame's words no earlier than
+  its RTL would (its input side holds a few words, not four frames), and a gap is the idle time at its
+  input as it takes the words. No event per word -- one per burst, as now. Then re-measure the driver pins
+  (`tests/dsp/ssr_fft/test_hw.py`, the 6-8% named limit may close) and the bank with the old `pre` (the gate
+  must still pass) before the new `pre`'s prediction means anything. `hole_cost.py` is a check for the rule.
+- **(b) Measure first**: take the body to the lab as it is (csynth: II=1, 250 MHz; the bank's two gates;
+  the FFT's gaps from the trace), keep the old `pre` model's prediction out of the record, and model what
+  the RTL shows -- the gate re-pinned with the new RTL (the user's approval, to re-pin).
+- **(c) Both**: (b) first, as it settles whether the fix works at all; then (a), calibrated on (b)'s trace.
+
+**The gate meanwhile** fails on `test` channel 0 (-3.05% against 3%; `long` passes, worst -0.77%): it
+compares the new body's pysim with the old body's RTL. It is left failing rather than loosened or re-pinned
+(both the user's decision).
+
+### Hand-off to the lab (draft, for after the decision)
+
+On the lab machine (Vitis / Vivado / xsim 2025.1, xczu48dr), on this branch:
+
+1. `pytest tests/examples/test_os_filterbank.py -m xsi` -- csynth of the bank (check `os_pre_task`'s loop at
+   II=1 and the clock at 250 MHz in its report), the recordings against pysim (`compare`, both scenarios);
+   `test_rtl_timing_is_exact` will fail with the new cycles: record them.
+2. `python -m examples.os_filterbank.fidelity --rtl --timeline --attribute`: the FFT's gaps (how many 0), its
+   interval and busy fraction, `post`'s, the end cycles -- against the pysim prediction above.
+3. With the user's approval: re-pin `LAST_STATUS` (the RTL gate and the pysim gate's reference together).

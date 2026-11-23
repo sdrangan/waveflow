@@ -51,7 +51,6 @@ from waveflow.hw.interface import (FramedStreamIFMaster, FramedStreamIFSlave, St
                                    StreamIFSlave)
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.streams import StreamArbiter, StreamDemux
-from waveflow.streams.arbiter import copy_burst
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils as fp
 from waveflow.utils.burst_io import StreamBurst
@@ -189,6 +188,11 @@ def hdr(m, bw: int) -> np.ndarray:
     return np.asarray(m.serialize(word_bw=bw), dtype=np.uint64).reshape(-1, _chunks(bw))
 
 
+def hdr_word(v: int) -> np.ndarray:
+    """An integer as one ``W_LOOP``-bit word: the arbiter's index on ``m_sel``."""
+    return np.asarray([v] + [0] * (_chunks(W_LOOP) - 1), dtype=np.uint64).reshape(1, -1)
+
+
 def multiply(xr, xi, hr, hi) -> tuple[np.ndarray, np.ndarray]:
     """``X * H_c`` as ``post`` computes it: the library's ``complexMultiply`` -- partial products in the
     bins' format -- into the FFT's input format (``ssr_cmul<out_t, in_t, in_t>``)."""
@@ -319,7 +323,10 @@ STAGE_CYC = {
     "post_mul": 4,      # post, pass 0: the FFT frame's last word read -> the feedback tag (MUL loop drain)
     "post_fb": 2,       # post, pass 0: the feedback tag -> its first word (FB loop entry)
     "post_ans": 5,      # post, pass 1: the FFT frame's first word -> the answer's first (OUT loop: PW words dropped)
-    "pre_copy": 3,      # pre: the tag and direction written -> the COPY loop's first word to the FFT
+    # pre is one II=1 loop that never exits (src/os_pre_task.h; plans/ssr_fft_gap_throughput.md, fix 1), so
+    # its costs are read off the loop's structure, not a trace: the tag's iteration, then the first word the
+    # next iteration (with the direction), every other word one iteration after it is read (the skid).
+    "pre_skid": 1,      # pre: a frame's last word read -> written (the one-word skid; the next tag beside it)
 }
 
 
@@ -424,21 +431,82 @@ class OsPre(FreeRunMod):
         _ep(StreamIFMaster, self, "m_x", W_LOOP)
         _ep(StreamIFMaster, self, "m_dir", 8)
         _ep(FramedStreamIFMaster, self, "m_tag", W_LOOP)
+        #: The next frame's direction when its head was taken beside the last frame's last word, as the
+        #: body's loop does; ``None`` otherwise.
+        self._next: bool | None = None
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("os_pre_task", "os_pre_task.h", ("s_frm", "s_sel", "m_x", "m_dir", "m_tag"),
                           template_args=(NW,), framed=("s_frm", "s_sel", "m_tag"))
 
     def run_iter(self):
-        """As the body: the index, the tag (on to ``post``), the direction, then the ``NW`` words copied to
-        the FFT as they arrive (``copy_burst``: the HLS ``COPY`` loop reads a word and writes it), not
-        once the whole frame is in (``plans/osfb_pysim_fidelity.md``, cause B)."""
+        """As the body's loop, a frame at a time (``src/os_pre_task.h``): the head -- the index and the tag,
+        on to ``post`` -- in one iteration, as soon as both are here and the previous frame's words are
+        read (the cycle its last word leaves); the first word the next iteration, read and written at
+        once, with the direction; the words copied to the FFT as they arrive (cut-through, causes B of
+        ``plans/osfb_pysim_fidelity.md``), read a word a cycle, the last written one cycle after it is
+        read (``pre_skid``).  So when a frame waits, its first word follows the previous one's last on
+        the next cycle (``plans/ssr_fft_gap_throughput.md``, fix 1)."""
+        per = self.clk.period
+        inv = self._next if self._next is not None else (yield from self._head(wait=True))
+        self._next = None
+        # The first word: read and written in one iteration, the direction beside it.
+        x = yield from self.s_frm.begin_read(pending_ok=True)
+        d = yield from self.m_dir.begin(np.asarray([1 if inv else 0], dtype=np.uint64))
+        w = yield from self.m_x.begin(x.data)
+        yield from self.m_dir.end(d)
+        # The rest, a word a cycle as they arrive; x.last is the last word's read.  The next iteration
+        # writes it, and takes the next frame's head beside it if the head is already here.
+        yield from self.s_frm.end_read(x, charge_beats=True)
+        yield from _until(self, x.last + per)
+        self._next = yield from self._head(wait=False)
+        # A word written the iteration it is read is delivered a cycle after the read (the copy's beat);
+        # the skid's cycle comes on top.
+        yield from _until(self, x.last + (1 + STAGE_CYC["pre_skid"]) * per)
+        yield from self.m_x.end(w)
+
+    def _head(self, wait: bool):
+        """The head's iteration: the index (``s_sel``) and the tag, the tag on to ``post``; the direction
+        (``True``: inverse).  With ``wait=False`` only if both are already here -- the body tests both
+        streams' ``empty()`` before it reads either -- else ``None`` and nothing read."""
+        if not wait and not (self.s_sel.data_buffer.items and self.s_frm.data_buffer.items):
+            return None
         sel = np.asarray((yield from self.s_sel.get()), dtype=np.uint64).reshape(-1)
         tag = yield from self.s_frm.get_schema(Tag)
         yield from self.m_tag.write(tag)
-        yield from self.m_dir.write(np.asarray([1 if int(sel[0]) == 0 else 0], dtype=np.uint64))
-        yield from _cycles(self, "pre_copy")
-        yield from copy_burst(self.s_frm, self.m_x)
+        return int(sel[0]) == 0
+
+    # -- alone in its harness: every frame of a scenario, both passes, as the arbiter hands them over --
+    def _frames(self, kind: str):
+        """``(sel, tag, words)`` per frame: each block's forward frame (the front's input, ``1 + ch``),
+        then its product's (the feedback, input 0)."""
+        out = []
+        for ch, js in jobs(kind).items():
+            hr, hi = coef_bins(ch)
+            for tx, x in js:
+                nblk = len(x) // B
+                xr = np.concatenate([np.zeros(P, dtype=np.int64), np.real(x).astype(np.int64)])
+                xi = np.concatenate([np.zeros(P, dtype=np.int64), np.imag(x).astype(np.int64)])
+                for b in range(nblk):
+                    seg = slice(b * B, b * B + L)
+                    ar, ai = xr[seg].reshape(NW, R), xi[seg].reshape(NW, R)
+                    fr, fi = fft_model.pipeline(GEO.direction(False), ar, ai)
+                    for p, words in ((0, pack(ar, ai, E_IN)), (1, pack(*multiply(fr, fi, hr, hi), E_IN))):
+                        out.append((0 if p else 1 + ch, Tag(tx_id=tx, ch=ch, blk=b, nblk=nblk, npass=p), words))
+        return out
+
+    def workload(self, kind: str = "test") -> dict:
+        frm, sel = [], []
+        for s, tag, words in self._frames(kind):
+            sel.append(StreamBurst(hdr_word(s), True))
+            frm += [StreamBurst(hdr(tag, W_LOOP), True), StreamBurst(words, True)]
+        return {"s_frm": frm, "s_sel": sel}
+
+    def golden(self, kind: str = "test") -> dict:
+        fr = self._frames(kind)
+        return {"m_tag": [hdr(t, W_LOOP) for _s, t, _w in fr],
+                "m_dir": [np.asarray([1 if s == 0 else 0], dtype=np.uint64) for s, _t, _w in fr],
+                "m_x": [w for _s, _t, w in fr]}
 
 
 @dataclass
