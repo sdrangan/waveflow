@@ -279,7 +279,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 288 + 1 -> 289 on 2026-11-22 (plans/osfb_pysim_fidelity.md, cause F): the same for StreamDemux's
 #: decision table -- the demux at 4 outputs, routed by a header field, re-measured at xczu48dr 4 ns
 #: (tests/streams/test_stream_timing.py::test_rtl_decision_cost_is_the_platforms[demux4_hdr]).
-WANT_XSI_GATES = 289
+#: 289 + 4 -> 293 on 2026-11-22 (plans/dse_matrix_sched.md 7a, E1): the B1 CG engine -- the worker alone,
+#: the split alone, the pool at 2 and 4 workers, X bit-exact and cycles against pysim
+#: (tests/examples/test_cg_pool.py).
+WANT_XSI_GATES = 293
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

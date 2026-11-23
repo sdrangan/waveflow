@@ -317,6 +317,39 @@ xczu48dr. If the measured numbers differ, change P or the sizes so the sweep sti
 csynth / RTL at `DEFAULT_PART`; the xczu48dr numbers wait for the lab machine). **Not an agent-skills
 data point** -- the clean fresh-agent run below stays to do.
 
+**Run 1 record (2026-11-22; Vitis HLS / Vivado / xsim 2025.1, xc7z020 at 100 MHz, the laptop).** Built as
+`examples/cg_pool/` (`cg_golden.py`, `cg_pool.py`, `src/cg_worker_task.h`, `src/cg_split_task.h`,
+`cg_pool_build.py`, `csim.py`; tests `tests/examples/test_cg_pool.py`):
+
+- **The golden** reuses `waveflow.linalg.cg` (`cg_init`, `vec_step`) with the factored `S = q_S(D + H q_T(Hᴴ D))`
+  and E0's stop rule (`dᴴs ≤ 0` or `‖r‖² ≤ floor`, per column). Formats from the ranges of synthetic correlated
+  channels (inputs Q4.12; vectors 18-bit; `T`, `S` 24-bit; scalars 32-bit): **-73 dB mean, -69 dB worst**
+  against the same CG in float.
+- **The shape.** A worker writes `Resp`, `X`, `Status` as one 3-burst frame, so one `StreamArbiter` merges the
+  workers and its `m_sel` is the credit; a last stage (`CgSplit`) puts the `Status` on its own stream (statuses on
+  a second arbiter would leave its `m_sel` unread). First-free dispatch, one credit a worker; a worker's input
+  link holds a whole job (1,024 words), its result link its largest burst (256). M = 1 is worker + split (the
+  pool blocks start at 2). An error stops its worker; the engine then stalls on the next job sent to it.
+- **csim**: the body bit-exact with the golden on every scenario (6 jobs; both fatal errors; 12 mixed).
+- **csynth** (10 ns): every loop II = 1 once XR's and DUPD's false carried dependences were declared (XR had
+  II = 2 and -2.57 ns); Fmax estimate 137 MHz. **A worker: 176 DSP, 46.8k LUT** (the two dividers ~11k LUT,
+  UMUL ~11.7k) -- **about 3x E0's 50-64 DSP**: TMUL and UMUL each have their own 64 multipliers, and the vector
+  passes 48 more. Two workers exceed the xc7z020 (220 DSP): its RTL simulates, its resources mean nothing.
+- **The rate check, from the loop depths**: ~2,640 cycles an iteration at `m = 32`, `c = 8` (TMUL and UMUL
+  1,024 each, the vector passes 128 each, the dividers ~70 each), **~11,400 a job at `t = 4`** (E0 said 8,800:
+  it left out the vector passes and the dividers). At 250 MHz ~110 jobs a worker in 5 ms, so ~350 jobs a
+  window need ~3.2 workers: **M ∈ {1, 2, 4} still straddles the load**, no size changed.
+- **RTL gates (XSI), passing** (4 gates, `-m xsi`): the worker alone and the split alone (every burst equal to
+  pysim's and the golden's); the pool at 2 and at 4 workers on 12 mixed jobs (every `tx_id` once, `X` bit-exact
+  against the golden and pysim, an OK status each, every job's Status within 5% of the RTL's).
+- **Cycles**: the worker's timing model is its loops' csynth depths plus a fit to its traced RTL -- every job's
+  Status a cycle early, alike (pinned in a fast test). The pool: every job's Status within **-0.01% to -0.16%**
+  of the RTL's at 2 workers and **-0.03% to -0.32%** at 4 (last Status 30,611 against 30,631) -- pysim early
+  by the pool blocks' decision cycles, which it does not spend untimed on this part.
+- **Waits for the lab machine**: everything on `xczu48dr` at 250 MHz (`WAVEFLOW_CG_PART=rfsoc`): csynth and the
+  gates there, exact resources (Vivado), and the pool blocks' decision tables at 128 bits with 2-burst jobs and
+  3-burst results (the dispatcher's and the arbiter's tables refuse that point today) -- E3's calibration item.
+
 - A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
   specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
   installed but **told to stay out of `plans/` and `docs/evaluation/`** (Section 9, item 6). The agent that
