@@ -1,7 +1,11 @@
 # Plan: pre-silicon design of a matrix scheduler -- which whitening matrices to compute before a deadline
 
-**Status: DRAFT for discussion, written 2026-11-22** from a long design conversation with the user (cloud
-session `session_01HnWt85iSFAfaupHA1sSwTL`, branch `ccr-62d70dbe-679k63`). Nothing here is built. It
+**Status: E0 and E1 DONE, merged in PR #341 (2026-11-23); next E2.** Written 2026-11-22 from a long design
+conversation with the user (cloud session `session_01HnWt85iSFAfaupHA1sSwTL`, branch `ccr-62d70dbe-679k63`).
+E1's engine is `examples/cg_pool/`, built on the laptop at `DEFAULT_PART` (xc7z020, 100 MHz, Vitis 2025.1):
+run 1 (the two matrix products one after the other) and run 2 (overlapped, 7,663 cycles a job at RTL), both
+recorded under E1. The xczu48dr numbers and the pool's decision tables at the engine's width and frame wait
+for the lab machine (E1, *What E2 needs next*). The plan
 **replaces the next step of `plans/dse_cg.md`** (paused; why below) and gives `plans/dse_arch.md` its first
 concrete problem. **Next (user, 2026-11-22): Section 7a** -- build one CG engine (B1, a pool of dedicated
 workers) with an agent, run it over many windows, and measure what each step costs, before Phase 1.
@@ -11,6 +15,16 @@ conversation that are not this study but that a later agent will need.
 **For the agent picking this up:** read this whole file first, then the files Section 10 names. The user's
 answers are quoted as decisions (D1...); do not re-open them without asking. Where this plan says *proposed*,
 it is a recommendation awaiting the user.
+
+**Progress log.**
+
+| date | what | where |
+|---|---|---|
+| 2026-11-22 | The plan written; Section 7a (E0-E3) added | PR #339 |
+| 2026-11-22 | StreamDispatch's timing models (Stages 7-8), the base E1 built on | PR #340 |
+| 2026-11-22 | E0 sizes decided (Section 9, item 3); E1 run 1: the B1 engine at RTL, bit-exact | `claude/dse-e1-b1-cg-engine` |
+| 2026-11-22 | E1 run 2: the worker's two matrix products overlapped, a job 11,268 -> 7,663 cycles | `claude/dse-e1-overlap` |
+| 2026-11-23 | **E0 and E1 merged into main** (both branches, main merged in first; fast suite checked on the merged tree) | PR #341, `76d83b4` |
 
 ## 1. Why this study, and why not more parametric DSE
 
@@ -317,6 +331,11 @@ xczu48dr. If the measured numbers differ, change P or the sizes so the sweep sti
 csynth / RTL at `DEFAULT_PART`; the xczu48dr numbers wait for the lab machine). **Not an agent-skills
 data point** -- the clean fresh-agent run below stays to do.
 
+**Run 2 (user, 2026-11-22): the worker's two matrix products overlapped**, on branch `claude/dse-e1-overlap`
+(from run 1's), the rest of the engine unchanged. It supersedes run 1's worker: **a job at `m = 32`, `c = 8`,
+`t = 4` takes 7,663 cycles at RTL against run 1's 11,268, at the same 177 DSP**. The E0 rate check above is
+replaced by the measured numbers in its record.
+
 **Run 1 record (2026-11-22; Vitis HLS / Vivado / xsim 2025.1, xc7z020 at 100 MHz, the laptop).** Built as
 `examples/cg_pool/` (`cg_golden.py`, `cg_pool.py`, `src/cg_worker_task.h`, `src/cg_split_task.h`,
 `cg_pool_build.py`, `csim.py`; tests `tests/examples/test_cg_pool.py`):
@@ -402,6 +421,42 @@ depths did not.
   of each: 0.1 s.
 - **Left**: the trip-count path at xczu48dr; Vivado implementation (exact resources, closure) on the lab
   machine; the pool blocks' decision tables at 128 bits; E2.
+
+**Not in the two records above (from both runs).**
+- **Where the build runs.** csynth fails silently past the Windows path limit, so the build roots at
+  `WAVEFLOW_CG_ROOT` (the gates used `C:/wfb/cg`; `cg_pool_build.build_root` copies `src/` there);
+  `WAVEFLOW_CG_PART=rfsoc` builds for xczu48dr at 4 ns. The RTL gates build under `work/cg_pool` unless
+  `WAVEFLOW_CG_ROOT` is set.
+- **One `static halted` per worker.** Two workers sharing the body's `static` failed pool csynth (HLS 200-471):
+  the body takes a template index `K` (`CgWorker.idx`, `KernelTask(template_args=(idx,))`), one per worker.
+- **The worker's timing model covers any `m`, `c`, `t`** (`cg_pool.iteration_cycles`, `job_cycles`): the loop
+  depths from csynth at xc7z020 plus two fitted constants. At xczu48dr the depths differ (MATMUL 10, not 12), so
+  the constants are refit there from a traced RTL run; the pinned test (`WORKER_RTL_STATUS`) is xc7z020's.
+- **Resources at E3's sizes.** 177 DSP a worker, so 4 workers ~710 DSP of the xczu48dr's 4,272 (csynth); E0's
+  50-64 a worker undercounted (two MAC banks of 64 plus 48 in the vector passes).
+- **An error stops its worker** for good (`halted`); with first-free dispatch the pool then stalls on the next
+  job sent to it. E2's windows send only valid jobs; a pool that routes around a dead worker is not built.
+
+**What E2 needs next** (laptop-ready unless marked *lab*):
+1. **A window driver**: `jobs("window", seed)` writing one window's job list (synthetic channels, set sizes
+   1-4 users, `m = 8·|S|`, `t` per job) from the scripted baseline scheduler, replayed through the pool's
+   harness in pysim and at RTL alike, the engine drained between windows.
+2. **The completion cycle of every job** from both backends -- pysim's Status times, the RTL's from the VCD
+   (`_rtl_status_cycles` already reads them) -- and the deadline cut applied afterwards at window start + 1.25 M
+   cycles (250 MHz). The gate: X bit-exact, the same jobs before the deadline, cycles within 5%.
+3. **The RTL bound** `N_CYCLES["pool"]` (120k today) raised to a window's length plus the drain.
+4. **The RTL cost of a window, projected from run 2's laptop rates** (to re-time on the lab machine): ~0.36 /
+   1.0 / 3.3 ms a simulated cycle at 1 / 2 / 4 workers, so a 1.25 M-cycle window is ~8 / ~21 / ~69 min. That
+   is over E2's "minutes": 10 RTL windows at M = 4 is ~11 h. Shorter windows (fewer jobs), or a scaled window
+   (`N_rx`, `c` smaller) for the RTL side, are the choices to put to the user before E2's RTL runs.
+5. *lab* **The xczu48dr numbers**: csynth at 4 ns after the ITER trip-count fix (compute it before ITER), the
+   four XSI gates there with the timing constants refit, and Vivado synthesis and implementation (exact
+   resources, whether 250 MHz closes).
+6. *lab* **The pool's decision tables calibrated in context** at the engine's width and frame -- 128-bit
+   words, 2-burst jobs (header, then `H` and `B`), 3-burst results (`Resp`, `X`, `Status`) -- which the
+   dispatcher's and arbiter's tables refuse today. Until then pysim is early by their untimed decision cycles
+   (-0.40% at worst at 4 workers): inside the 5% target, but it grows with shorter jobs, and E3's accuracy
+   numbers wait for it.
 
 - A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
   specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
