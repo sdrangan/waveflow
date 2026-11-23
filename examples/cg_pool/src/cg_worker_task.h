@@ -8,8 +8,10 @@
 //      the worker's own memory; R = q_R(B), D = q_P(R), X = 0, rz = q_rz(sum |R|^2) per column.
 //      A payload of the wrong length -> BAD_LEN, fatal;
 //   3. t iterations of CG in the factored form, S = D + H (H^H D), each a pipelined loop a pass:
-//        TMUL   T  = q_T(H^H D)                 m c N_rx / 16 cycles, 16 complex MACs a cycle
-//        UMUL   S  = q_S(D + H T)               m c N_rx / 16 cycles, 16 complex MACs a cycle
+//        MATMUL T  = q_T(H^H D) and S = q_S(D + H T), overlapped by a column: step s computes T's
+//               column s and S's column s - 1, one H read feeding both banks of 16 complex MACs --
+//               (c + 1) max(m, MIN_M) N_rx / 16 cycles (run 1 ran the two one after the other: 2 m c
+//               N_rx / 16)
 //        PS     ps = q_ps(sum Re(conj(D) S))    N_rx c / 4 cycles
 //        ALPHA  alpha = q_alpha(w(rz) / ps)     c, the dividers pipelined; the stop rule
 //        XR     X = q_X(X + D alpha), R = q_R(R - S alpha), rz' = q_rz(sum |R|^2)
@@ -46,6 +48,7 @@ static const int L = CG_LANES;              // samples a word, and the vector lo
 static const int G = 4;                     // words a 16-row block: P = G * L complex MACs a cycle
 static const int NWD = CG_COLW;             // words a column
 static const int NB = CG_COLW / G;          // 16-row blocks a column
+static const int MIN_M = CG_MIN_M;          // the fewest columns of H a MATMUL step walks (T's hazard)
 
 template <typename TO>
 static void fail(hls::stream<TO>& m_out, ap_uint<16> tx, StatusCode code) {
@@ -179,80 +182,78 @@ ITER:
             if (rz[k] <= rz_t(CG_RZ_FLOOR_VAL)) stop[k] = true;
         }
 
-        // TMUL: T[j][k] = q_T(sum_n conj(H[n][j]) D[n][k]), a 16-row block a cycle
+        // MATMUL: TMUL and UMUL fused, overlapped by a column.  Column step s runs TMUL on column s
+        // (T[j][s] = q_T(sum_n conj(H[n][j]) D[n][s])) and UMUL on column s - 1 (S[n][s-1] =
+        // q_S(D[n][s-1] + sum_j H[n][j] T[j][s-1])), both walking H in one order -- column j, its 16-row
+        // blocks b -- so one read of H feeds both banks of 16 complex MACs.  c + 1 steps, not 2c.
+        //   T: TMUL writes column s while UMUL reads column s - 1 (one write, one read a cycle).  The
+        //   value read was written a step before: mm * NB - 3 iterations, more than the pipeline's depth
+        //   only if a step is long enough -- so a step walks at least MIN_M columns of H (mm), the ones
+        //   past m adding zero (E0's smallest set is m = 8: no cost there).
+        //   UMUL keeps a running sum for every row of its S column (NB blocks x 16), written at the
+        //   step's end.
+        // The counters (s, j, b) decide nothing about the data: they only say which column each bank
+        // works on.
+        const int mm = (m < MIN_M) ? MIN_M : m;
         acc_t_t tar = 0, tai = 0;
-        int j = 0, k = 0, b = 0;
-    TMUL:
-        for (int i = 0; i < m * c * NB; ++i) {
+        acc_u_t ur[NB][G][L], ui[NB][G][L];
+#pragma HLS ARRAY_PARTITION variable=ur complete dim=0
+#pragma HLS ARRAY_PARTITION variable=ui complete dim=0
+        int j = 0, k = 0, b = 0;                  // k: the step s -- TMUL's column; UMUL's is k - 1
+    MATMUL:
+        for (int i = 0; i < (c + 1) * mm * NB; ++i) {
 #pragma HLS PIPELINE II=1
+// T's column k is written in step k and read in step k + 1, at least MIN_M * NB - 3 iterations later.
+#pragma HLS DEPENDENCE variable=tr type=inter false
+#pragma HLS DEPENDENCE variable=ti type=inter false
+            const bool live = (j < m);                    // a column of H, not the step's padding
+            const bool do_t = live && (k < c);
+            const int kt = (k < c) ? k : 0;               // TMUL's column (any, when it is idle)
+            const int ku = (k > 0) ? k - 1 : 0;           // UMUL's column (any, when it is idle)
+            const bool do_u = (k > 0);
+            const t_t x = live ? tr[j][ku] : t_t(0);      // the step's padding adds zero
+            const t_t y = live ? ti[j][ku] : t_t(0);
             acc_t_t pr = 0, pi = 0;
             for (int g = 0; g < G; ++g) {
 #pragma HLS UNROLL
                 for (int q = 0; q < L; ++q) {
 #pragma HLS UNROLL
                     const h_t a = hr[b * G + g][j][q], bb = hi[b * G + g][j][q];
-                    const p_t x = dr[b * G + g][k][q], y = di[b * G + g][k][q];
-                    pr += a * x + bb * y;
-                    pi += a * y - bb * x;
+                    // TMUL, column kt
+                    const p_t dx = dr[b * G + g][kt][q], dy = di[b * G + g][kt][q];
+                    pr += a * dx + bb * dy;
+                    pi += a * dy - bb * dx;
+                    // UMUL, column ku
+                    const acc_u_t ur0 = (j == 0) ? acc_u_t(0) : ur[b][g][q];
+                    const acc_u_t ui0 = (j == 0) ? acc_u_t(0) : ui[b][g][q];
+                    const acc_u_t nr = ur0 + (a * x - bb * y);
+                    const acc_u_t ni = ui0 + (a * y + bb * x);
+                    ur[b][g][q] = nr;
+                    ui[b][g][q] = ni;
+                    if (do_u && j == mm - 1) {
+                        sr[b * G + g][ku][q] = dr[b * G + g][ku][q] + nr;
+                        si[b * G + g][ku][q] = di[b * G + g][ku][q] + ni;
+                    }
                 }
             }
             const acc_t_t nr = (b == 0) ? pr : acc_t_t(tar + pr);
             const acc_t_t ni = (b == 0) ? pi : acc_t_t(tai + pi);
             tar = nr;
             tai = ni;
+            if (do_t && b == NB - 1) {
+                tr[j][kt] = nr;
+                ti[j][kt] = ni;
+            }
             if (b == NB - 1) {
-                tr[j][k] = nr;
-                ti[j][k] = ni;
                 b = 0;
-                if (k == c - 1) {
-                    k = 0;
-                    ++j;
-                } else {
+                if (j == mm - 1) {
+                    j = 0;
                     ++k;
+                } else {
+                    ++j;
                 }
             } else {
                 ++b;
-            }
-        }
-
-        // UMUL: S[n][k] = q_S(D[n][k] + sum_j H[n][j] T[j][k]), 16 rows at once over j
-        acc_u_t ur[G][L], ui[G][L];
-#pragma HLS ARRAY_PARTITION variable=ur complete dim=0
-#pragma HLS ARRAY_PARTITION variable=ui complete dim=0
-        j = 0;
-        k = 0;
-        b = 0;
-    UMUL:
-        for (int i = 0; i < c * NB * m; ++i) {
-#pragma HLS PIPELINE II=1
-            const t_t x = tr[j][k], y = ti[j][k];
-            for (int g = 0; g < G; ++g) {
-#pragma HLS UNROLL
-                for (int q = 0; q < L; ++q) {
-#pragma HLS UNROLL
-                    const h_t a = hr[b * G + g][j][q], bb = hi[b * G + g][j][q];
-                    const acc_u_t pr = (j == 0) ? acc_u_t(0) : ur[g][q];
-                    const acc_u_t pi = (j == 0) ? acc_u_t(0) : ui[g][q];
-                    const acc_u_t nr = pr + (a * x - bb * y);
-                    const acc_u_t ni = pi + (a * y + bb * x);
-                    ur[g][q] = nr;
-                    ui[g][q] = ni;
-                    if (j == m - 1) {
-                        sr[b * G + g][k][q] = dr[b * G + g][k][q] + nr;
-                        si[b * G + g][k][q] = di[b * G + g][k][q] + ni;
-                    }
-                }
-            }
-            if (j == m - 1) {
-                j = 0;
-                if (b == NB - 1) {
-                    b = 0;
-                    ++k;
-                } else {
-                    ++b;
-                }
-            } else {
-                ++j;
             }
         }
 

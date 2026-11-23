@@ -228,7 +228,7 @@ def expected(jobs: list[JobSpec]) -> dict[str, list[np.ndarray]]:
 
 # --- the scenarios ----------------------------------------------------------------------------------
 def jobs(kind: str = "test", n: int | None = None, seed: int | None = None) -> list[JobSpec]:
-    """``"test"``: 6 jobs of 1-4 users, t 1-4 (one each size); ``"mixed"``: ``n`` (default 12) random jobs,
+    """``"test"``: 6 jobs of 1-4 users, t 1-4 (one each size), and one of ``m = 3``; ``"mixed"``: ``n`` (default 12) random jobs,
     set sizes 1-4, ``t = 4``; ``"bad_args"`` / ``"bad_len"``: two good jobs, then a bad one, then one more
     (never answered)."""
     rng = np.random.default_rng({"test": 11, "mixed": 12, "bad_args": 13, "bad_len": 14}[kind]
@@ -236,8 +236,13 @@ def jobs(kind: str = "test", n: int | None = None, seed: int | None = None) -> l
     if kind == "test":
         sizes = [(1, 4), (4, 4), (2, 1), (3, 2), (1, 8 // 2), (4, 3)]
         cs = [8, 8, 1, 4, 8, 3]
-        return [JobSpec(cgg.make_problem(rng, 100 + i, users=u, t=t, c=c))
-                for i, ((u, t), c) in enumerate(zip(sizes, cs))]
+        out = [JobSpec(cgg.make_problem(rng, 100 + i, users=u, t=t, c=c))
+               for i, ((u, t), c) in enumerate(zip(sizes, cs))]
+        # m = 3, below MIN_M: the worker's MATMUL pads its column steps, so T's column is read a step
+        # after it is written however small m is (only RTL can show that hazard).
+        p = cgg.make_problem(rng, 106, users=1, t=3, c=2)
+        p.hr, p.hi, p.m = p.hr[:, :3], p.hi[:, :3], 3
+        return out + [JobSpec(p)]
     if kind == "mixed":
         return [JobSpec(cgg.make_problem(rng, 200 + i, t=4)) for i in range(n or 12)]
     good = [JobSpec(cgg.make_problem(rng, 300 + i, users=2, t=2)) for i in range(2)]
@@ -258,18 +263,19 @@ def stimulus(js: list[JobSpec]) -> list[StreamBurst]:
 #: Lanes of the matrix loops (P = 16 complex MACs a cycle, E0) and of the vector loops.
 P_MAC = 16
 V_LANES = 4
+#: The fewest columns of H a MATMUL column step walks: T's column, written late in one step's pipeline,
+#: is read early in the next, ``MIN_M * N_rx / P - 3`` iterations later, which must exceed the loop's
+#: depth (the body's ``MIN_M``).  E0's smallest set is m = 8, so it costs nothing there.
+MIN_M = 8
 #: Cycles a loop spends beyond its trip count (entry, pipeline fill and drain, exit), per loop of the
-#: body (``src/cg_worker_task.h``): each loop's pipeline depth from the csynth schedule, then the rest
-#: fitted to the worker's traced RTL (xc7z020 at 100 MHz, Vitis / xsim 2025.1; the worker's ``test``
-#: jobs, every one within 1.4 cycles).  The fit: the stop test costs no cycle a column (it overlaps
-#: TMUL's entry) and ``stop`` is the rest of an iteration's overhead; ``hdr`` and ``init`` the job's.
+#: body (``src/cg_worker_task.h``): each loop's pipeline depth from the csynth schedule, then what the
+#: traced RTL adds, each with its cause (xc7z020 at 100 MHz, Vitis / xsim 2025.1).
 CYC = {
     "hdr": 0,        # the Job read -> the LOAD loop's first read (fitted)
     "load": 7,       # LOAD: N_rx (m + c) / 4 words, one a cycle (pipeline depth 7)
-    "init": 0,       # LOAD's last word -> the first iteration (fitted)
-    "stop": -4,      # an iteration's loops, entry to exit, less their depths' sum (fitted)
-    "t": 11,         # TMUL: m c N_rx / P cycles (depth 11)
-    "u": 8,          # UMUL: m c N_rx / P cycles (depth 8)
+    "init": 3,       # LOAD's last word -> the first iteration, and ITER's exit: once a job (fitted)
+    "stop": -3,      # an iteration's loops, entry to exit, less their depths' sum (fitted)
+    "mat": 12,       # MATMUL: (c + 1) max(m, MIN_M) N_rx / P cycles (depth 12)
     "ps": 9,         # PS:   N_rx c / V cycles (depth 9)
     "alpha": 61,     # ALPHA: c divides, pipelined (depth 61)
     "xr": 13,        # XR:   N_rx c / V cycles (depth 13)
@@ -281,12 +287,16 @@ CYC = {
 }
 
 
+def matmul_cycles(m: int, c: int) -> int:
+    """MATMUL's trip count: ``c + 1`` column steps of ``max(m, MIN_M)`` columns of H, a 16-row block a
+    cycle (TMUL on a column and UMUL on the one before, overlapped)."""
+    return (int(c) + 1) * max(int(m), MIN_M) * N_RX // P_MAC
+
+
 def iteration_cycles(m: int, c: int) -> int:
     k = CYC
-    mat = int(m) * int(c) * N_RX // P_MAC
     vec = N_RX * int(c) // V_LANES
-    return k["stop"] + (mat + k["t"]) + (mat + k["u"]) + (vec + k["ps"]) + (int(c) + k["alpha"]) \
-        + (vec + k["xr"]) + (int(c) + k["beta"]) + (vec + k["d"])
+    return k["stop"] + (matmul_cycles(m, c) + k["mat"]) + (vec + k["ps"]) + (int(c) + k["alpha"])         + (vec + k["xr"]) + (int(c) + k["beta"]) + (vec + k["d"])
 
 
 def compute_cycles(m: int, c: int, t: int) -> int:

@@ -98,7 +98,7 @@ def types() -> dict[str, str]:
 def render_config() -> str:
     """The example's constants and types for the bodies, from the Python that defines them."""
     consts = {"CG_W": cp.W, "CG_NRX": cgg.N_RX, "CG_MMAX": cgg.M_MAX, "CG_CMAX": cgg.C_MAX,
-              "CG_TMAX": cgg.T_MAX, "CG_COLW": cp.COL_WORDS, "CG_LANES": cp.LANES,
+              "CG_TMAX": cgg.T_MAX, "CG_COLW": cp.COL_WORDS, "CG_LANES": cp.LANES, "CG_MIN_M": cp.MIN_M,
               # the stop floor, a stored integer of rz's format, as its exact value (a power-of-two scale)
               "CG_RZ_FLOOR_VAL": repr(float(fx.to_float(cgg.FORMATS.rz_floor, cgg.FORMATS.cg.rz)))}
     assert cp.P_MAC == 4 * cp.LANES and cp.V_LANES == cp.LANES      # the body's banking (src/)

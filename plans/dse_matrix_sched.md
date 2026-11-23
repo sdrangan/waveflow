@@ -350,6 +350,59 @@ data point** -- the clean fresh-agent run below stays to do.
   gates there, exact resources (Vivado), and the pool blocks' decision tables at 128 bits with 2-burst jobs and
   3-burst results (the dispatcher's and the arbiter's tables refuse that point today) -- E3's calibration item.
 
+**Run 2 record (overlap), 2026-11-22; branch `claude/dse-e1-overlap`; Vitis HLS / Vivado / xsim 2025.1; the
+laptop.** Only the worker's matrix step changed; its ports, messages, errors, the pool, the split and the link
+depths did not.
+
+- **What changed.** TMUL (`T = q_T(Hᴴ D)`) and UMUL (`S = q_S(D + H T)`) ran one after the other, each bank of
+  16 complex MACs idle while the other worked. Now **one fused pipelined loop, MATMUL**: column step `s`
+  computes `T`'s column `s` and `S`'s column `s - 1`, both walking `H` in one order (column `j`, its 16-row
+  blocks), so **one read of `H` feeds both banks** and no memory port is added. `c + 1` steps instead of `2c`.
+  `T` keeps its array (TMUL writes column `s` while UMUL reads `s - 1`); UMUL keeps a running sum for each of
+  its column's 64 rows. Chosen over a two-stage dataflow because it scheduled at II = 1 at once and needs no
+  FIFO or second copy of `H`.
+- **A hazard closed by construction.** `T`'s column is written late in one step's pipeline and read early in
+  the next, `max(m, MIN_M) * 4 - 3` iterations later; the loop declares that dependence false, so a step walks
+  at least `MIN_M = 8` columns (the extra ones add zero). MATMUL's depth is 12 at xc7z020 (10 at xczu48dr),
+  under the 29-iteration margin. E0's smallest set is m = 8, so it costs nothing there; an `m = 3` job was added
+  to the worker's `test` scenario, and passes at RTL.
+- **Bit-exact**: the golden unchanged. csim on every scenario (`test` with the `m = 3` job, `bad_args`,
+  `bad_len`, `mixed`); every XSI recording equal to pysim's and the golden's.
+- **csynth, xc7z020 at 10 ns**: every loop II = 1 (MATMUL depth 12), Fmax estimate 137 MHz (run 1: 137).
+  **177 DSP, 52.9k LUT, 45.8k FF, 50 BRAM18** (run 1: 176, 46.8k, 38.9k, 50) -- the DSPs as before, now both
+  banks busy; +6.1k LUT and +6.9k FF for UMUL's 64 running sums (run 1: 16) and their block select. 99% of the
+  xc7z020's LUTs (csynth's estimate): one worker still builds and simulates there.
+- **Latency** (from the schedule's loop depths, the model `iteration_cycles`, checked at RTL): at `m = 32`,
+  `c = 8`, **an iteration 1,719 cycles** (MATMUL 1,164 of them; run 1 ~2,640) and **a job at `t = 4` 7,664**
+  (run 1 ~11,400); at RTL that job takes **7,663** Status to Status (run 1: 11,268). At 250 MHz a job is ~31 µs,
+  ~163 a worker in 5 ms: ~350 jobs a window need ~2.2 workers, so **M ∈ {1, 2, 4} still straddles** (the
+  deadline binds at 1 and 2, not at 4).
+- **csynth, xczu48dr at 4 ns** (`WAVEFLOW_CG_PART=rfsoc`, Vitis HLS 2025.1; Vivado cannot synthesize this part
+  on the laptop, HLS can): every loop II = 1; **177 DSP (4%), 52.7k LUT (12%), 47.0k FF (5%), 50 BRAM18 (2%)**;
+  estimated clock **3.392 ns (Fmax 294.8 MHz)**: under the 4 ns period, but **over csynth's budget of 2.92 ns
+  (4 ns less 1.08 ns uncertainty) by 0.47 ns**. The path is outside every pipelined loop: at ITER's head
+  (`cg_worker_task.h:179`) a 9-bit add feeding a 16-bit multiply in one DSP (2.40 + 1.00 ns) -- MATMUL's trip
+  count, `(c + 1) max(m, MIN_M) NB`, recomputed each iteration. Not fixed (the obvious fix: compute it once,
+  before ITER). Place and route decides whether 250 MHz holds: the lab machine.
+- **RTL gates (XSI), xc7z020 at 100 MHz, all four passing**: worker alone, split alone, the pool at 2 and 4
+  workers on 12 mixed jobs (every `tx_id` once, `X` bit-exact against the golden and pysim, an OK status each).
+- **Cycles.** The worker's timing model: one MATMUL term, `(c + 1) max(m, MIN_M) N_rx / 16` plus its depth;
+  refit to the traced RTL, `stop` -4 -> -3 (an iteration's loops, entry to exit, one cycle more than their
+  depths) and `init` 0 -> 3 (once a job, ITER's entry and exit). Every job's Status a cycle early, alike, as in
+  run 1 (pinned again). **The pool: -0.010% to -0.231% at 2 workers, -0.044% to -0.401% at 4** (run 1: -0.01% to
+  -0.16%, -0.03% to -0.32%): pysim early by the pool blocks' untimed decisions, now a larger share of a
+  shorter job.
+- **Wall times** (E3's costs; **the laptop, which is always in use -- `CLAUDE.local.md` says not to trust its
+  wall clock: re-time on the lab machine before E3 uses them**). csynth: the worker 69 s (xc7z020) and 71 s
+  (xczu48dr), the split 27 s, the pool at 2 workers 119 s, at 4 workers 191 s. XSI build (the `system_xsi`
+  step less its simulation): worker 15 s, split 6 s, pool2 34 s, pool4 50 s. RTL simulation: the worker alone
+  **7 jobs, 22.5k cycles, 8.0 s (1.1 s a job)**; the pool at 2 workers **12 jobs, 38.3k cycles, 39.5 s (3.3 s a
+  job)**; at 4 workers **12 jobs, 21.6k cycles, 71.4 s (6.0 s a job)** -- the simulation's cost grows with the
+  workers simulated, not with the jobs answered (about 0.36 / 1.0 / 3.3 ms a cycle at 1 / 2 / 4 workers). pysim
+  of each: 0.1 s.
+- **Left**: the trip-count path at xczu48dr; Vivado implementation (exact resources, closure) on the lab
+  machine; the pool blocks' decision tables at 128 bits; E2.
+
 - A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
   specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
   installed but **told to stay out of `plans/` and `docs/evaluation/`** (Section 9, item 6). The agent that

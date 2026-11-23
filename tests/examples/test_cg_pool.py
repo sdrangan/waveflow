@@ -162,8 +162,9 @@ def test_an_error_stops_its_worker_and_the_run_still_returns(n, kind):
 
 
 #: The cycle each job's Status leaves the worker alone at RTL, the ``test`` scenario (xc7z020 at 100 MHz,
-#: Vitis / xsim 2025.1; the worker's XSI gate below).
-WORKER_RTL_STATUS = [4742, 16010, 16665, 19475, 24215, 28112]
+#: Vitis / xsim 2025.1; the worker's XSI gate below).  Run 2, TMUL and UMUL overlapped (run 1, in series:
+#: 4742, 16010, 16665, 19475, 24215, 28112, without the m = 3 job).
+WORKER_RTL_STATUS = [3825, 11488, 12140, 14365, 18188, 21302, 22522]
 
 
 def test_worker_pysim_cycles_are_the_rtls():
