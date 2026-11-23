@@ -146,6 +146,7 @@ recorded number moves.
 | 2026-11-22 | 3 again (after E, F, H) and B refined | B's residual (+9 on `test`) was `pre`'s `COPY` loop entry: 6 cycles at RTL from a frame's tag word to its first word into the FFT, 3 in pysim; `STAGE_CYC["pre_copy"]` = 3. **Every stream block timed: `test` 1,046 (-2.0%), `long` 2,424 (exact)**; untimed 1,035 / 2,418. Attribution (timed): `test` (gap +21) A 0, A2 +3, B 0, C +16, D +3, E +2, F -2, G +1, H -2; `long` (gap 0) A 0, A2 +1, B 0, C 0, E 0, F 0, G +1, H -2. Each channel's last status, RTL / pysim (beats): `test` 821 / 799 (-2.7%), 1,067 / 1,044 (-2.2%), 888 / 886 (-0.2%); `long` 2,349 / 2,334 (-0.6%), 2,371 / 2,358 (-0.5%), 2,424 / 2,422 (-0.1%). Of C's +16 on `test`, 14 are one hop: `post` begins an inverse frame 38 cycles after the FFT's first word of it at RTL, 24 in pysim -- a wait behind its previous frame not yet explained. |
 | 2026-11-22 | 5 (proposed) | The gate written (a fast test: each channel's last status, every stream block timed, against `LAST_STATUS`), passing at the proposed 3%; the untimed bank fails it. Worst 2.68% (`test` channel 0), mean 1.05%. Tolerance proposed in Section 9; stopped for the user. Ledger rows 20 (`pre_copy`, closed) and 21 (`post`'s 14-cycle wait, open) added. |
 | 2026-11-22 | open question 3 decided | The user (relayed by the cloud session): word-by-word back-pressure in pysim's links is **rejected** -- too slow, it defeats the point of pysim. pysim keeps moving bursts; the driver pins' 6-8% (`SsrFft`'s gap counted from the arrivals, against a source the FFT stalls) stays a named limit, not modelled. Marked DECIDED in Section 7, `docs/guide/dsp/ssr_fft/timing.md`, ledger row 18 and `GapRhythm`'s docstring. |
+| 2026-11-22 | 5 (DECIDED) | The user chose the tolerance per scenario: **3% on `test`, 1% on `long`** (`PYSIM_TOL`). The gate committed: `test_pysim_timing_is_within_tolerance_of_the_rtl[test, long]`, passing (worst -2.68% and -0.64%). Ledger row 21 stays open. Section 9. |
 
 ## 5. Steps 1-3 record (2026-11-22, lab machine, Vitis / Vivado / xsim 2025.1)
 
@@ -313,10 +314,10 @@ lands on its RTL.
 
 G is D's (the first block's read, fixed with it). After these, Step 5 (the gate and its tolerance).
 
-## 9. Step 5: the gate, and the tolerance proposed (2026-11-22)
+## 9. Step 5: the gate and its tolerance (2026-11-22)
 
 **The gate** (`tests/examples/test_os_filterbank.py::test_pysim_timing_is_within_tolerance_of_the_rtl`, a fast
-test, no vendor tools; written, passing, **not committed** until the tolerance is confirmed): the bank in pysim
+test, no vendor tools; committed with the tolerance the user chose): the bank in pysim
 on each scenario, every stream block timed on the packaged platform (the arbiter and the three demuxes); for each
 channel, the cycle of its last status -- the burst's last beat, as `fidelity.py` compares it -- against the RTL
 cycle `test_rtl_timing_is_exact` pins (`LAST_STATUS`), in either direction. It also checks every job's status
@@ -344,5 +345,9 @@ bank (`test` channel 0 at -3.41%), so dropping the stream blocks' tables fails i
 allows about 70 cycles, where the error now is 15 at most. A tighter alternative is per scenario: 3% on `test`,
 1% on `long` (worst 0.64%).
 
-What it does not close: #21, written up as open; the gate records the gap that remains (pysim short by up to
+**DECIDED (the user, 2026-11-22): per scenario, 3% on `test` and 1% on `long`** (`PYSIM_TOL = {"test":
+0.03, "long": 0.01}`). Both bounds hold with margin of 0.3% (`test`, channel 0: 22 cycles against 24) and 0.36%
+(`long`, channel 0: 15 against 23); the untimed bank fails `test`'s.
+
+What it does not close: #21, left open; the gate records the gap that remains (pysim short by up to
 2.7%), so it cannot grow unnoticed.
