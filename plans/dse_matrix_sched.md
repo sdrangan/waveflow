@@ -3,7 +3,9 @@
 **Status: DRAFT for discussion, written 2026-11-22** from a long design conversation with the user (cloud
 session `session_01HnWt85iSFAfaupHA1sSwTL`, branch `ccr-62d70dbe-679k63`). Nothing here is built. It
 **replaces the next step of `plans/dse_cg.md`** (paused; why below) and gives `plans/dse_arch.md` its first
-concrete problem. Section 9 lists the decisions still open; Section 11 records the conclusions of the same
+concrete problem. **Next (user, 2026-11-22): Section 7a** -- build one CG engine (B1, a pool of dedicated
+workers) with an agent, run it over many windows, and measure what each step costs, before Phase 1.
+Section 9 lists the decisions still open; Section 11 records the conclusions of the same
 conversation that are not this study but that a later agent will need.
 
 **For the agent picking this up:** read this whole file first, then the files Section 10 names. The user's
@@ -243,13 +245,135 @@ Without 1-3, pysim is systematically optimistic exactly where the deadline decid
 but too slow to search with (dse_cg saw pysim read
 3-4% fast at its fastest designs, so its agents verified 2-10 designs instead of one).
 
+## 7a. Before Phase 1: the engine first, then early cost measurements (Stages E0-E3)
+
+**Decided by the user, 2026-11-22.** Past DSE plans took a long time to show a result. So before any
+algorithm or agent study, we **build one good CG engine, run it long, and measure what each step of an
+evaluation costs**. Comparing performance across a set of hardware options, with the scheduler held fixed,
+is a common task in its own right. It is also a clean comparison: with no search to do, the baseline
+cannot skip points, so the cost of each design point is the result. These stages replace Phase 2 for the
+first engine. Phases 1 and 3-8 follow on from them.
+
+**The architecture: B1 (user, 2026-11-22).** The CG engine is a **pool of M dedicated CG workers** behind a
+`StreamDispatch`, with their results merged by a `StreamArbiter` whose `m_sel` returns the credits
+(`docs/guide/systems/shared_kernels.md`, *A pool of workers*). Each job carries its matrix **inline** on the
+job stream, and the worker keeps it in its own BRAM for every iteration. There is no bus and no shared
+memory. Options considered:
+
+| | architecture | why not first |
+|---|---|---|
+| A | general `VecUnit` and `SystolicEngine` on an AXI crossbar, stateless, passing descriptors (dse_cg V2) | rejected: the shared-memory port was 90-97% busy, so throughput was poor |
+| **B1** | **pool of dedicated CG workers, matrix inline** | **chosen: only the worker is new; the pool's blocks and RTL gates exist (`plans/stream_dispatch.md`, Stages 1-8 at 2025.1)** |
+| B2 | the same pool with `VecUnit` workers running the CG program | the general unit again; its pysim runs the instruction interpreter (~7 ms a job) |
+| C | B1 with the workers reading their users' `Ĥⱼ` from a shared memory | the natural **second** engine: it brings memory contention, where the baseline's estimate should fail |
+| D | one deeply pipelined engine, jobs interleaved through a feedback loop | the best throughput per resource, and the most build risk |
+
+**A known limit of B1, accepted for this first test:** the only contention is jobs waiting for a worker,
+plus the job stream loading each matrix (longer for larger sets). The baseline's simple estimate (iteration
+count x cycles per iteration) will probably be close. B1 is for checking the flow and measuring costs, not
+for showing pysim's advantage. C does that.
+
+### E0. The engine's specification (we write it)
+
+The engine knows nothing of users or whitening. It solves a batch of CG systems in the **factored form**
+(`plans/ltbf_dse/ltbf_dse.md` Section 1.1), so it serves whatever R̂ turns out to be (Section 9, item 2):
+
+- **A job:** `tx_id`; `m`, the columns of `H` (`8·|S|` for a set S at 8 SRS columns a user); `c`, the
+  right-hand sides; `t`, the iteration count. Then the data: `H` (`N_rx x m`) and `B` (`N_rx x c`).
+- **The solve:** `t` iterations of CG on `(I + H Hᴴ) X = B` from `X₀ = 0`, applying `S = D + H (Hᴴ D)`, never
+  forming `I + H Hᴴ`. Per column: `ω = ‖r‖² / (dᴴ s)`, `X += ωD`, `R -= ωS`, `ν = ‖r'‖² / ‖r‖²`, `D = R + νD`. A
+  column stops early, as in the paper's code, when `dᴴ s = 0` or `‖r‖²` falls below a floor.
+- **Fixed iterations for now** (`t` in the job). A cap plus a tolerance (Section 9, item 1) waits for engine C.
+- **The result:** a `Resp` that echoes `tx_id` and carries `X` (`N_rx x c`), with a `Status` per job on its
+  own stream (`docs/guide/systems/command_response.md`). Errors are fatal: a bad `m`, `c` or `t`.
+- **Bit-exact golden:** a fixed-point Python model of the worker that pysim and RTL must equal bit for bit,
+  plus a float reference giving the quantization error. Formats from `waveflow.linalg` (`acc_format`).
+- **The pool:** `StreamDispatch` (first-free), M workers, `StreamArbiter`; credits per worker 1 or 2 (2
+  only if the worker double-buffers, loading the next job while it computes). Results come out in
+  completion order; `tx_id` says whose.
+- **Parameters:** M (workers); P (complex MACs a cycle in a worker); the data word width; `N_rx`, `m_max`,
+  `c_max` (build-time maxima); the fixed-point formats.
+- **The platform:** `xczu48dr` at 250 MHz, Vitis / Vivado 2025.1; the pool's decision tables at the
+  engine's width and frame (Section 7, item 2, *width and frame*).
+
+**Proposed sizes, to confirm (Section 9, item 3):** `N_rx = 64` (LTBF's AC9), 8 columns a user, at most 4
+users a set (`m ≤ 32`), `c = 8`, `t = 4`, 16-bit complex samples, 128-bit words.
+
+**The rate check, which the builder repeats from measured numbers before writing the worker.** At those
+sizes, one iteration is `m·N_rx·c` complex MACs for `Hᴴ D` and the same for `H (·)`: 32,768, so 131k a job
+at `t = 4`. Loading `H` and `B` is 2,560 complex samples, 640 words at four a word. At P = 16 a worker takes
+about 8,200 compute + 640 load ≈ 8,800 cycles, 35 µs a job, so about 140 jobs a worker in a 5 ms window
+(1.25 M cycles). The plan's ~350 jobs a window (Section 3) then needs about 2.5 workers: **M ∈ {1, 2, 4}
+straddles the load**, so the deadline binds at 1 and 2 workers and not at 4. Resources: about 50-64 DSP and
+about 10 BRAM18 a worker (`H` 8 KB; `B`, `X`, `R`, `D`, `S` 2 KB each), so 4 workers fit easily on the
+xczu48dr. If the measured numbers differ, change P or the sizes so the sweep still straddles the load.
+
+### E1. An agent builds the engine
+
+- A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
+  specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
+  installed but **told to stay out of `plans/` and `docs/evaluation/`** (Section 9, item 6). The agent that
+  writes the specification does not build it.
+- It uses the skills (`waveflow-architecture`, `waveflow-kernel`, `waveflow-kernel-hls`, `waveflow-pipeline`,
+  `waveflow-shared-kernel`, `waveflow-system`).
+- **Done means RTL, not pysim** (the shared-kernel build run stopped at pysim,
+  `docs/evaluation/agent_skills/shared_kernel.md`, *Limits*). The worker's golden, pysim and HLS body; the
+  pool; each block alone in its harness; csynth of each block and of the top; an XSI gate driving a batch of
+  jobs of mixed set sizes through the pool, every count and `tx_id` asserted, **X bit-exact against the
+  golden and pysim**, cycles against pysim within the 5% target of `plans/dse_cg.md`.
+- **Recorded as an agent-skills data point** (a problem with no close reference example: no CG worker
+  exists): wall time, tool calls, interventions, the Waveflow gaps it finds. The task text and the transcript
+  go in `sdrangan/waveflow-eval`; only an outline comes back here, as for the shared-kernel study.
+- Once it passes, we review it and bring it into this repository as an example (a name to choose; for
+  example `examples/cg_pool/`).
+
+### E2. Long runs: windows of jobs
+
+- **A frame is a window:** the job list for one 5 ms window, then the deadline cut. To start, the job list
+  comes from a **fixed, scripted baseline scheduler** and is **replayed** in both backends (Python writes it;
+  the RTL testbench reads it). That avoids Phase 4's one-policy-two-backends work for now.
+- **Synthetic jobs first:** random channels with correlated users and set sizes 1-4, with enough jobs that
+  the deadline binds at M = 1 and 2. The Sionna drops come in Phase 1.
+- **The deadline is applied afterwards:** each job's completion cycle is recorded (pysim and RTL alike), the
+  engine is drained between windows, and a job finishing after the window's start + 1.25 M cycles counts as
+  discarded (D5).
+- **Gate:** pysim and RTL agree on every window: X bit-exact, the same jobs before the deadline, and the
+  completion cycles within the target. pysim for 1,000 windows. **RTL for as many windows as the measured cost
+  allows**: 10 first, then 100 if a window takes minutes. At the `VecUnit`'s ~5 s a job, a 350-job window
+  would take about 30 min, so the dedicated worker's RTL speed is itself a measurement (E3).
+
+### E3. The measurements
+
+At each design point of a small sweep -- **M ∈ {1, 2, 4}** at one P, plus one P either side at M = 2 --
+measure the following, with the tool version and the machine next to every number (Vitis / Vivado 2025.1):
+
+1. **Build:** csynth time of each block and of the top; which blocks a new point rebuilds and which it
+   reuses; the XSI build; Vivado synthesis and implementation time for exact resources.
+2. **Calibration:** the time to calibrate the worker's timing (a new kernel, so this is a real cost), the
+   pool's decision tables at the engine's width and frame, and any re-calibration a new point needs. Say which
+   are once per platform and which once per point: only the second is charged to a sweep.
+3. **Simulation:** RTL wall time and pysim wall time against jobs, fitted as `a + b·jobs` (fixed start-up plus
+   per job), at 10, 100 and 1,000 jobs; and per window. Also the untimed golden.
+4. **Accuracy:** pysim against RTL per point in cycles, in the jobs that meet the deadline, and in resources
+   (pysim's cost model against Vivado). And the **baseline's estimate** (golden iteration counts x cycles a
+   job measured once at RTL, then a queue of M servers) against RTL, on the same counts.
+5. **The cost of the sweep:** per point and in total, for the RTL-only flow (build + RTL windows) and for the
+   Waveflow flow (pysim, plus calibration, plus one RTL confirmation).
+
+**Thresholds, fixed before E3 is measured** (proposed, for the user):
+- If an RTL window takes under ~2 min, the baseline can afford RTL for each policy and the later study is
+  weak; consider larger windows or engine C.
+- If pysim misses RTL by more than the 5% target at the deadline, fix pysim before any further work.
+- If the baseline's estimate is within ~1% of RTL on deadline counts with B1, that is expected: go to C and
+  measure again before Phase 1.
+
 ## 8. Phases (proposed)
 
 | phase | what | done when |
 |---|---|---|
 | 0 | The open decisions of Section 9 answered by the user; this plan accepted | the decisions recorded here |
 | 1 | **The algorithm, untimed (Python):** the user scheduler (fixed), candidate sets per window, R̂(S) for any set S, the closest-superset rule, the no-whitening fallback, the genie, the SINR loss; over the Sionna Denver drops (`examples/ltbf_cg_mem_dse/data/drops/`, cached; numpy only) | the brackets (all exact / none) and two scripted policies scored |
-| 2 | **The engine** (Section 7, item 4): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts; then **its fast mode** (Section 7, item 6) | the engine at RTL bit-exact against pysim, its cycles within the targets; the fast mode equal to the interpreter-backed pysim, bits and cycles, and a window in tens of ms |
+| 2 | **The engine** (Section 7, item 4; the first engine, B1, is built and measured by Stages E0-E3 of Section 7a, before Phase 1): the job interface (set, iterations, tolerance), the pool, the shared memory; pysim and RTL; gates asserting counts; then **its fast mode** (Section 7, item 6) | the engine at RTL bit-exact against pysim, its cycles within the targets; the fast mode equal to the interpreter-backed pysim, bits and cycles, and a window in tens of ms |
 | 3 | **Preconditions 1-3**: pysim's decision gaps (Stage 7 built; Stage 8, word against burst, built 2026-11-22); the decision tables at the study's width and frame; the A53 pricing of a scheduler; the harness's refusal of an untimed run | pysim's idle cycles equal RTL's at the study's configuration; an uncalibrated run refused |
 | 4 | **One policy, both backends** (Section 5) | a scripted policy runs unchanged in pysim and at RTL, the same RBs covered |
 | 5 | **Scripted baselines:** greedy coverage by probability; insurance superset first; iteration-count sweeps. The agent must beat these | their scores on held-out windows |
@@ -265,7 +389,8 @@ but too slow to search with (dse_cg saw pysim read
    harder to predict without timing. *Proposed:* cap plus tolerance, the shared memory kept.
 2. **What R̂ is exactly**, in LTBF's terms -- `Q̂(S) = I + Σ_{j∈S} Ĥα,ⱼĤα,ⱼᴴ` per set and the CG against it,
    or a whitening of a different form -- and its dimensions.
-3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set.
+3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set. **Blocks Stage E0** (Section 7a proposes
+   `N_rx = 64`, 8 columns a user, at most 4 users a set, `c = 8`, `t = 4`).
 4. **The user scheduler's output:** sets with probabilities, or sets only; the traffic model behind it (a
    proportional-fair scheduler in Python is the simplest realistic source).
 5. **Deadline granularity:** once per 5 ms window, or per slot inside it; how long a matrix stays valid
