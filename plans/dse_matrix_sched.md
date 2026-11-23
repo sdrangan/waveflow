@@ -296,8 +296,10 @@ The engine knows nothing of users or whitening. It solves a batch of CG systems 
 - **The platform:** `xczu48dr` at 250 MHz, Vitis / Vivado 2025.1; the pool's decision tables at the
   engine's width and frame (Section 7, item 2, *width and frame*).
 
-**Proposed sizes, to confirm (Section 9, item 3):** `N_rx = 64` (LTBF's AC9), 8 columns a user, at most 4
-users a set (`m ≤ 32`), `c = 8`, `t = 4`, 16-bit complex samples, 128-bit words.
+**Sizes (Section 9, item 3) -- DECIDED for E1 by the user, 2026-11-22, as proposed:** `N_rx = 64` (LTBF's
+AC9), 8 columns a user, at most 4 users a set (`m ≤ 32`), `c = 8`, `t = 4`, 16-bit complex samples, 128-bit
+words, P = 16. The builder redoes the rate check from csynth numbers before writing the worker, and asks again
+if P or the sizes must change.
 
 **The rate check, which the builder repeats from measured numbers before writing the worker.** At those
 sizes, one iteration is `m·N_rx·c` complex MACs for `Hᴴ D` and the same for `H (·)`: 32,768, so 131k a job
@@ -309,6 +311,11 @@ about 10 BRAM18 a worker (`H` 8 KB; `B`, `X`, `R`, `D`, `S` 2 KB each), so 4 wor
 xczu48dr. If the measured numbers differ, change P or the sizes so the sweep still straddles the load.
 
 ### E1. An agent builds the engine
+
+**Run 1 (user, 2026-11-22): built in this repository**, on branch `claude/dse-e1-b1-cg-engine` (from
+`ccr-62d70dbe-679k63`), by an agent that had read this plan, on the laptop (golden, pysim, HLS, csim,
+csynth / RTL at `DEFAULT_PART`; the xczu48dr numbers wait for the lab machine). **Not an agent-skills
+data point** -- the clean fresh-agent run below stays to do.
 
 - A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
   specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
@@ -389,8 +396,9 @@ measure the following, with the tool version and the machine next to every numbe
    harder to predict without timing. *Proposed:* cap plus tolerance, the shared memory kept.
 2. **What R̂ is exactly**, in LTBF's terms -- `Q̂(S) = I + Σ_{j∈S} Ĥα,ⱼĤα,ⱼᴴ` per set and the CG against it,
    or a whitening of a different form -- and its dimensions.
-3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set. **Blocks Stage E0** (Section 7a proposes
-   `N_rx = 64`, 8 columns a user, at most 4 users a set, `c = 8`, `t = 4`).
+3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set. **For the engine (E0/E1): DECIDED
+   2026-11-22** as Section 7a proposed (`N_rx = 64`, 8 columns a user, at most 4 users a set, `c = 8`, `t = 4`,
+   16-bit, 128-bit words, P = 16). RBs and candidate sets a window stay open for Phase 1.
 4. **The user scheduler's output:** sets with probabilities, or sets only; the traffic model behind it (a
    proportional-fair scheduler in Python is the simplest realistic source).
 5. **Deadline granularity:** once per 5 ms window, or per slot inside it; how long a matrix stays valid
