@@ -298,6 +298,12 @@ ITER:
     XR:
         for (int i = 0; i < c * NWD; ++i) {
 #pragma HLS PIPELINE II=1
+// Each iteration reads and rewrites its own word: no word is touched by two iterations (csynth assumed
+// one was, distance 2, and halved the loop's rate).
+#pragma HLS DEPENDENCE variable=rr type=inter false
+#pragma HLS DEPENDENCE variable=ri type=inter false
+#pragma HLS DEPENDENCE variable=xr type=inter false
+#pragma HLS DEPENDENCE variable=xi type=inter false
             const alpha_t a = al[k];
             dot_rz_t s = 0;
             for (int q = 0; q < L; ++q) {
@@ -340,6 +346,8 @@ ITER:
     DUPD:
         for (int i = 0; i < c * NWD; ++i) {
 #pragma HLS PIPELINE II=1
+#pragma HLS DEPENDENCE variable=dr type=inter false
+#pragma HLS DEPENDENCE variable=di type=inter false
             const beta_t bt = be[k];
             const bool keep = stop[k];
             for (int q = 0; q < L; ++q) {

@@ -9,6 +9,8 @@ and the golden, cycles against pysim.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -159,6 +161,32 @@ def test_an_error_stops_its_worker_and_the_run_still_returns(n, kind):
     assert sum(w.halted for w in sysm.dut().workers) == 1
 
 
+#: The cycle each job's Status leaves the worker alone at RTL, the ``test`` scenario (xc7z020 at 100 MHz,
+#: Vitis / xsim 2025.1; the worker's XSI gate below).
+WORKER_RTL_STATUS = [4742, 16010, 16665, 19475, 24215, 28112]
+
+
+def test_worker_pysim_cycles_are_the_rtls():
+    """The worker's timing model (``CYC``, its loops' csynth depths plus a fit to the traced RTL): every
+    job's Status within 2 cycles of the RTL's -- pysim is a cycle early on each, alike, so the error does
+    not grow job to job.  No vendor tools: the RTL cycles are the XSI gate's, pinned above."""
+    sysm = harness(cp.CgWorker, workload="test")
+    sink = sysm.stand_ins["m_out"]
+    times = []
+    orig = sink.rx_proc
+
+    def rx(words):
+        times.append(sink.env.now)
+        yield from orig(words)
+
+    sink.stream_ep.rx_proc = rx
+    sysm.run()
+    per = sysm.dut().clk.period
+    got = [round(t / per) - 1 for t in times[2::3]]
+    assert len(got) == len(WORKER_RTL_STATUS)
+    assert all(abs(g - r) <= 2 for g, r in zip(got, WORKER_RTL_STATUS)), list(zip(got, WORKER_RTL_STATUS))
+
+
 @pytest.mark.vitis
 @pytest.mark.parametrize("kind", ["test", "bad_args", "bad_len", "mixed"])
 def test_the_worker_body_is_bit_exact_under_csim(tmp_path, kind):
@@ -177,3 +205,75 @@ def test_the_worker_body_is_bit_exact_under_csim(tmp_path, kind):
 def test_the_pool_refuses_a_bad_size():
     with pytest.raises(ValueError):
         cp.CgPool(name="p", sim=Simulation(), n_workers=17)
+
+
+# --- at RTL ------------------------------------------------------------------------------------------
+#: The gates' build (csynth fails silently past the Windows path limit: keep it short).
+RTL_ROOT = Path(__file__).resolve().parents[2] / "work" / "cg_pool"
+
+
+def _trace_bursts(trace_dir: Path) -> list[np.ndarray]:
+    """A recording's bursts, 128-bit words as (lo, hi) chunk pairs."""
+    words = np.fromfile(trace_dir / "words.bin", dtype="<u8").reshape(-1, 2)
+    bounds = np.fromfile(trace_dir / "bounds.bin", dtype="<u8")
+    starts = [0, *bounds[:-1]]
+    return [words[int(s):int(e)] for s, e in zip(starts, bounds)]
+
+
+def _rtl_run(prefix: str):
+    """Build (csynth if stale) and run one system of the DAG through RTL and pysim; its work directory."""
+    from examples.cg_pool import cg_pool_build as cb
+    from waveflow.build.build import BuildConfig
+    from waveflow.toolchain.toolchain import find_vitis_path, find_vivado_path
+
+    if not (find_vivado_path() and find_vitis_path()):
+        pytest.skip("XSI gate prerequisite missing: Vitis HLS + Vivado")
+    import os
+    os.environ.setdefault("WAVEFLOW_CG_ROOT", str(RTL_ROOT))
+    root = cb.build_root()
+    dag = cb.build_dag(work_dir=root / "xw")
+    cfg = BuildConfig(root_dir=root, params={"synth": "build"})
+    res = dag.run(cfg, through=f"{prefix}system_xsi")
+    res.update(dag.run(cfg, through=f"{prefix}pysim"))
+    bad = {k: r.message for k, r in res.items() if not r.success}
+    assert not bad, bad
+    top = {"worker_": cb.WORKER_TOP, "split_": cb.SPLIT_TOP}.get(prefix) or cb.pool_top(int(prefix[4:-1]))
+    return root / "xw" / f"{prefix}{top}"
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("prefix,kind,outs", [("worker_", "test", ["m_out"]),
+                                              ("split_", "test", ["m_out", "m_status"])],
+                         ids=["worker", "split"])
+def test_rtl_module_alone_equals_pysim_and_the_golden(prefix, kind, outs):
+    """The worker alone and the split alone at RTL: every output burst equal to pysim's and to the
+    golden's, word for word and TLAST for TLAST (their order is the jobs': no timing in it)."""
+    work = _rtl_run(prefix)
+    cls = cp.CgWorker if prefix == "worker_" else cp.CgSplit
+    golden = cls(name="g", sim=Simulation()).golden(kind)
+    for port in outs:
+        rtl = _trace_bursts(work / "traces" / port)
+        sim = _trace_bursts(work / "pysim_traces" / port)
+        want = [np.asarray(w, dtype=np.uint64).reshape(-1, 2) for w in golden[port]]
+        assert len(rtl) == len(sim) == len(want), port
+        for r, s, w in zip(rtl, sim, want):
+            np.testing.assert_array_equal(r, w)
+            np.testing.assert_array_equal(s, w)
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("n", [2, 4])
+def test_rtl_pool_answers_every_job_bit_exact(n):
+    """THE gate (E1): the pool at RTL on the mixed batch -- set sizes 1-4 -- every job answered once, its
+    tx_id's X bit-exact against the golden and pysim, one OK status each.  The order out is timing's,
+    so the answers are compared by tx_id, not in order."""
+    work = _rtl_run(f"pool{n}_")
+    exp = cp.CgPool(name="p", sim=Simulation(), n_workers=n).expected_answers("mixed")
+    for where in ("traces", "pysim_traces"):
+        ans, st = cp.answers_by_tx(_trace_bursts(work / where / "m_out"),
+                                   _trace_bursts(work / where / "m_status"))
+        assert sorted(ans) == sorted(st) == sorted(exp), where
+        assert all(v == cp.StatusCode.OK for v in st.values()), where
+        for tx, (bursts, _s) in exp.items():
+            for got, want in zip(ans[tx], bursts):
+                np.testing.assert_array_equal(got.reshape(-1, 2), np.asarray(want).reshape(-1, 2))

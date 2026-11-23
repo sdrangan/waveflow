@@ -259,20 +259,25 @@ def stimulus(js: list[JobSpec]) -> list[StreamBurst]:
 P_MAC = 16
 V_LANES = 4
 #: Cycles a loop spends beyond its trip count (entry, pipeline fill and drain, exit), per loop of the
-#: body (``src/cg_worker_task.h``).  Seeds from the csynth schedule, refit from the traced RTL.
+#: body (``src/cg_worker_task.h``): each loop's pipeline depth from the csynth schedule, then the rest
+#: fitted to the worker's traced RTL (xc7z020 at 100 MHz, Vitis / xsim 2025.1; the worker's ``test``
+#: jobs, every one within 1.4 cycles).  The fit: the stop test costs no cycle a column (it overlaps
+#: TMUL's entry) and ``stop`` is the rest of an iteration's overhead; ``hdr`` and ``init`` the job's.
 CYC = {
-    "hdr": 4,        # the Job read -> the LOAD loop's first read
-    "load": 6,       # LOAD: N_rx (m + c) / 4 words, one a cycle
-    "init": 4,       # INIT: rz per column (part of LOAD) -> the first iteration
-    "t": 12,         # TMUL: m c N_rx / P cycles
-    "u": 12,         # UMUL: m c N_rx / P cycles
-    "ps": 8,         # PS:   N_rx c / V cycles
-    "alpha": 40,     # ALPHA: c divides, pipelined
-    "xr": 10,        # XR:   N_rx c / V cycles
-    "beta": 40,      # BETA: c divides, pipelined
-    "d": 8,          # DUPD: N_rx c / V cycles
+    "hdr": 0,        # the Job read -> the LOAD loop's first read (fitted)
+    "load": 7,       # LOAD: N_rx (m + c) / 4 words, one a cycle (pipeline depth 7)
+    "init": 0,       # LOAD's last word -> the first iteration (fitted)
+    "stop": -4,      # an iteration's loops, entry to exit, less their depths' sum (fitted)
+    "t": 11,         # TMUL: m c N_rx / P cycles (depth 11)
+    "u": 8,          # UMUL: m c N_rx / P cycles (depth 8)
+    "ps": 9,         # PS:   N_rx c / V cycles (depth 9)
+    "alpha": 61,     # ALPHA: c divides, pipelined (depth 61)
+    "xr": 13,        # XR:   N_rx c / V cycles (depth 13)
+    "beta": 68,      # BETA: c divides, pipelined (depth 68)
+    "d": 7,          # DUPD: N_rx c / V cycles (depth 7)
     "out": 4,        # the last iteration -> the Resp
-    "store": 4,      # STORE: N_rx c / 4 words
+    "store": 4,      # STORE: N_rx c / 4 words (depth 4); the Status then leaves a cycle early in
+                     # pysim, every job alike (job to job the cycles are the RTL's exactly)
 }
 
 
@@ -280,7 +285,7 @@ def iteration_cycles(m: int, c: int) -> int:
     k = CYC
     mat = int(m) * int(c) * N_RX // P_MAC
     vec = N_RX * int(c) // V_LANES
-    return (mat + k["t"]) + (mat + k["u"]) + (vec + k["ps"]) + (int(c) + k["alpha"]) \
+    return k["stop"] + (mat + k["t"]) + (mat + k["u"]) + (vec + k["ps"]) + (int(c) + k["alpha"]) \
         + (vec + k["xr"]) + (int(c) + k["beta"]) + (vec + k["d"])
 
 

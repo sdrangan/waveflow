@@ -57,6 +57,21 @@ WORKER_TOP, SPLIT_TOP = "cg_worker_top", "cg_split_top"
 POOL_SIZES = (2, 4)
 
 
+def build_root() -> Path:
+    """Where the build runs: ``WAVEFLOW_CG_ROOT`` (a short directory -- csynth fails silently past the
+    Windows path limit; the bodies in ``src/`` are copied there), else this folder."""
+    import shutil
+
+    env = os.environ.get("WAVEFLOW_CG_ROOT")
+    if not env:
+        return HERE
+    root = Path(env)
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    for f in (HERE / "src").glob("*.h"):
+        shutil.copy(f, root / "src" / f.name)
+    return root
+
+
 def pool_top(n: int) -> str:
     return f"cg_pool{n}_top"
 
@@ -206,7 +221,7 @@ if __name__ == "__main__":
     from waveflow.build.cli import run_dag_cli
 
     run_dag_cli(lambda a: build_dag(), description=__doc__.splitlines()[0], default_through="pysim",
-                root_dir=HERE,
+                root_dir=build_root(),
                 extra_args=[(("--synth",), dict(choices=("build", "check"), default="build",
                              help="build: csynth a stale top; check: fail on one instead"))],
                 params_from_args=lambda a: {"synth": a.synth})
