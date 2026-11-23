@@ -426,3 +426,9 @@ examples/os_filterbank/gen/
 examples/os_filterbank/*_proj/
 examples/os_filterbank/xsi_work/
 examples/os_filterbank/logs/
+# examples/cg_pool (plans/dse_matrix_sched.md 7a, E1): the bodies are src/; the rest is build output.
+examples/cg_pool/include/
+examples/cg_pool/gen/
+examples/cg_pool/*_proj/
+examples/cg_pool/xsi_work/
+examples/cg_pool/logs/

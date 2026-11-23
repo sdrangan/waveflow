@@ -296,8 +296,10 @@ The engine knows nothing of users or whitening. It solves a batch of CG systems 
 - **The platform:** `xczu48dr` at 250 MHz, Vitis / Vivado 2025.1; the pool's decision tables at the
   engine's width and frame (Section 7, item 2, *width and frame*).
 
-**Proposed sizes, to confirm (Section 9, item 3):** `N_rx = 64` (LTBF's AC9), 8 columns a user, at most 4
-users a set (`m ≤ 32`), `c = 8`, `t = 4`, 16-bit complex samples, 128-bit words.
+**Sizes (Section 9, item 3) -- DECIDED for E1 by the user, 2026-11-22, as proposed:** `N_rx = 64` (LTBF's
+AC9), 8 columns a user, at most 4 users a set (`m ≤ 32`), `c = 8`, `t = 4`, 16-bit complex samples, 128-bit
+words, P = 16. The builder redoes the rate check from csynth numbers before writing the worker, and asks again
+if P or the sizes must change.
 
 **The rate check, which the builder repeats from measured numbers before writing the worker.** At those
 sizes, one iteration is `m·N_rx·c` complex MACs for `Hᴴ D` and the same for `H (·)`: 32,768, so 131k a job
@@ -309,6 +311,97 @@ about 10 BRAM18 a worker (`H` 8 KB; `B`, `X`, `R`, `D`, `S` 2 KB each), so 4 wor
 xczu48dr. If the measured numbers differ, change P or the sizes so the sweep still straddles the load.
 
 ### E1. An agent builds the engine
+
+**Run 1 (user, 2026-11-22): built in this repository**, on branch `claude/dse-e1-b1-cg-engine` (from
+`ccr-62d70dbe-679k63`), by an agent that had read this plan, on the laptop (golden, pysim, HLS, csim,
+csynth / RTL at `DEFAULT_PART`; the xczu48dr numbers wait for the lab machine). **Not an agent-skills
+data point** -- the clean fresh-agent run below stays to do.
+
+**Run 1 record (2026-11-22; Vitis HLS / Vivado / xsim 2025.1, xc7z020 at 100 MHz, the laptop).** Built as
+`examples/cg_pool/` (`cg_golden.py`, `cg_pool.py`, `src/cg_worker_task.h`, `src/cg_split_task.h`,
+`cg_pool_build.py`, `csim.py`; tests `tests/examples/test_cg_pool.py`):
+
+- **The golden** reuses `waveflow.linalg.cg` (`cg_init`, `vec_step`) with the factored `S = q_S(D + H q_T(Hᴴ D))`
+  and E0's stop rule (`dᴴs ≤ 0` or `‖r‖² ≤ floor`, per column). Formats from the ranges of synthetic correlated
+  channels (inputs Q4.12; vectors 18-bit; `T`, `S` 24-bit; scalars 32-bit): **-73 dB mean, -69 dB worst**
+  against the same CG in float.
+- **The shape.** A worker writes `Resp`, `X`, `Status` as one 3-burst frame, so one `StreamArbiter` merges the
+  workers and its `m_sel` is the credit; a last stage (`CgSplit`) puts the `Status` on its own stream (statuses on
+  a second arbiter would leave its `m_sel` unread). First-free dispatch, one credit a worker; a worker's input
+  link holds a whole job (1,024 words), its result link its largest burst (256). M = 1 is worker + split (the
+  pool blocks start at 2). An error stops its worker; the engine then stalls on the next job sent to it.
+- **csim**: the body bit-exact with the golden on every scenario (6 jobs; both fatal errors; 12 mixed).
+- **csynth** (10 ns): every loop II = 1 once XR's and DUPD's false carried dependences were declared (XR had
+  II = 2 and -2.57 ns); Fmax estimate 137 MHz. **A worker: 176 DSP, 46.8k LUT** (the two dividers ~11k LUT,
+  UMUL ~11.7k) -- **about 3x E0's 50-64 DSP**: TMUL and UMUL each have their own 64 multipliers, and the vector
+  passes 48 more. Two workers exceed the xc7z020 (220 DSP): its RTL simulates, its resources mean nothing.
+- **The rate check, from the loop depths**: ~2,640 cycles an iteration at `m = 32`, `c = 8` (TMUL and UMUL
+  1,024 each, the vector passes 128 each, the dividers ~70 each), **~11,400 a job at `t = 4`** (E0 said 8,800:
+  it left out the vector passes and the dividers). At 250 MHz ~110 jobs a worker in 5 ms, so ~350 jobs a
+  window need ~3.2 workers: **M ∈ {1, 2, 4} still straddles the load**, no size changed.
+- **RTL gates (XSI), passing** (4 gates, `-m xsi`): the worker alone and the split alone (every burst equal to
+  pysim's and the golden's); the pool at 2 and at 4 workers on 12 mixed jobs (every `tx_id` once, `X` bit-exact
+  against the golden and pysim, an OK status each, every job's Status within 5% of the RTL's).
+- **Cycles**: the worker's timing model is its loops' csynth depths plus a fit to its traced RTL -- every job's
+  Status a cycle early, alike (pinned in a fast test). The pool: every job's Status within **-0.01% to -0.16%**
+  of the RTL's at 2 workers and **-0.03% to -0.32%** at 4 (last Status 30,611 against 30,631) -- pysim early
+  by the pool blocks' decision cycles, which it does not spend untimed on this part.
+- **Waits for the lab machine**: everything on `xczu48dr` at 250 MHz (`WAVEFLOW_CG_PART=rfsoc`): csynth and the
+  gates there, exact resources (Vivado), and the pool blocks' decision tables at 128 bits with 2-burst jobs and
+  3-burst results (the dispatcher's and the arbiter's tables refuse that point today) -- E3's calibration item.
+
+**Run 2 record (overlap), 2026-11-22; branch `claude/dse-e1-overlap`; Vitis HLS / Vivado / xsim 2025.1; the
+laptop.** Only the worker's matrix step changed; its ports, messages, errors, the pool, the split and the link
+depths did not.
+
+- **What changed.** TMUL (`T = q_T(Hᴴ D)`) and UMUL (`S = q_S(D + H T)`) ran one after the other, each bank of
+  16 complex MACs idle while the other worked. Now **one fused pipelined loop, MATMUL**: column step `s`
+  computes `T`'s column `s` and `S`'s column `s - 1`, both walking `H` in one order (column `j`, its 16-row
+  blocks), so **one read of `H` feeds both banks** and no memory port is added. `c + 1` steps instead of `2c`.
+  `T` keeps its array (TMUL writes column `s` while UMUL reads `s - 1`); UMUL keeps a running sum for each of
+  its column's 64 rows. Chosen over a two-stage dataflow because it scheduled at II = 1 at once and needs no
+  FIFO or second copy of `H`.
+- **A hazard closed by construction.** `T`'s column is written late in one step's pipeline and read early in
+  the next, `max(m, MIN_M) * 4 - 3` iterations later; the loop declares that dependence false, so a step walks
+  at least `MIN_M = 8` columns (the extra ones add zero). MATMUL's depth is 12 at xc7z020 (10 at xczu48dr),
+  under the 29-iteration margin. E0's smallest set is m = 8, so it costs nothing there; an `m = 3` job was added
+  to the worker's `test` scenario, and passes at RTL.
+- **Bit-exact**: the golden unchanged. csim on every scenario (`test` with the `m = 3` job, `bad_args`,
+  `bad_len`, `mixed`); every XSI recording equal to pysim's and the golden's.
+- **csynth, xc7z020 at 10 ns**: every loop II = 1 (MATMUL depth 12), Fmax estimate 137 MHz (run 1: 137).
+  **177 DSP, 52.9k LUT, 45.8k FF, 50 BRAM18** (run 1: 176, 46.8k, 38.9k, 50) -- the DSPs as before, now both
+  banks busy; +6.1k LUT and +6.9k FF for UMUL's 64 running sums (run 1: 16) and their block select. 99% of the
+  xc7z020's LUTs (csynth's estimate): one worker still builds and simulates there.
+- **Latency** (from the schedule's loop depths, the model `iteration_cycles`, checked at RTL): at `m = 32`,
+  `c = 8`, **an iteration 1,719 cycles** (MATMUL 1,164 of them; run 1 ~2,640) and **a job at `t = 4` 7,664**
+  (run 1 ~11,400); at RTL that job takes **7,663** Status to Status (run 1: 11,268). At 250 MHz a job is ~31 µs,
+  ~163 a worker in 5 ms: ~350 jobs a window need ~2.2 workers, so **M ∈ {1, 2, 4} still straddles** (the
+  deadline binds at 1 and 2, not at 4).
+- **csynth, xczu48dr at 4 ns** (`WAVEFLOW_CG_PART=rfsoc`, Vitis HLS 2025.1; Vivado cannot synthesize this part
+  on the laptop, HLS can): every loop II = 1; **177 DSP (4%), 52.7k LUT (12%), 47.0k FF (5%), 50 BRAM18 (2%)**;
+  estimated clock **3.392 ns (Fmax 294.8 MHz)**: under the 4 ns period, but **over csynth's budget of 2.92 ns
+  (4 ns less 1.08 ns uncertainty) by 0.47 ns**. The path is outside every pipelined loop: at ITER's head
+  (`cg_worker_task.h:179`) a 9-bit add feeding a 16-bit multiply in one DSP (2.40 + 1.00 ns) -- MATMUL's trip
+  count, `(c + 1) max(m, MIN_M) NB`, recomputed each iteration. Not fixed (the obvious fix: compute it once,
+  before ITER). Place and route decides whether 250 MHz holds: the lab machine.
+- **RTL gates (XSI), xc7z020 at 100 MHz, all four passing**: worker alone, split alone, the pool at 2 and 4
+  workers on 12 mixed jobs (every `tx_id` once, `X` bit-exact against the golden and pysim, an OK status each).
+- **Cycles.** The worker's timing model: one MATMUL term, `(c + 1) max(m, MIN_M) N_rx / 16` plus its depth;
+  refit to the traced RTL, `stop` -4 -> -3 (an iteration's loops, entry to exit, one cycle more than their
+  depths) and `init` 0 -> 3 (once a job, ITER's entry and exit). Every job's Status a cycle early, alike, as in
+  run 1 (pinned again). **The pool: -0.010% to -0.231% at 2 workers, -0.044% to -0.401% at 4** (run 1: -0.01% to
+  -0.16%, -0.03% to -0.32%): pysim early by the pool blocks' untimed decisions, now a larger share of a
+  shorter job.
+- **Wall times** (E3's costs; **the laptop, which is always in use -- `CLAUDE.local.md` says not to trust its
+  wall clock: re-time on the lab machine before E3 uses them**). csynth: the worker 69 s (xc7z020) and 71 s
+  (xczu48dr), the split 27 s, the pool at 2 workers 119 s, at 4 workers 191 s. XSI build (the `system_xsi`
+  step less its simulation): worker 15 s, split 6 s, pool2 34 s, pool4 50 s. RTL simulation: the worker alone
+  **7 jobs, 22.5k cycles, 8.0 s (1.1 s a job)**; the pool at 2 workers **12 jobs, 38.3k cycles, 39.5 s (3.3 s a
+  job)**; at 4 workers **12 jobs, 21.6k cycles, 71.4 s (6.0 s a job)** -- the simulation's cost grows with the
+  workers simulated, not with the jobs answered (about 0.36 / 1.0 / 3.3 ms a cycle at 1 / 2 / 4 workers). pysim
+  of each: 0.1 s.
+- **Left**: the trip-count path at xczu48dr; Vivado implementation (exact resources, closure) on the lab
+  machine; the pool blocks' decision tables at 128 bits; E2.
 
 - A **fresh** agent (Claude Code, Opus 5.5, high effort) on the **lab machine** (Vitis needed), from the E0
   specification as the agent-facing task, in its own folder set up by `waveflow init`, with this repository
@@ -389,8 +482,9 @@ measure the following, with the tool version and the machine next to every numbe
    harder to predict without timing. *Proposed:* cap plus tolerance, the shared memory kept.
 2. **What R̂ is exactly**, in LTBF's terms -- `Q̂(S) = I + Σ_{j∈S} Ĥα,ⱼĤα,ⱼᴴ` per set and the CG against it,
    or a whitening of a different form -- and its dimensions.
-3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set. **Blocks Stage E0** (Section 7a proposes
-   `N_rx = 64`, 8 columns a user, at most 4 users a set, `c = 8`, `t = 4`).
+3. **Sizes:** antennas, users, RBs, candidate sets a window, the largest set. **For the engine (E0/E1): DECIDED
+   2026-11-22** as Section 7a proposed (`N_rx = 64`, 8 columns a user, at most 4 users a set, `c = 8`, `t = 4`,
+   16-bit, 128-bit words, P = 16). RBs and candidate sets a window stay open for Phase 1.
 4. **The user scheduler's output:** sets with probabilities, or sets only; the traffic model behind it (a
    proportional-fair scheduler in Python is the simplest realistic source).
 5. **Deadline granularity:** once per 5 ms window, or per slot inside it; how long a matrix stays valid
