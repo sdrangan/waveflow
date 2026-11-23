@@ -277,3 +277,33 @@ def test_rtl_pool_answers_every_job_bit_exact(n):
         for tx, (bursts, _s) in exp.items():
             for got, want in zip(ans[tx], bursts):
                 np.testing.assert_array_equal(got.reshape(-1, 2), np.asarray(want).reshape(-1, 2))
+    # The cycles (E1: within the 5% target of plans/dse_cg.md): each job's Status, pysim against RTL.
+    rtl = _rtl_status_cycles(work / "traces" / "m_status")
+    sim = _pysim_status_cycles(n, "mixed")
+    assert sorted(rtl) == sorted(sim)
+    err = {tx: (sim[tx] - rtl[tx]) / rtl[tx] for tx in rtl}
+    assert max(abs(e) for e in err.values()) < 0.05, err
+
+
+def _rtl_status_cycles(trace_dir: Path) -> dict[int, int]:
+    """Each Status's cycle at RTL, by tx_id (a status is one word)."""
+    cyc = np.fromfile(trace_dir / "cycles.bin", dtype="<u8")
+    return {int(cp.read_msg(cp.Status, b).tx_id): int(c)
+            for b, c in zip(_trace_bursts(trace_dir), cyc)}
+
+
+def _pysim_status_cycles(n: int, kind: str) -> dict[int, int]:
+    """Each Status's cycle in pysim, by tx_id: the cycle of its one word (delivered - 1)."""
+    sysm = harness(cp.CgPool(name="cg_pool", sim=Simulation(), n_workers=n), workload=kind)
+    sink = sysm.stand_ins["m_status"]
+    seen = []
+    orig = sink.rx_proc
+
+    def rx(words):
+        seen.append((sink.env.now, np.array(words, copy=True)))
+        yield from orig(words)
+
+    sink.stream_ep.rx_proc = rx
+    sysm.run()
+    per = sysm.dut().clk.period
+    return {int(cp.read_msg(cp.Status, w).tx_id): round(t / per) - 1 for t, w in seen}

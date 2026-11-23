@@ -62,7 +62,9 @@ static void fail(hls::stream<TO>& m_out, ap_uint<16> tx, StatusCode code) {
 
 }  // namespace cg_worker_body
 
-template <typename TI, typename TO>
+// K is the worker's index in its pool: each worker its own instantiation, so its own `halted` (one
+// static shared by two tasks is a feedback dependence csynth refuses).
+template <int K, typename TI, typename TO>
 static void cg_worker_task(hls::stream<TI>& s_in, hls::stream<TO>& m_out) {
     using namespace cg_cfg;
     using namespace cg_worker_body;

@@ -325,6 +325,8 @@ class CgWorker(FreeRunMod):
     loops (:func:`compute_cycles`)."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_worker"
+    #: Its index in a pool: the body's ``K``, so each worker has its own statics.
+    idx: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -337,7 +339,7 @@ class CgWorker(FreeRunMod):
     def kernel_task(self):
         from waveflow.hw.mem_stream import KernelTask
         return KernelTask("cg_worker_task", "cg_worker_task.h", ("s_in", "m_out"),
-                          framed=("s_in", "m_out"))
+                          template_args=(int(self.idx),), framed=("s_in", "m_out"))
 
     def _fail(self, tx_id: int, code: StatusCode):
         yield from self.m_out.write(Resp(tx_id=tx_id, n=0))
@@ -443,7 +445,8 @@ class CgPool(FreeRunMod):
         n = int(self.n_workers)
         if not 1 <= n <= 16:
             raise ValueError(f"{self.name}: n_workers must be 1 to 16, got {n}")
-        self.workers = [CgWorker(name=f"{self.name}_w{k}", sim=self.sim, clk=self.clk) for k in range(n)]
+        self.workers = [CgWorker(name=f"{self.name}_w{k}", sim=self.sim, idx=k, clk=self.clk)
+                        for k in range(n)]
         self.split = CgSplit(name=f"{self.name}_split", sim=self.sim, clk=self.clk)
         for w in self.workers:
             self.add_comp(w)
