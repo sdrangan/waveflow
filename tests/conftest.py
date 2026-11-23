@@ -269,7 +269,17 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 281 + 1 -> 282 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes at RTL): the late scenario's
 #: timing pinned -- its last status at cycle 1231, its first word accepted after the 300-cycle start gap
 #: (tests/examples/test_ring_stub.py::test_rtl_loop_timing_is_exact[late]).
-WANT_XSI_GATES = 282
+#: 282 + 4 -> 286 on 2026-11-22 (plans/stream_dispatch.md, Stage 4): the dispatch pool -- StreamDispatch
+#: -> links -> StreamArbiter, m_sel back as the credits -- at 2, 3 and 4 workers under both policies,
+#: its output checked as a multiset (tests/streams/test_dispatch.py).  Written without vendor tools;
+#: first run pending on a machine with Vitis / Vivado 2025.1.  (All four passed there, 2026-11-22.)
+#: 286 + 2 -> 288 on 2026-11-22 (plans/stream_dispatch.md, Stage 7): the decision cycles' table -- the
+#: dispatcher and the arbiter at 4 ports, round-robin, re-measured at xczu48dr 4 ns against the
+#: platform's committed lookup, and pysim on it (tests/streams/test_stream_timing.py).
+#: 288 + 1 -> 289 on 2026-11-22 (plans/osfb_pysim_fidelity.md, cause F): the same for StreamDemux's
+#: decision table -- the demux at 4 outputs, routed by a header field, re-measured at xczu48dr 4 ns
+#: (tests/streams/test_stream_timing.py::test_rtl_decision_cost_is_the_platforms[demux4_hdr]).
+WANT_XSI_GATES = 289
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

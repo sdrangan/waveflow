@@ -1,5 +1,7 @@
 # Plan: does pysim speed up design-space exploration? An agentic A/B on LTBF
 
+**PAUSED 2026-11-22 (the user):** the design used general units on an interconnect, which gave poor throughput, so the study's optimum is that of a weak architecture; the design is to be reworked first. The next study is `plans/dse_matrix_sched.md` (pre-silicon design of a matrix scheduler), which reuses this plan's service, ledger, scoring and agent harness, and records what the pilots taught.
+
 **Status: rewritten 2026-11-01; retargeted 2026-11-05** from the `mimo_cg` CG detector to the LTBF
 system of [`examples/ltbf_cg_mem_dse`](../examples/ltbf_cg_mem_dse/hw/system.py) (its plan
 [`plans/ltbf_dse/ltbf_dse.md`](ltbf_dse/ltbf_dse.md)); **the decisions of 2026-11-06 folded in**

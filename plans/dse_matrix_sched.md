@@ -215,6 +215,16 @@ slow*), worth reducing, but not what decides this study.
    `StreamDispatch` with results merged by a `StreamArbiter`, `m_sel` back as the credits
    (`docs/guide/streams/dispatch.md`, `docs/guide/systems/shared_kernels.md` *A pool of workers*), on a
    shared memory for the matrices. Its job descriptor carries the user set and the iteration count (D5).
+
+   **What os_filterbank showed the engine needs** (`plans/osfb_pysim_fidelity.md`, closed 2026-11-22;
+   `docs/guide/timing_model/composites.md`): calibrated blocks were not enough for a loop. Its pysim ran 9-27%
+   short of its RTL with every RTL gate passing, and lands within 2.7% / 0.6% only with all four of: every task
+   in the loop timed, not only the library's (the engine's own stages around the CG units and its
+   memory adaptors, not only `StreamDispatch` and `StreamArbiter`); each block calibrated on the patterns the
+   engine makes (its width and frame, gapped and back-to-back jobs; the stream blocks' tables refuse an
+   unmeasured point, so name `platform_dir` on every one); cut-through at burst granularity (both pool blocks
+   do it since Stage 8); and a cycle gate against the engine's RTL, per scenario, before the study reads a
+   deadline off pysim. The gate is the engine's acceptance test for this precondition.
 5. **The shared memory's timing calibrated** -- dse_cg's step 1f brought pysim within 1.5% of RTL at every
    memory setting; keep that.
 6. **A fast mode for the CG engine's pysim** (Section 6: the interpreter makes a job ~7.4 ms, ~100x the golden).

@@ -53,7 +53,9 @@ Replicating K is the alternative whenever K is small; share it when it is the ex
 **Announce a frame only when it is all there.** The block commits to a frame on its first word and then
 waits for the rest, so an input whose frame is still being produced stalls every other input meanwhile. A
 feedback path in particular buffers a frame and writes it whole (store and forward), so the arbiter never
-commits to a frame that is still being computed.
+commits to a frame that is still being computed. pysim shows the stall: a frame begun and held open wins
+at its first word and keeps a higher-priority input waiting until it is all there
+(`tests/streams/test_arbiter_demux.py`).
 
 **Read `m_sel` as the frames go by.** The block writes the index before each frame, so a full `m_sel` FIFO
 stops it. Size the link carrying it for the frames K holds at once.
@@ -62,12 +64,21 @@ A deadlock looks like a hang -- or like success. Gate on counts: every frame out
 
 ## In pysim
 
-`run_iter` is one firing: it waits with `wait_any` until one of its inputs holds a burst, in the order this
-firing searches them, takes the first, and writes its index on `m_sel`, then `frame_bursts` bursts on
-`m_out`. `wait_any` (`waveflow.hw.interface`, also `FreeRunMod.wait_any`) is the pysim form of a body that
-polls several inputs with `empty()`: the HLS task spins, a model cannot (a harness runs until no event is
-left), so it waits instead. A body that polls waits only on the inputs it can act on: an input it would not
-read this firing (a new job without a credit, say) makes `wait_any` return at once, forever.
+`run_iter` is one firing: it waits with `wait_any` until one of its inputs holds a burst's first word, in
+the order this firing searches them, takes the first, and writes its index on `m_sel`, then `frame_bursts`
+bursts on `m_out`, each copied as its words arrive. As the HLS body, it commits on a word, not a burst:
+`wait_any(..., begun=True)` counts a burst whose transfer has begun from its first word's arrival, and
+`copy_burst` takes it then (`begin_read(pending_ok=True)`), starts the output at once and ends it no earlier
+than the input's last word. So a pool's credit (`m_sel`) leaves during the copy, as at RTL
+([StreamDispatch](dispatch.md)); a model that waited for whole bursts returned it about a burst late
+(`plans/stream_dispatch.md`, Stage 8).
+
+`wait_any` (`waveflow.hw.interface`, also `FreeRunMod.wait_any`) is the pysim form of a body that polls
+several inputs with `empty()`: the HLS task spins, a model cannot (a harness runs until no event is left),
+so it waits instead. A body that polls waits only on the inputs it can act on: an input it would not read
+this firing (a new job without a credit, say) makes `wait_any` return at once, forever. By default it
+counts only delivered bursts, for a body that then reads each whole with `get`; `begun=True` is for one
+that copies as the words arrive, reading with `begin_read(pending_ok=True)` and `end_read`.
 
 ```python
 yield from self.wait_any(self.s_fb, self.s_in)
@@ -161,9 +172,28 @@ The step at 8 inputs is Vitis no longer inlining `streamutils::write_boundary_wo
 `COPY` pipeline. **Feed a kernel shared through an arbiter frames long enough that these cycles are small
 next to them**: at 256-word frames, 8 cycles are 3%.
 
-pysim does not model this yet: its frames are 1 cycle apart. Until the arbiter carries a calibrated
-timing model (`FreeRunMod.add_timing_model` and `timed_delay`, the gap as a function of `n_in` and the
-policy), a pysim run of a design whose frames are short overstates the shared unit's rate.
+By default pysim's frames are 1 cycle apart. Name a calibrated platform and each firing spends the
+cycles the RTL does there, before its `m_sel` word (`waveflow.streams.timing`, `plans/stream_dispatch.md`
+Stage 7):
+
+```python
+arb = StreamArbiter(name="arb", sim=sim, n_in=4, policy="round_robin", clk=Clock(freq=250e6),
+                    platform_dir=packaged_platforms_dir() / "xczu48dr_250mhz_vitis2025_1")
+```
+
+The platform's table, the arbiter alone at 4 ns on `xczu48dr` (Vitis HLS / xsim 2025.1, 8-word frames;
+`python -m waveflow.calib.fixtures.stream_blocks`), idle cycles between frames, priority / round-robin:
+3 / 3 at 2 inputs, 3 / 4 at 4, 7 / 8 at 8 and 8 / 8 at 16 -- the 100 MHz figures above but for
+round-robin at 16, a cycle more. pysim reproduces each. The table is keyed by the width and the frame too
+(`w`, `fb`): at 4 inputs, 128 bits and 2-burst frames (`examples/os_filterbank`'s arbiter) every gap is a
+cycle longer -- 4 under priority, 5 under round-robin -- and a design calibrates at its own width and frame
+(`python -m waveflow.calib.fixtures.stream_blocks --work <dir> --blocks arbiter` measures the points in its
+`EXTRA` the platform lacks). A point not measured (3 inputs, or 4 at 64 bits) is refused when the block is
+built, and another clock when the simulation starts. One limit:
+
+- The table is the arbiter alone, every port at the top. Inside a composite its ports are FIFOs and a
+  firing may cost less; in the dispatcher's pool that was so of the dispatcher's credit firing
+  ([StreamDispatch](dispatch.md#in-pysim-on-a-calibrated-platform)).
 
 ## Its resources
 

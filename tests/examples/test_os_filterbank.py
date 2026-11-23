@@ -156,3 +156,38 @@ def test_rtl_timing_is_exact(dag, prefix, kind):
         cyc = np.fromfile(work / "traces" / f"m_status_{ch}" / "cycles.bin", dtype="<u8")
         assert len(cyc) == len(js)
         assert int(cyc[-1]) == LAST_STATUS[kind][ch], ch
+
+
+#: How far pysim's last status may be from the RTL's, per channel, a fraction of the RTL's cycle, per
+#: scenario (``plans/osfb_pysim_fidelity.md`` Step 5; the user, 2026-11-22).  Measured at the time, every
+#: stream block timed: ``test`` -2.68% at worst (channel 0), ``long`` -0.64% (channel 0) -- pysim short on
+#: every channel, ledger row 21 the largest part of what remains.  The untimed bank fails ``test``'s bound
+#: (channel 0 at -3.41%).
+PYSIM_TOL = {"test": 0.03, "long": 0.01}
+
+
+@pytest.mark.parametrize("kind", ["test", "long"])
+def test_pysim_timing_is_within_tolerance_of_the_rtl(kind):
+    """The pysim gate (``plans/osfb_pysim_fidelity.md`` Step 5): the bank in pysim with every stream block
+    timed on the packaged platform -- the arbiter and the three demuxes, the blocks with a decision table
+    -- puts each channel's last status within its scenario's :data:`PYSIM_TOL` of the cycle the RTL pins
+    (:data:`LAST_STATUS`), in either direction.  pysim's cycle is that burst's last beat (a burst
+    delivered at ``td`` cycles has its beats at ``t0 .. td - 1``), as ``examples/os_filterbank/fidelity.py``
+    compares it.  No vendor tools: the RTL cycles are the XSI gate's."""
+    from examples.os_filterbank.os_filterbank_build import N_CYCLES
+    from waveflow.calib.platform import packaged_platforms_dir
+    from waveflow.streams.timing import PLATFORM
+
+    sysm = harness(fb.OsFilterBank, workload=kind, n_cycles=N_CYCLES[kind])
+    dut = sysm.dut()
+    blocks = (dut.arb, dut.dmx_ans, dut.dmx_st, dut.dmx_crd)
+    for blk in blocks:
+        blk.platform_dir = packaged_platforms_dir() / PLATFORM
+    sysm.run()
+    assert all(blk.timing_model is not None for blk in blocks)
+    per = dut.clk.period
+    for ch, js in fb.jobs(kind).items():
+        assert len(sysm.stand_ins[f"m_status_{ch}"].words) == len(js), ch
+        got = round(sysm.stand_ins[f"m_status_{ch}"].stream_ep.last_stamp.delivered / per) - 1
+        rtl = LAST_STATUS[kind][ch]
+        assert abs(got - rtl) <= PYSIM_TOL[kind] * rtl, (ch, got, rtl, f"{(got - rtl) / rtl:+.2%}")

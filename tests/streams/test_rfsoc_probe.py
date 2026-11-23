@@ -24,6 +24,22 @@ def test_the_probe_targets_the_rfsoc_and_the_gates_do_not(tmp_path):
         f"set part {{{DEFAULT_PART}}}", "create_clock -period 10")
 
 
+def test_the_dispatch_probes_target_the_rfsoc_with_their_credits(tmp_path):
+    """``StreamDispatch``'s probes (``plans/stream_dispatch.md`` Stages 4 and 6): the dispatcher alone and
+    the pool, each at the RFSoC target, the credits a worker reaching the body's ``C``."""
+    cases = {"dsp4_rr": "stream_dispatch_task<32, 2, 4, 1,", "dsp2_ff": "stream_dispatch_task<32, 2, 4, 0,",
+             "dsp16_w128_rr": "stream_dispatch_task<128, 2, 4, 1,",
+             "pool4_rr_c3": "stream_dispatch_task<32, 2, 3, 1,"}
+    for name, body in cases.items():
+        work = tmp_path / name
+        top = rfsoc_probe.generate(work, rfsoc_probe.PROBES[name])
+        assert _target(tcl_path(work, top).read_text()) == (
+            f"set part {{{RFSOC4X2_PART}}}", "create_clock -period 4")
+        text = (work / "gen" / f"{top}.cpp").read_text()
+        assert body in text, name
+        assert ("stream_arbiter_task<" in text) == name.startswith("pool"), name
+
+
 def test_the_ring_stub_probe_carries_its_bodies(tmp_path):
     top = rfsoc_probe.generate(tmp_path, rfsoc_probe.PROBES["ring_stub"])
     assert top == "ring_stub"
@@ -78,8 +94,10 @@ def test_the_schedule_report_parser(tmp_path):
 def test_the_stream_blocks_records_are_found_by_the_lookup():
     """The records ``waveflow.streams.calib`` filed and ``waveflow_calib publish`` promoted into the packaged
     ``xczu48dr_250mhz_vitis2025_1``: every swept configuration up to four ports is measured (``EXACT``),
-    the policy and the route each on its own key; eight and sixteen were not filed (the attribution's gap,
-    ``plans/shared_kernel_rfsoc_timing.md``), so they stay uncalibrated rather than interpolated."""
+    the policy, the route and the dispatcher's credits each on its own key; eight and sixteen were not
+    filed (the attribution's gap, ``plans/shared_kernel_rfsoc_timing.md``), so they stay uncalibrated
+    rather than interpolated.  The dispatcher's grid is two and four workers only
+    (``plans/stream_dispatch.md``)."""
     from waveflow.calib.platform import Platform, packaged_platforms_dir
     from waveflow.calib.record_store import platform_store
     from waveflow.calib.resource_model import LookupResourceModel
@@ -87,7 +105,9 @@ def test_the_stream_blocks_records_are_found_by_the_lookup():
 
     plat = Platform.resolve(packaged_platforms_dir(), PLATFORM)
     rm = LookupResourceModel(store=platform_store(plat), platform=plat)
-    for block in BLOCKS.values():
+    want = {"arbiter": 24, "demux": 24, "dispatch": 48}
+    assert set(BLOCKS) == set(want)
+    for name, block in BLOCKS.items():
         keys = set()
         for point in block.grid:
             mod = block.module(point)
@@ -97,7 +117,7 @@ def test_the_stream_blocks_records_are_found_by_the_lookup():
             if n <= 4:
                 keys.add(rm.get_params(mod)["module_key"])
                 assert rm.predict(mod)["lut"] > 0
-        assert len(keys) == 24
+        assert len(keys) == want[name], name
 
 
 def test_pysim_arbiter_spends_one_cycle_between_frames():

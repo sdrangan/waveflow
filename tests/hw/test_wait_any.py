@@ -83,6 +83,89 @@ def test_a_begun_transfer_does_not_count():
     assert _run(sim, body) >= 20 * PER
 
 
+def _begun_at(sim, delay, tx, words, hold):
+    """A writer that begins a burst at *delay* and ends it *hold* later: a frame announced before it is
+    all there."""
+    def p():
+        yield sim.env.timeout(delay)
+        x = yield from tx.begin(np.asarray(words, dtype=np.uint32))
+        yield sim.env.timeout(hold)
+        yield from tx.end(x)
+    sim.env.process(p())
+
+
+def test_with_begun_a_burst_counts_from_its_first_word():
+    """``begun=True``: an input is ready once its burst's first word is here -- a cycle after the
+    transfer starts -- as an HLS ``empty()`` turns false on a word (``plans/stream_dispatch.md`` Stage 8)."""
+    sim, ((tx0, rx0),) = _rig(1)
+    _later(sim, 0, tx0, list(range(20)))
+
+    def body():
+        i = yield from wait_any(rx0, begun=True)
+        return i, sim.env.now, bool(rx0.data_buffer.items), rx0.pending_burst is not None
+
+    i, t, delivered, begun = _run(sim, body)
+    assert (i, delivered, begun) == (0, False, True)
+    assert t == pytest.approx(1 * PER)
+
+
+def test_with_begun_the_first_word_to_land_wins_whatever_the_burst_lengths():
+    """A long burst begun first beats a short one begun later, though the short one is delivered first."""
+    sim, ((tx0, rx0), (tx1, rx1)) = _rig()
+    _later(sim, 10 * PER, tx0, [1])              # first word at 11, delivered at 11
+    _later(sim, 0, tx1, list(range(64)))         # first word at 1, delivered at 64
+
+    def body():
+        i = yield from wait_any(rx0, rx1, begun=True)
+        return i, sim.env.now
+
+    i, t = _run(sim, body)
+    assert i == 1 and t == pytest.approx(1 * PER)
+
+
+def test_with_begun_two_first_words_in_one_cycle_go_in_argument_order():
+    sim, ((tx0, rx0), (tx1, rx1)) = _rig()
+    _later(sim, 5 * PER, tx1, list(range(8)))
+    _later(sim, 5 * PER, tx0, list(range(8)))
+
+    def body():
+        a = yield from wait_any(rx0, rx1, begun=True)
+        return a, sim.env.now
+
+    a, t = _run(sim, body)
+    assert a == 0 and t == pytest.approx(6 * PER)
+
+
+def test_with_begun_a_burst_held_open_is_ready_long_before_it_is_delivered():
+    """A writer that begins and holds its burst open: the begun wait returns at its first word, the
+    default one at its delivery."""
+    out = {}
+    for begun in (False, True):
+        sim, ((tx0, rx0),) = _rig(1)
+        _begun_at(sim, 0, tx0, [1, 2, 3], hold=100 * PER)
+
+        def body(begun=begun, rx0=rx0, sim=sim):
+            yield from wait_any(rx0, begun=begun)
+            return sim.env.now
+
+        out[begun] = _run(sim, body)
+    assert out[True] == pytest.approx(1 * PER)
+    assert out[False] == pytest.approx(100 * PER)
+
+
+def test_with_begun_a_delivered_burst_is_ready_at_once():
+    sim, ((tx0, rx0),) = _rig(1)
+    _later(sim, 0, tx0, [1, 2])
+
+    def body():
+        yield sim.env.timeout(50 * PER)
+        yield from wait_any(rx0, begun=True)
+        return sim.env.now, rx0._arrival
+
+    t, slot = _run(sim, body)
+    assert t == pytest.approx(50 * PER) and slot is None
+
+
 def test_with_nothing_coming_the_run_ends_with_the_wait_pending():
     """No input ever arrives: no busy loop -- the simulation runs out of events and returns."""
     sim, ((_tx0, rx0), (_tx1, rx1)) = _rig()

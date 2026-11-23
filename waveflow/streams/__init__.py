@@ -8,7 +8,9 @@ from waveflow.streams.arbiter import StreamArbiter, StreamArbiterStep
 from waveflow.streams.body_step import StreamBodyStep
 from waveflow.streams.broadcast import StreamBroadcast, StreamBroadcastStep
 from waveflow.streams.demux import StreamDemux, StreamDemuxStep
+from waveflow.streams.dispatch import StreamDispatch, StreamDispatchStep
 from waveflow.streams.framer import StreamFramer, StreamFramerStep
 
 __all__ = ["StreamArbiter", "StreamArbiterStep", "StreamBodyStep", "StreamBroadcast", "StreamBroadcastStep",
-           "StreamDemux", "StreamDemuxStep", "StreamFramer", "StreamFramerStep"]
+           "StreamDemux", "StreamDemuxStep", "StreamDispatch", "StreamDispatchStep",
+           "StreamFramer", "StreamFramerStep"]

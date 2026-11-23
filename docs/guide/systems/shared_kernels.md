@@ -17,7 +17,9 @@ processing element with a job queue serving several flows.
 
 **Replicate K first.** If K is small, give each client its own copy: no arbiter, no tags, no loop
 ([Library blocks and their models](library.md)). Share K when it is the expensive part, and the clients
-leave it idle often enough that one copy keeps up.
+leave it idle often enough that one copy keeps up. Between the two is a **pool**: M copies of K serving
+all the clients, each job to a copy that is free (*A pool of workers*, below) -- for when one copy
+cannot keep up and one per client is more than the load needs.
 
 ## The four questions
 
@@ -78,6 +80,7 @@ Most deadlocks in a shared design are on the way back. Five rules:
 | one FFT for the forward and the inverse pass | `SsrFft(direction="runtime")`: the direction on `s_dir`, one word a frame, each frame bit-exact with the fixed build | [SSR FFT parameters](../dsp/ssr_fft/parameters.md#the-direction-chosen-per-frame) |
 | the pysim model of a body that polls its inputs | `wait_any(*slaves)`: block until one holds a burst, then poll in the HLS body's order | [Non-blocking reads](../interface/primitive/index.md) |
 | route by frame after a unit framed by count (`SsrFft`) | `StreamFramer`: TLAST every `frame_words` words, the words unchanged | [StreamFramer](../streams/framer.md) |
+| spread jobs over a pool of identical copies of K | `StreamDispatch`: each job whole to a copy holding a credit; credits back as the merging arbiter's `m_sel` | [StreamDispatch](../streams/dispatch.md) |
 
 **The tag travels beside K.** K need not know whose a frame is. The arbiter's `m_sel` -- or a tag of
 the design's own, such as the job id and the pass -- goes on a side stream from the stage in front of
@@ -85,6 +88,24 @@ K to the stage after it, one word a frame, in the order the frames enter K. This
 keeps frames in order and gives one frame out per frame in, including one framed by count alone, as
 the FFT is. A tag in the frame's header is simpler, but then K must pass it through: that is
 `StreamDemux(route="header")`.
+
+## A pool of workers
+
+The other direction: one stream of jobs, M identical copies of K. A `StreamDispatch` sends each job whole
+to a copy holding a credit; a `StreamArbiter` merges the copies' results; the arbiter's `m_sel` -- which
+copy finished -- goes back to the dispatcher as the credit. The pool is a cycle, so the rules of the next
+section hold, and one more: the credit link holds every outstanding credit (M times the credits a copy).
+
+```text
+jobs --> [ StreamDispatch ] --> K_0 .. K_M-1 --> [ StreamArbiter ] --> results (completion order)
+            ^ s_free                                    | m_sel
+            +-------------------------------------------+
+```
+
+Use it when jobs take different times: a fixed split queues jobs behind a long one while a copy idles,
+and first-free does not (2.0x shorter on a skewed load in pysim: [What it buys](../streams/dispatch.md#what-it-buys)).
+Results leave in completion order, so each carries its job's `tx_id`, and a client that needs them in
+order reorders by it.
 
 ## A cycle inside a composite
 
@@ -144,7 +165,10 @@ its forty-job one at 6282; `tests/examples/test_ring_stub.py` pins both.
 The stage in front of K polls: it checks which inputs hold a frame (`empty()`), feedback first, and
 takes one. Its pysim model must not spin: a simulation runs until no event is left, so a model that
 polls every cycle never ends. `wait_any` blocks until one of the inputs it can act on holds a burst;
-the firing then takes them in the HLS body's order. From the ring stub's `Mux`:
+the firing then takes them in the HLS body's order. A stage that, like `StreamArbiter`, commits on a
+frame's first word and copies the rest as it arrives waits with `wait_any(..., begun=True)`, so a frame
+counts from its first word, as `empty()` sees it ([StreamArbiter](../streams/arbiter.md#in-pysim)). From
+the ring stub's `Mux`, which reads each frame whole:
 
 ```python
 def run_iter(self):
@@ -185,6 +209,11 @@ and comes back through it inverse. It uses every part above once:
 
 Its channels finish out of order, but each channel's own outputs do not depend on timing, so each gets
 its own port and the RTL recordings equal pysim's.
+
+Its cycles are another matter: equal recordings say nothing about time, and the bank's pysim once ran 27%
+short of its RTL with every gate passing. What a loop like this needs for its pysim to be timed right --
+every task in it timed, each block calibrated on the gapped frames the loop makes, cut-through at burst
+granularity, and a cycle gate -- is [Timing a composite](../timing_model/composites.md).
 
 ## What the blocks cost on the RFSoC
 

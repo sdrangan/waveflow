@@ -19,10 +19,18 @@ its indices in range.
 The outputs do not move in lockstep: a full output stalls the block, and with it every other output, until
 that output's consumer reads.  Output order per output is the input's, so pysim and RTL record the same
 words on every output.
+
+**Word, not burst, and timed on a platform** (``plans/osfb_pysim_fidelity.md``, causes F and H; Stages 8 and
+7 of ``plans/stream_dispatch.md`` for the arbiter).  The body reads the index, then the frame's first word,
+and copies the frame through as its words arrive; so does the model: it commits on the frame's first word
+(``begin_read(pending_ok=True)``) and copies with :func:`~waveflow.streams.arbiter.copy_burst`.  Given
+``platform_dir``, a platform its decision cost was calibrated on, each firing first spends the cycles the
+RTL does deciding (:mod:`waveflow.streams.timing`); without one it decides at once.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -31,7 +39,9 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
+from waveflow.streams.arbiter import copy_burst
 from waveflow.streams.body_step import StreamBodyStep
+from waveflow.streams.timing import attach, decide, demux_features, require_points
 from waveflow.utils.burst_io import StreamBurst
 
 __all__ = ["StreamDemux", "StreamDemuxStep", "ROUTES"]
@@ -47,11 +57,13 @@ class StreamDemux(FreeRunMod):
     (``route="header"``: bits ``sel_lsb`` .. ``sel_lsb + sel_bits - 1``).
 
     Build parameters: ``n_out`` (2 to 16), ``bitwidth`` (every port's), ``frame_bursts`` (TLAST bursts a
-    frame), and for ``route="header"`` ``sel_lsb`` and ``sel_bits`` (1 to 16)."""
+    frame), and for ``route="header"`` ``sel_lsb`` and ``sel_bits`` (1 to 16).  ``platform_dir``, a
+    platform its decision cost was calibrated on, times each firing as the RTL does
+    (:mod:`waveflow.streams.timing`); without one the block decides at once."""
 
     cpp_kernel_name: ClassVar[str | None] = "stream_demux"
     #: Build inputs that are not template parameters: a fresh copy (the harness's DUT) keeps them.
-    build_fields: ClassVar[tuple[str, ...]] = ("route",)
+    build_fields: ClassVar[tuple[str, ...]] = ("route", "platform_dir")
 
     n_out: HwParam[int] = 2
     bitwidth: HwParam[int] = 32
@@ -61,6 +73,9 @@ class StreamDemux(FreeRunMod):
     #: Not an ``HwParam`` (those are integers); it picks the body.
     route: str = "sel"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: A calibrated platform (``xczu48dr_250mhz_vitis2025_1``, at its 250 MHz): each firing then spends
+    #: the cycles its RTL does.  Not part of the module's identity (``elaborate._CONTEXT_ATTRS``).
+    platform_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -89,6 +104,18 @@ class StreamDemux(FreeRunMod):
             self.m_out.append(ep)
         #: Frames whose index named no output, read and dropped.
         self.dropped = 0
+        if self.platform_dir is not None:
+            require_points(self, "demux", [self.firing()])
+
+    def pre_sim(self) -> None:
+        """On a calibrated platform, attach the decision model (:func:`waveflow.streams.timing.attach`)."""
+        super().pre_sim()
+        if self.platform_dir is not None and self.timing_model is None:
+            attach(self, "demux", [self.firing()])
+
+    def firing(self) -> dict:
+        """A firing's point on the decision model's basis (:mod:`waveflow.streams.timing`)."""
+        return demux_features(int(self.n_out), self.route == "header", int(self.bitwidth), int(self.frame_bursts))
 
     @property
     def ports(self) -> tuple[str, ...]:
@@ -111,27 +138,31 @@ class StreamDemux(FreeRunMod):
     def index_of(self, first_word) -> int:
         """``route="header"``: the output a frame names in its first word.  A word wider than 64 bits
         arrives as its 64-bit chunks, chunk 0 the low bits."""
-        chunks = np.asarray(first_word, dtype=np.uint64).reshape(-1)
-        word = sum(int(c) << (64 * i) for i, c in enumerate(chunks))
-        return (word >> int(self.sel_lsb)) & ((1 << int(self.sel_bits)) - 1)
+        return (_value(first_word) >> int(self.sel_lsb)) & ((1 << int(self.sel_bits)) - 1)
 
     def run_iter(self):
-        """One frame: its index (an ``s_sel`` word, or the first word's field), then its bursts to that
-        output -- or dropped, if the index names none."""
-        bursts = []
+        """One frame, as the body: its index (an ``s_sel`` word, or the first word's field, read as the
+        frame's first word arrives), the decision cycles on a calibrated platform, then its bursts to that
+        output copied as their words arrive -- or read and dropped, if the index names none."""
         if self.route == "sel":
-            sel = yield from self.s_sel.get()
-            k = int(sel[0])
-        else:
-            bursts.append((yield from self.s_in.get()))
-            k = self.index_of(bursts[0][0])
-        while len(bursts) < int(self.frame_bursts):
-            bursts.append((yield from self.s_in.get()))
+            sel = np.asarray((yield from self.s_sel.get()), dtype=np.uint64)
+            k = _value(sel.reshape(len(sel), -1)[0])
+        x = yield from self.s_in.begin_read(pending_ok=True)        # committed on the first word
+        if self.route == "header":
+            k = self.index_of(np.asarray(x.data)[0])
+        yield from decide(self, self.firing())
+        nb = int(self.frame_bursts)
         if k >= int(self.n_out):
+            yield from self.s_in.end_read(x)
+            for _ in range(nb - 1):
+                yield from self.s_in.get()
             self.dropped += 1
             return
-        for words in bursts:
-            yield from self.m_out[k].write(words)
+        w = yield from self.m_out[k].begin(x.data)
+        yield from self.s_in.end_read(x)
+        yield from self.m_out[k].end(w)
+        for _ in range(nb - 1):
+            yield from copy_burst(self.s_in, self.m_out[k])
 
     def workload(self, kind: str = "test") -> dict:
         """The block's own scenario: frames to every output in an irregular order, one index out of
@@ -163,6 +194,12 @@ class StreamDemux(FreeRunMod):
             if k < n:
                 out[f"m_out_{k}"] += [np.asarray(b.words, dtype=np.uint64) for b in fr]
         return out
+
+
+def _value(word) -> int:
+    """A word as an integer: a word wider than 64 bits arrives as its 64-bit chunks, chunk 0 the low bits."""
+    chunks = np.asarray(word, dtype=np.uint64).reshape(-1)
+    return sum(int(c) << (64 * i) for i, c in enumerate(chunks))
 
 
 class StreamDemuxStep(StreamBodyStep):

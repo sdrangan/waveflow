@@ -124,7 +124,10 @@ class TaskInst:
 def _vitis_type_name(word_type: str) -> str:
     """How Vitis spells a framed port's word type in a task instance's name, as its csynth RTL shows
     (Vitis 2025.1, markov's chain core): ``streamutils::axi4s_word<64>`` (an ``ap_axis``) ->
-    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``."""
+    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``.  A prediction only: the same
+    Vitis spells it ``framed_word`` in an arbiter-demux pair's tasks, and with the width on the last
+    of three only in a dispatcher pool's arbiter; :func:`~waveflow.utils.trace.load_trace` binds such
+    an instance by its ``<body>_<template args>`` prefix."""
     import re
 
     m = re.fullmatch(r"streamutils::(axi4s_word|framed_word)<(\d+)>", word_type.replace(" ", ""))

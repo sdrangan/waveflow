@@ -1,6 +1,6 @@
 # Plan: Agentic Architecture Exploration by Composition (dse_arch)
 
-**Status: DRAFT for discussion, written 2026-11-05.** Follows `plans/dse_cg.md` and reuses its service, ledger,
+**Status: DRAFT for discussion, written 2026-11-05. STALE as of 2026-11-22:** see `plans/dse_matrix_sched.md` Section 11 D for what to fix (retired primitives, missing blocks, V1/V2), and that plan for the first concrete study, which supersedes E0/E1 here. Follows `plans/dse_cg.md` and reuses its service, ledger,
 identity, budget and submit machinery. Takes up the architecture exploration that
 `plans/paper_cg_dse_vision.md` scoped out ("The fixed architecture"), and the agent split builds on
 `plans/multi_agent_flows.md` ("Encapsulation, for agents", "The device as the unit"). Nothing here is built yet.
@@ -89,6 +89,7 @@ A replay grid cannot cover an open architecture space (open question 2 in `dse_c
 - **Expert catalog (G3):** 10–20 hand-designed architectures per algorithm, each with a parameter sweep, measured on the lab machine (`xczu48dr`). Used for replay and for model-transfer validation.
 - **Live verification:** every submission off the catalog is built and measured live, and is charged.
 - **Held-out topologies:** calibrate component and interconnect models on part of the catalog; report pysim error on the rest. This is the key technical claim: *block-level calibration transfers to unseen compositions.*
+  - **First evidence, and a condition (2026-11-22, `plans/osfb_pysim_fidelity.md`):** in `examples/os_filterbank` (a loop of eight tasks around one shared `SsrFft`) block-level calibration did *not* transfer as measured: pysim was 9-27% short of the RTL. It transferred -- within 2.7% / 0.6%, now gated -- once every task in the loop was timed, each block was calibrated on the input patterns it sees in the composition (the FFT after a gap, which its block-level sweep had never measured, was 92-103% of the error), and blocks that copy through were modelled cut-through. So the claim to test is the conditional one: *block calibration transfers to unseen compositions when the calibration covers the input patterns the composition produces*. The held-out study must check that coverage, not only report the error; a model that refuses an unmeasured point (the stream blocks' lookups) makes a coverage gap visible, a fitted one hides it. Checklist: `docs/guide/timing_model/composites.md`; ledger: `docs/evaluation/timing_fidelity/`.
 
 ## 8. What is being claimed, and which setting tests it
 

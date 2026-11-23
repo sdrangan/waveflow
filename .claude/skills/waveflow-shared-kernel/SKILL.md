@@ -1,6 +1,6 @@
 ---
 name: waveflow-shared-kernel
-description: Share one expensive Waveflow kernel among several clients, or feed a kernel's output back to its own input -- the arbiter in front of it (StreamArbiter), a tag beside it, results routed back (StreamDemux), credits that bound the loop, a feedback frame announced only once complete, resident data in slots, an FFT whose direction changes per frame (SsrFft direction="runtime"), wait_any for a polling stage's model, and why a deadlock on a cycle looks like success. Use whenever a Waveflow design has one unit used by several channels, jobs or passes, a cycle inside a composite, a mux or arbiter in front of a kernel, out-of-order results to return, or a loop that hangs.
+description: Share one expensive Waveflow kernel among several clients, or feed a kernel's output back to its own input -- the arbiter in front of it (StreamArbiter), a tag beside it, results routed back (StreamDemux), credits that bound the loop, a feedback frame announced only once complete, resident data in slots, an FFT whose direction changes per frame (SsrFft direction="runtime"), a pool of identical workers each job sent to a free one (StreamDispatch), wait_any for a polling stage's model, and why a deadlock on a cycle looks like success. Use whenever a Waveflow design has one unit used by several channels, jobs or passes, several copies of a unit sharing one stream of jobs, a cycle inside a composite, a mux or arbiter in front of a kernel, out-of-order results to return, or a loop that hangs.
 ---
 
 # Waveflow: sharing a kernel
@@ -23,6 +23,7 @@ which step, and what to check at the end.
 | the return path: K never blocks on a result; separate channels; poll, never write-then-wait; a feedback frame whole; a unit that flushes alone | `systems/shared_kernels.md`, *The return path* |
 | merging the clients into K | `streams/arbiter.md` (`StreamArbiter`: whole frames, priority or round-robin, the index on `m_sel`) |
 | returning each result to its client | `streams/demux.md` (`StreamDemux`: by `s_sel`, or by a header field) |
+| a pool: M copies of K, each job to a free one | `systems/shared_kernels.md`, *A pool of workers*; `streams/dispatch.md` (`StreamDispatch`: credits, first-free or round-robin) |
 | whose frame is this: the tag beside K | `systems/shared_kernels.md`, *The blocks* |
 | one FFT, both directions | `dsp/ssr_fft/parameters.md`, *The direction chosen per frame* |
 | a cycle: credit, link depths, feedback first, why counts | `systems/shared_kernels.md`, *A cycle inside a composite* |
@@ -37,7 +38,7 @@ to read for the mechanics alone, is `examples/ring_stub/`.
 
 ## When Waveflow has no block for it
 
-Use the library's blocks (`StreamArbiter`, `StreamDemux`, `SsrFft`) before writing your own. When the
+Use the library's blocks (`StreamArbiter`, `StreamDemux`, `StreamDispatch`, `SsrFft`) before writing your own. When the
 design needs one that does not exist -- another policy, another unit with a run-time option -- do not
 bend the design around the gap: propose the extension (what, where, its model, pysim module, HLS body,
 tests and guide page), following the closest existing block. In a design outside the Waveflow
@@ -45,7 +46,8 @@ repository, ask the user before changing Waveflow.
 
 ## Before you finish, check your own work
 
-- [ ] Replicating K was considered, and the choice among the six ways is written down with why.
+- [ ] Replicating K, and a pool of copies (`StreamDispatch`), were considered, and the choice among the
+      six ways is written down with why.
 - [ ] Every client's frame reaches the arbiter whole: whatever produces one reads all of it first.
 - [ ] The stage after K can never block on a result or feedback write: a credit bounds what is in the
       loop, and every loop link's depth holds what the credit admits, stated beside the link.
