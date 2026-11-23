@@ -419,6 +419,8 @@ class CgPool(FreeRunMod):
     width and frame, or they refuse)."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_pool"
+    #: One top per pool size, so the sizes share a build: ``cg_pool_n_workers2`` ...
+    kernel_name_params: ClassVar[tuple[str, ...]] = ("n_workers",)
     build_fields: ClassVar[tuple[str, ...]] = ("platform_dir",)
 
     n_workers: HwParam[int] = 2

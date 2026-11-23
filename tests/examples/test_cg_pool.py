@@ -159,6 +159,21 @@ def test_an_error_stops_its_worker_and_the_run_still_returns(n, kind):
     assert sum(w.halted for w in sysm.dut().workers) == 1
 
 
+@pytest.mark.vitis
+@pytest.mark.parametrize("kind", ["test", "bad_args", "bad_len", "mixed"])
+def test_the_worker_body_is_bit_exact_under_csim(tmp_path, kind):
+    """The HLS body (``src/cg_worker_task.h``) under Vitis C simulation on the scenario pysim plays: every
+    output burst equal to the golden's, word for word and TLAST for TLAST -- the fatal ones included."""
+    from examples.cg_pool import csim
+    from waveflow.toolchain import toolchain
+
+    if not toolchain.find_vitis_path():
+        pytest.skip("Vitis not found")
+    got, want, log = csim.run(tmp_path, kind)
+    assert "CSim done with 0 errors" in log, log[-3000:]
+    assert not csim.compare(got, want)
+
+
 def test_the_pool_refuses_a_bad_size():
     with pytest.raises(ValueError):
         cp.CgPool(name="p", sim=Simulation(), n_workers=17)
