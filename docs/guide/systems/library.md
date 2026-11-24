@@ -47,7 +47,7 @@ and the Vitis `gemv` (a bit-exact model only, no module).
 ([firblock](../../examples/firblock/index.md), [mm_fir](../../examples/mm_fir/index.md)), a per-block
 equalizer ([block_eq](../../examples/block_eq/index.md)), an interleaver
 ([interleaver](../../examples/interleaver/index.md)), the MIMO-CG detector study
-([mimo_cg](../../examples/mimo_cg/index.md), measured with Vitis 2024.1). `waveflow kb examples` lists
+([mimo_cg](../../examples/mimo_cg/detector.md), measured with Vitis 2024.1). `waveflow kb examples` lists
 them all.
 
 ## What no block covers

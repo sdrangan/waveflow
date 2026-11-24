@@ -11,7 +11,7 @@ summary: "Retired linear-algebra units, kept only for the study that used them (
 # Retired Components
 
 These units are **retired**: kept, unchanged in behaviour, for the study that used them
-([the MIMO-CG example](../../../examples/mimo_cg/index.md), a 2024.1 study), and not for new designs.
+([the MIMO-CG example](../../../examples/mimo_cg/detector.md), a 2024.1 study), and not for new designs.
 
 | Retired | Use instead | Code |
 |---|---|---|
