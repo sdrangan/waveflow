@@ -33,7 +33,7 @@ plus the $N_{ue}$ powers. A user's column is contiguous, so it is read in one bu
 ## The whitening matrix
 
 The scheduler puts a set $S$ of $K$ users on the same uplink resource. Stack their channels as
-$H = [h_j]_{j \in S}$, an $N_{rx} \times K$ matrix. The received vector is
+$H = [h_j]\_{j \in S}$, an $N_{rx} \times K$ matrix. The received vector is
 
 $$
 y = H x + n, \qquad \mathbb{E}[x x^H] = I, \quad \mathbb{E}[n n^H] = I ,

@@ -1,0 +1,23 @@
+{%- comment -%}
+  Math rendering.  just-the-docs ships no math renderer, so the LaTeX in the guide and example
+  pages ($...$ inline, $$...$$ display) is typeset client-side by MathJax 3, loaded from a CDN.
+  kramdown (GFM input) turns $$...$$ into \[...\] / \(...\); single-dollar inline math passes
+  through as text and is picked up here.  processEscapes lets a page write \$ for a literal dollar.
+{%- endcomment -%}
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    options: {
+      skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    }
+  };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
+<style>
+  /* A wide display equation scrolls on its own on a phone instead of widening the page. */
+  mjx-container[display="true"] { overflow-x: auto; overflow-y: hidden; max-width: 100%; }
+</style>
