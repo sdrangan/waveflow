@@ -126,6 +126,6 @@ The left column, once a row, is [`gain`](stages.md#gain); the right, once a symb
 For the full theory -- where the MMSE gain comes from, and the matrix form a receiver with several
 antennas uses -- see [Minimum mean square error](https://en.wikipedia.org/wiki/Minimum_mean_square_error)
 and [Equalization](https://en.wikipedia.org/wiki/Equalization_(communications)); for the matrix form on
-this platform, the [MIMO conjugate-gradient example](../mimo_cg/index.md).
+this platform, the [MIMO conjugate-gradient example](../mimo_cg/detector.md).
 
 Next, [The protocol](protocol.md): how the estimates and the symbols reach the hardware.

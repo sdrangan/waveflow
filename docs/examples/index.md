@@ -49,8 +49,10 @@ The core path, in order: each one is the next rung of the [Flow Overview](../gui
     model fitted from it.
 13. [What a crossbar costs](xbar_profile/index.md) -- vendor IP measured into a platform's record
     store: a census, not a design.
-14. [CG massive-MIMO detector](mimo_cg/index.md) -- the capstone: linear-algebra components
-    composed into a bit-exact fixed-point detector.
+14. [MU-MIMO whitening with CG](mimo_cg/index.md) -- under construction: whitening matrices
+    computed on demand for a multi-user MIMO scheduler, where the accelerator's delay is the
+    scheduling delay. Its first design, a bit-exact fixed-point CG detector, is
+    [The 2024 CG detector](mimo_cg/detector.md).
 
 ## Libraries and domains
 

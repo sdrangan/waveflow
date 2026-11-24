@@ -9,7 +9,7 @@ summary: "Retired (kept for examples/mimo_cg; new designs run CG as a program on
 
 # CG Vector Unit (retired)
 
-**Retired.** `CgVectorCore` and `CgVectorUnit` are kept for [the MIMO-CG example](../../../examples/mimo_cg/index.md)
+**Retired.** `CgVectorCore` and `CgVectorUnit` are kept for [the MIMO-CG example](../../../examples/mimo_cg/detector.md)
 only; new designs run CG as a program on [the vector unit](../vecunit/index.md)
 ([the CG example](../../../examples/vecunit_cg/index.md)). See [Retired Components](index.md). The page
 below describes the unit as it was; its paths are the retired ones.
