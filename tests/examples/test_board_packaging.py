@@ -160,8 +160,10 @@ def test_s2_template_retains_independent_memory_and_control_paths():
     (build_simp_fun_board_dag, simp_config, "simp_fun"),
     (build_poly_board_dag, board_config, "poly"),
 ])
+@pytest.mark.filterwarnings("error::waveflow.hw.dataschema.MissingSchemaHeaderWarning")
 def test_board_codegen_uses_current_sources(tmp_path, factory, config, top):
-    results = factory().run(config(tmp_path), through="gen_kernel", force=True)
+    dag, cfg = factory(), config(tmp_path)
+    results = dag.run(cfg, through="gen_kernel", force=True)
     successful(results, "gen_kernel")
     header = results["gen_kernel"].path(f"{top}_hpp").read_text()
     if top == "poly":
@@ -169,6 +171,9 @@ def test_board_codegen_uses_current_sources(tmp_path, factory, config, top):
         assert "coeffs" not in header
         source = results["gen_kernel"].path("poly_body_impl")
         assert source.read_bytes() == (Path(__file__).parents[2] / "examples/stream_inband/poly_body_impl.tpp").read_bytes()
+        # Upstream checks schema header dependencies separately from the kernel boundary.
+        includes = dag.run(cfg, through="gen_include", force=True)
+        successful(includes, "gen_include")
     else:
         assert "int32_t" in header or "ap_int<32>" in header
 

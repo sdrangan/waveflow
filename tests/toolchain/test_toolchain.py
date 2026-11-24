@@ -550,6 +550,28 @@ def test_run_vivado_launches_without_msystem(monkeypatch, tmp_path, extra_env):
         assert seen["env"]["STAGE"] == "bd_validate"
 
 
+@pytest.mark.parametrize("extra_env", [None, {"STAGE": "bd_validate"}, {"VIV": "/caller/vivado"}])
+def test_run_vivado_preserves_upstream_environment(linux_without_vivado_on_path, monkeypatch,
+                                                  tmp_path, extra_env):
+    """Board launches inherit upstream's detected Vivado and caller override precedence."""
+    root = linux_without_vivado_on_path
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs["env"]
+        assert cmd[0] == str(root / "bin/vivado")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setenv("WAVEFLOW_PARENT", "kept")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    toolchain.run_vivado(tmp_path / "board.tcl", tmp_path, env=extra_env)
+
+    assert seen["env"]["VIV"] == (extra_env or {}).get("VIV", str(root))
+    assert seen["env"]["WAVEFLOW_PARENT"] == "kept"
+    for key, value in (extra_env or {}).items():
+        assert seen["env"][key] == value
+
+
 def _vitis_install(root, version, *, headers_in_vitis):
     """A fake Vitis install under *root*: ``Vitis/<version>/bin/vitis-run`` (``vitis-run.bat`` on
     Windows, the name find_vitis_path looks for there -- else the env path is passed over and the
