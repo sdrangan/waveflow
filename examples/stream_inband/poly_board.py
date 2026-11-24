@@ -1,6 +1,7 @@
 """RFSoC4x2: current PolyAccel with in-band coefficients and PS DDR/simple DMA.
 
-The board template fixes a 32-bit stream and one 100 MHz PS clock. The upstream
+The board template uses a 32-bit stream and one PS PL0 clock. The application
+requests 100 MHz by default; Vivado checks generation feasibility before HLS. The upstream
 kernel, handwritten body, scenarios, serializers and reference model are reused.
 Use --force for a fresh complete build; the default target needs no AMD tools.
 """
@@ -13,7 +14,7 @@ import shutil
 
 import numpy as np
 
-from examples.board_support import model_driver
+from examples.board_support import model_driver, BOARD_CLOCK_ARGS, ps_clock_request
 from examples.stream_inband.poly import PolyAccel
 from examples.stream_inband import scenarios as S
 from examples.stream_inband.poly_build import (
@@ -39,11 +40,13 @@ HERE = Path(__file__).resolve().parent
 BOARD = HERE / "board"
 
 
-def board_config(root, *, platform=None, platforms_root=None):
+def board_config(root, *, platform=None, platforms_root=None, clock_hz=100e6,
+                 hls_clock_hz=None, tolerance_ppm=100.0):
+    request = ps_clock_request(clock_hz, hls_clock_hz, tolerance_ppm)
     return BuildConfig(root_dir=Path(root).resolve(), board=Board.rfsoc4x2(),
-                       clock_profile="ps_control", vitis_version="2025.1",
+                       clock_request=request, vitis_version="2025.1",
                        platform=platform, platforms_root=platforms_root,
-                       params={"clk_freq": 100e6})
+                       params={"clk_freq": request.hls_target_hz})
 
 
 def board_regmap():
@@ -198,10 +201,12 @@ def build_poly_board_dag():
 
 def main():
     run_dag_cli(build_poly_board_dag, description=__doc__, default_through="host_sim",
-                root_dir=HERE / "board_build", extra_args=PLATFORM_ARGS,
-                params_from_args=lambda _: {"clk_freq": 100e6},
+                root_dir=HERE / "board_build", extra_args=PLATFORM_ARGS + BOARD_CLOCK_ARGS,
+                params_from_args=lambda args: {"clk_freq": args.hls_clock_hz or args.clock_hz},
                 config_from_args=lambda args: {
-                    "board": Board.rfsoc4x2(), "clock_profile": "ps_control",
+                    "board": Board.rfsoc4x2(),
+                    "clock_request": ps_clock_request(args.clock_hz, args.hls_clock_hz,
+                                                       args.clock_tolerance_ppm),
                     "vitis_version": "2025.1", "platform": args.platform,
                     "platforms_root": args.platforms_root,
                 })

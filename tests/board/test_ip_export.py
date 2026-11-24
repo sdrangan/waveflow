@@ -16,6 +16,8 @@ from waveflow.build import ip_export as api
 from waveflow.build.board_steps import ExportIpStep
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.ip_export import IpExportSpec, export_ip, synthesize_for_board
+from tests.board.clock_helpers import resolved_config
+from tests.board.test_clock_resolution import fake_vivado
 
 
 SPEC = IpExportSpec(name="probe")
@@ -52,7 +54,7 @@ xmlns:s="http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009">
 
 @pytest.fixture
 def config(tmp_path):
-    return BuildConfig(root_dir=tmp_path, board=Board.rfsoc4x2(), clock_profile="ps_control")
+    return resolved_config(tmp_path)
 
 
 @pytest.fixture
@@ -110,13 +112,29 @@ def test_board_synth_and_export_keep_original_solution(config, fake_tools):
     manifest = json.loads(result.manifest.read_text())
     assert manifest["target"]["part"] == "xczu48dr-ffvg1517-2-e"
     assert manifest["target"]["hls_period_ns"] == 10
-    assert manifest["target"]["clock"]["kind"] == "declared"
+    assert manifest["target"]["clock"]["kind"] == "resolved"
+    assert manifest["target"]["clock"]["reference_clock"] == "ps_reference"
     assert manifest["vlnv"] == "waveflow:hls:probe:1.0"
     assert manifest["ports"]["s_axi_control_WDATA"]["width"] == 32
     assert manifest["interfaces"]["s_axi_control"]["bus_type"]["name"] == "aximm"
     assert manifest["control_header_sha256"] == api._sha(result.manifest.parent / "control.h")
     assert manifest["synthesized_verilog_hashes"]["probe.v"] == api._sha(result.directory / "hdl/verilog/probe.v")
     assert api._hash_tree(receipt.parent) == before
+    assert fake_tools["calls"] == ["synthesize.tcl", "export.tcl"]
+
+
+def test_synthesis_resolves_application_request_before_hls(tmp_path, fake_tools, fake_vivado):
+    config = BuildConfig(root_dir=tmp_path, board=Board.rfsoc4x2(),
+                         clock_request=ClockRequest("ps_pl0", 100e6, 100e6))
+    assert config.resolved_clock is None
+    result = export_ip(config, synth(config), SPEC)
+    target = json.loads(result.manifest.read_text())["target"]
+    assert len(fake_vivado) == 1
+    assert config.resolved_clock.actual_hz == 99_999_985
+    assert target["clock"]["reference_clock"] == "ps_reference"
+    assert target["clock"]["reference_hz"] == 33_333_330
+    assert target["clock"]["profile"]["physical_hz"] == 99_999_985
+    assert target["hls_period_ns"] == 10
     assert fake_tools["calls"] == ["synthesize.tcl", "export.tcl"]
 
 
@@ -160,11 +178,11 @@ def test_changed_receipt_inputs_refuse_export(config, fake_tools, relative):
 
 def test_changed_board_or_hls_target_refuses_export(config, fake_tools):
     receipt = synth(config)
-    changed = BuildConfig(root_dir=config.root_dir, board=config.board, clock_profile="rf_axis")
+    changed = resolved_config(config.root_dir, board=config.board, requested_hz=245.76e6,
+                              hls_target_hz=250e6)
     with pytest.raises(ValueError, match="current Board/HLS target"):
         export_ip(changed, receipt, SPEC)
-    wrong = BuildConfig(root_dir=config.root_dir,
-                        board=replace(config.board, part="xc7z020clg484-1"), clock_profile="ps_control")
+    wrong = resolved_config(config.root_dir, board=replace(config.board, part="xc7z020clg484-1"))
     with pytest.raises(ValueError, match="current Board/HLS target"):
         export_ip(wrong, receipt, SPEC)
     assert fake_tools["calls"] == ["synthesize.tcl"]
@@ -489,9 +507,10 @@ def test_source_receipt_is_rechecked_after_tool_run(config, fake_tools, monkeypa
     assert not list(config.root_dir.rglob("ip_manifest.json"))
 
 
-def test_fractional_hls_target_remains_separate_from_rf_physical_clock(config, fake_tools):
-    # The named RF profile targets 250 MHz HLS, not its 245.76 MHz physical rate.
-    config = BuildConfig(root_dir=config.root_dir, board=config.board, clock_profile="rf_axis")
+def test_hls_target_remains_separate_from_physical_clock(config, fake_tools):
+    # A synthetic profile keeps physical frequency distinct from the HLS target.
+    config = resolved_config(config.root_dir, board=config.board, requested_hz=245.76e6,
+                             hls_target_hz=250e6)
     manifest = json.loads(export_ip(config, synth(config), SPEC).manifest.read_text())
     assert manifest["target"]["hls_period_ns"] == 4
     assert manifest["target"]["clock"]["profile"]["physical_hz"] == 245.76e6

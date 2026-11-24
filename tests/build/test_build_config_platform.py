@@ -11,9 +11,9 @@ import json
 
 import pytest
 
-from waveflow.board import Board
 from waveflow.build.build import BuildConfig
 from waveflow.calib.platform import PLATFORM_MANIFEST, PlatformMismatchError
+from waveflow.board import Board, ClockRequest
 
 
 class TestPlatformResolution:
@@ -81,7 +81,7 @@ class TestPlatformResolution:
         original = (root / "other_target" / PLATFORM_MANIFEST).read_bytes()
         with pytest.raises(PlatformMismatchError, match="board.*rfsoc4x2"):
             BuildConfig(
-                board=Board.rfsoc4x2(), clock_profile="rf_axis",
+                board=Board.rfsoc4x2(), clock_request=ClockRequest("pl_ref_mmcm", 245.76e6, 250e6),
                 platform="other_target", platforms_root=root,
                 allow_platform_mismatch=allow_mismatch,
             )

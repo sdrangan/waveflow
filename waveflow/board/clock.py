@@ -140,6 +140,10 @@ def _context(board: Board, source_name: str) -> tuple[dict, str]:
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*")) if path.is_file()
     }
+    inventory = {
+        "references": {name: asdict(ref) for name, ref in board.reference_clocks.items()},
+        "devices": {name: asdict(device) for name, device in board.clock_devices.items()},
+    }
     context = {
         "schema_version": 1,
         "board_name": board.name,
@@ -147,14 +151,14 @@ def _context(board: Board, source_name: str) -> tuple[dict, str]:
         "board_part": board.board_part,
         "board_files_version": board.board_files_version,
         "board_file_hashes": board_hashes,
+        "clock_inventory_sha256": hashlib.sha256(
+            json.dumps(inventory, sort_keys=True).encode()
+        ).hexdigest(),
         "vivado_version": board.vivado_version,
         "source": source_name,
         "generator": source.generator,
-        "reference_profile": source.reference_profile,
-        "input_hz": (
-            board.clock(source.reference_profile).physical_hz
-            if source.reference_profile is not None else None
-        ),
+        "reference_clock": source.reference_clock,
+        "input_hz": board.reference_clock(source.reference_clock).frequency_hz,
         "recipe_sha256": hashlib.sha256(_recipe_path().read_bytes()).hexdigest(),
     }
     fingerprint = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
@@ -204,7 +208,9 @@ def _parse_output(stdout: str, board: Board, request: ClockRequest, context: dic
     if context["generator"] == "ps_pl0":
         if parameters.get("clock_source") not in ("IOPLL", "RPLL", "DPLL"):
             raise ClockProbeError("invalid PS clock source")
-        _number(parameters, "reference_hz")
+        reference = _number(parameters, "reference_hz")
+        if not math.isclose(reference, context["input_hz"], rel_tol=1e-12, abs_tol=1e-3):
+            raise ClockProbeError("PS reference frequency differs from the board reference")
         for key in ("divisor0", "divisor1"):
             divisor = _number(parameters, key)
             if not divisor.is_integer() or not 1 <= divisor <= 63:

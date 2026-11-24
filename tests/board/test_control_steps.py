@@ -11,11 +11,12 @@ from waveflow.build.board_steps import HlsControlSpecStep, HostDriverGenStep
 from waveflow.build.hls_control import control_spec_from_export
 from waveflow.build.ip_export import _board_target, _hash_tree, _sha
 from tests.board.control_abi_helpers import FIXTURES, intent
+from tests.board.clock_helpers import resolved_config
 
 
 @pytest.fixture
 def exported(tmp_path):
-    config = BuildConfig(root_dir=tmp_path, board=Board.rfsoc4x2(), clock_profile="ps_control")
+    config = resolved_config(tmp_path)
     root = tmp_path / "export"
     (root / "ip").mkdir(parents=True)
     shutil.copyfile(FIXTURES / "scalar_probe/component.xml", root / "ip/component.xml")
@@ -100,17 +101,18 @@ def test_bad_manifest_rejected(exported, field, value):
 def test_wrong_current_target_rejected(exported, change):
     config, path = exported
     if change == "clock":
-        config = BuildConfig(root_dir=config.root_dir, board=config.board, clock_profile="rf_axis")
+        config = resolved_config(config.root_dir, board=config.board, requested_hz=245.76e6,
+                                 hls_target_hz=250e6)
     else:
-        config = BuildConfig(root_dir=config.root_dir, board=replace(config.board, part="xc7z020clg484-1"),
-                             clock_profile="ps_control")
+        config = resolved_config(config.root_dir, board=replace(config.board, part="xc7z020clg484-1"))
     with pytest.raises(ValueError, match="current Board/HLS target"):
         control_spec_from_export(config, path, intent("scalar_probe")[0])
 
 
 def test_relabeling_manifest_does_not_relabel_actual_report(exported):
     config, path = exported
-    other = BuildConfig(root_dir=config.root_dir, board=config.board, clock_profile="rf_axis")
+    other = resolved_config(config.root_dir, board=config.board, requested_hz=245.76e6,
+                            hls_target_hz=250e6)
     record = json.loads(path.read_text())
     record["target"] = _board_target(other)
     path.write_text(json.dumps(record))

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from waveflow.board import Board
+from waveflow.board import Board, ClockRequest
 from waveflow.build.build import BuildConfig, BuildDag, SourceStep
 from waveflow.build.board_steps import ExportIpStep, HlsControlSpecStep, HostDriverGenStep
 from waveflow.build.ip_export import IpExportSpec, synthesize_for_board
@@ -21,7 +21,7 @@ def test_fresh_rfsoc4x2_abi_and_generated_driver(top, tmp_path):
         pytest.skip("Vitis missing: S0c real ABI acceptance is NOT verified")
     assert tool_version(exe, "--version") == "2025.1"
     config = BuildConfig(root_dir=tmp_path, board=Board.rfsoc4x2(),
-                         clock_profile="ps_control", vitis_version="2025.1")
+                         clock_request=ClockRequest("ps_pl0", 100e6, 100e6), vitis_version="2025.1")
     receipt = synthesize_for_board(config, top=top,
         inputs={top + ".cpp": FIXTURES / (top + ".cpp")}, sources=(top + ".cpp",))
     before = {p.relative_to(receipt.parent): hashlib.sha256(p.read_bytes()).hexdigest()

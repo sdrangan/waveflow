@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from waveflow.board import Board
+from waveflow.board import Board, ClockRequest
 from waveflow.build.build import BuildConfig
 from waveflow.build.composite_gen import render_tcl, tcl_target
 from waveflow.toolchain import find_vitis_path, run_vitis_hls, tool_version
@@ -23,9 +23,12 @@ def rfsoc_hls_board():
 
 
 @pytest.mark.vitis
-@pytest.mark.parametrize("profile,period_ns", [("rf_axis", 4.0), ("ps_control", 10.0)])
-def test_board_target_in_fresh_csynth_report(tmp_path, rfsoc_hls_board, profile, period_ns):
-    cfg = BuildConfig(root_dir=tmp_path, board=rfsoc_hls_board, clock_profile=profile)
+@pytest.mark.vivado
+@pytest.mark.parametrize("clock_request,period_ns", [(ClockRequest("pl_ref_mmcm", 245.76e6, 250e6), 4.0),
+                                               (ClockRequest("ps_pl0", 100e6, 100e6), 10.0)])
+def test_board_target_in_fresh_csynth_report(tmp_path, rfsoc_hls_board, clock_request, period_ns):
+    clock = rfsoc_hls_board.resolve_clock(clock_request, work_dir=tmp_path / "clocks")
+    cfg = BuildConfig(root_dir=tmp_path, board=rfsoc_hls_board, resolved_clock=clock)
     top = "board_target_probe"
     (tmp_path / "gen").mkdir()
     (tmp_path / "include").mkdir()

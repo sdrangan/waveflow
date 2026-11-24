@@ -94,6 +94,8 @@ def test_notebook_defaults_do_not_launch_amd_tools(tmp_path, monkeypatch, app, f
     assert namespace["run_dir"].is_relative_to(tmp_path)
     assert namespace["config"].part == "xczu48dr-ffvg1517-2-e"
     assert namespace["config"].clk_freq == 100e6
+    assert namespace["config"].clock_request.requested_hz == 100e6
+    assert namespace["config"].resolved_clock is None
     assert namespace["local_record"]["passed"]
     assert namespace["local_record"]["board_execution_verified"] is False
     assert namespace["RUN_BD_VALIDATION"] is False

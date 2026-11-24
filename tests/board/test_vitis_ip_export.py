@@ -1,6 +1,7 @@
 """Opt-in S0b acceptance using real Vitis/Vivado and standalone C++ fixtures.
 
-No application imports, PYNQ dependency, BD construction, or implementation.
+No application imports, PYNQ dependency, application BD, or implementation.
+Vivado resolves the requested clock before Vitis synthesis and export.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from waveflow.board import Board
+from waveflow.board import Board, ClockRequest
 from waveflow.build.build import BuildConfig, BuildDag, SourceStep
 from waveflow.build.board_steps import ExportIpStep
 from waveflow.build.ip_export import IpExportSpec, synthesize_for_board
@@ -26,7 +27,9 @@ def tree_hashes(root):
 
 
 @pytest.fixture(scope="module", params=[
-    ("ps_control", "axilite_probe"), ("rf_axis", "axilite_probe"), ("ps_control", "wire_probe"),
+    (ClockRequest("ps_pl0", 100e6, 100e6), "axilite_probe"),
+    (ClockRequest("pl_ref_mmcm", 245.76e6, 250e6), "axilite_probe"),
+    (ClockRequest("ps_pl0", 100e6, 100e6), "wire_probe"),
 ], ids=["axilite-100MHz", "axilite-250MHz", "no-control-100MHz"])
 def real_package(request, tmp_path_factory):
     exe = find_vitis_path()
@@ -34,9 +37,9 @@ def real_package(request, tmp_path_factory):
         pytest.skip("Vitis HLS not installed; S0b real export acceptance is NOT verified")
     board = Board.rfsoc4x2()
     assert tool_version(exe, "--version") == board.vivado_version
-    profile, top = request.param
-    root = tmp_path_factory.mktemp("s0b_" + top + "_" + profile)
-    config = BuildConfig(root_dir=root, board=board, clock_profile=profile, vitis_version="2025.1")
+    clock_request, top = request.param
+    root = tmp_path_factory.mktemp("s0b_" + top + "_" + clock_request.source)
+    config = BuildConfig(root_dir=root, board=board, clock_request=clock_request, vitis_version="2025.1")
     receipt = synthesize_for_board(
         config, top=top, inputs={top + ".cpp": FIXTURES / (top + ".cpp")},
         sources=(top + ".cpp",),
@@ -77,7 +80,7 @@ def test_real_rfsoc4x2_export(real_package):
     else:
         assert manifest["control_header"] is None
         assert manifest["control_header_sha256"] is None
-    if config.clock_profile == "rf_axis":
+    if config.clock_request.hls_target_hz == 250e6:
         assert manifest["target"]["clock"]["profile"]["physical_hz"] == 245.76e6
         assert manifest["target"]["hls_period_ns"] == 4.0
 

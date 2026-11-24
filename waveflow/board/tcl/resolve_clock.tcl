@@ -34,6 +34,9 @@ if {[catch {
         set d0 [get_property CONFIG.PSU__CRL_APB__PL0_REF_CTRL__DIVISOR0 $ps]
         set d1 [get_property CONFIG.PSU__CRL_APB__PL0_REF_CTRL__DIVISOR1 $ps]
         set reference_hz [expr {double([get_property CONFIG.PSU__PSS_REF_CLK__FREQMHZ $ps]) * 1e6}]
+        if {abs($reference_hz - double($input_hz)) > 0.001} {
+            error "PS preset reference differs from the recorded board reference"
+        }
         set parameters [format {{"clock_source":"%s","divisor0":%s,"divisor1":%s,"reference_hz":%.17g}} $clock_source $d0 $d1 $reference_hz]
     } else {
         if {![string is double -strict $input_hz] || $input_hz <= 0} {

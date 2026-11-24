@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from waveflow.board import Board
 from waveflow.build.build import BuildConfig
 from waveflow.build.composite_gen import (
     DEFAULT_PART,
@@ -16,16 +15,18 @@ from waveflow.build.composite_gen import (
     render_tcl,
     tcl_target,
 )
+from waveflow.board import Board, ClockRequest
 
 
 class TestTclTarget:
-    @pytest.mark.parametrize("profile,period_ns", [("rf_axis", 4.0), ("ps_control", 10.0)])
+    @pytest.mark.parametrize("clock_request,period_ns", [(ClockRequest("pl_ref_mmcm", 245.76e6, 250e6), 4.0),
+                                                   (ClockRequest("ps_pl0", 100e6, 100e6), 10.0)])
     @pytest.mark.parametrize("with_platform", [False, True])
-    def test_board_drives_generated_tcl(self, tmp_path, profile, period_ns, with_platform):
+    def test_board_drives_generated_tcl(self, tmp_path, clock_request, period_ns, with_platform):
         cfg = BuildConfig(
             root_dir=tmp_path,
             board=Board.rfsoc4x2(),
-            clock_profile=profile,
+            clock_request=clock_request,
             platform="board_test" if with_platform else None,
             platforms_root=tmp_path / "platforms",
         )
@@ -41,7 +42,7 @@ class TestTclTarget:
         root = tmp_path / "platforms"
         BuildConfig(platform="unseeded", platforms_root=root)
         cfg = BuildConfig(
-            board=Board.rfsoc4x2(), clock_profile="rf_axis",
+            board=Board.rfsoc4x2(), clock_request=ClockRequest("pl_ref_mmcm", 245.76e6, 250e6),
             platform="unseeded", platforms_root=root,
         )
         assert cfg.platform_info.part is None

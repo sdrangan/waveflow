@@ -1,4 +1,4 @@
-"""Application-owned 100 MHz, noncoherent PS DDR / AXI DMA topology."""
+"""Application-owned single-clock, noncoherent PS DDR / AXI DMA topology."""
 from pathlib import Path
 
 from waveflow.build.vivado_board import BdAddress, BdConnection, BdDesign, BdProperty

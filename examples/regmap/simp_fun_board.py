@@ -19,7 +19,7 @@ from examples.regmap.board.host.sim_backend import SimBackend
 from waveflow.board import Board
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli, PLATFORM_ARGS
-from examples.board_support import model_driver
+from examples.board_support import model_driver, BOARD_CLOCK_ARGS, ps_clock_request
 from waveflow.build.board_steps import (
     ExportIpStep, HlsControlSpecStep, HostDriverGenStep, BdGenStep,
     BdValidateStep, BitstreamStep, CollectOverlayStep,
@@ -39,11 +39,14 @@ STAGES = ("py_sim", "host_sim", "synthesize", "export_ip", "control_abi",
           "host_driver", "export_host_sim", "bd_gen", "bd_validate", "bitstream", "overlay")
 
 
-def board_config(root, *, platform=None, platforms_root=None):
-    """Select the physical target and optionally a matching calibration library."""
+def board_config(root, *, platform=None, platforms_root=None, clock_hz=100e6,
+                 hls_clock_hz=None, tolerance_ppm=100.0):
+    """Declare an application clock request without invoking Vivado."""
+    request = ps_clock_request(clock_hz, hls_clock_hz, tolerance_ppm)
     return BuildConfig(root_dir=Path(root).resolve(), board=Board.rfsoc4x2(),
-                       clock_profile="ps_control", vitis_version="2025.1",
-                       platform=platform, platforms_root=platforms_root)
+                       clock_request=request, vitis_version="2025.1",
+                       platform=platform, platforms_root=platforms_root,
+                       params={"clk_freq": request.hls_target_hz})
 
 
 @dataclass(kw_only=True)
@@ -167,9 +170,12 @@ def build_simp_fun_board_dag():
 def main():
     run_dag_cli(
         build_simp_fun_board_dag, description=__doc__, default_through="host_sim",
-        root_dir=HERE / "board_build", extra_args=PLATFORM_ARGS,
+        root_dir=HERE / "board_build", extra_args=PLATFORM_ARGS + BOARD_CLOCK_ARGS,
+        params_from_args=lambda args: {"clk_freq": args.hls_clock_hz or args.clock_hz},
         config_from_args=lambda args: {
-            "board": Board.rfsoc4x2(), "clock_profile": "ps_control",
+            "board": Board.rfsoc4x2(),
+            "clock_request": ps_clock_request(args.clock_hz, args.hls_clock_hz,
+                                               args.clock_tolerance_ppm),
             "vitis_version": "2025.1", "platform": args.platform,
             "platforms_root": args.platforms_root,
         },

@@ -25,8 +25,8 @@ contracts, including the processing system and its connections.
 | --- | --- |
 | Board target | RealDigital RFSoC4x2, `xczu48dr-ffvg1517-2-e`, board files revision `1.0` |
 | Tools | Vitis HLS and Vivado `2025.1`, checked by the runners |
-| S1 | SimpFun controlled by PS AXI-Lite, with one 100 MHz PS PL clock |
-| S2 | Current upstream PolyAccel with PS DDR, simple AXI DMA and 32-bit AXIS; the same 100 MHz clock |
+| S1 | SimpFun controlled by PS AXI-Lite, with one requested PS PL clock (100 MHz application default) |
+| S2 | Current upstream PolyAccel with PS DDR, simple AXI DMA and 32-bit AXIS; the same requested clock |
 | Software checks | Board configuration, export/ABI/driver checks, model/host protocols and generated sources have offline regression gates |
 | Fresh tool/board acceptance | Run manually for the migrated implementation; historical board results are not its acceptance evidence |
 
@@ -39,7 +39,7 @@ the newly collected overlay. Later board stages remain future application work.
 
 | Location | Responsibility |
 | --- | --- |
-| [`waveflow/board/spec.py`](../../../waveflow/board/spec.py) | Immutable `Board`, `ClockProfile`, `ClockSource` and the bundled RFSoC4x2 target |
+| [`waveflow/board/spec.py`](../../../waveflow/board/spec.py) | Immutable `Board`, `ReferenceClock`, generation routes and the bundled RFSoC4x2 target |
 | [`waveflow/board/clock.py`](../../../waveflow/board/clock.py) | Explicit `ClockRequest` / `ClockResolution` and Vivado nominal clock readback |
 | `waveflow/board/boards/` and `waveflow/board/tcl/` | Board-file resources and clock/discovery recipes shipped with the Python package |
 | [`waveflow/build/ip_export.py`](../../../waveflow/build/ip_export.py) | Fresh board-targeted HLS synthesis receipts, export, IP identity and package integrity |
@@ -58,27 +58,31 @@ and the shared `run_dag_cli` interface.
 
 ### Board and calibration Platform
 
-`Board` supplies the physical device, board preset, tool release and clock
-profiles. `Platform` identifies the measured calibration library for a part and
+`Board` supplies the physical device, board preset, tool release, available reference
+clocks and supported generation routes. Application output frequencies belong to
+`ClockRequest`, not the board definition. `Platform` identifies the measured calibration library for a part and
 HLS target clock. Constructing a platform identity does not produce calibration
 measurements.
 
 ```python
 from pathlib import Path
-from waveflow.board import Board
+from waveflow.board import Board, ClockRequest
 from waveflow.build.build import BuildConfig
 
 board = Board.rfsoc4x2()
 config = BuildConfig(
     root_dir=Path("board_build/my_accel"),
     board=board,
-    clock_profile="ps_control",
+    clock_request=ClockRequest(
+        source="ps_pl0", requested_hz=100e6, hls_target_hz=100e6, tolerance_ppm=100,
+    ),
     vitis_version="2025.1",
     platform="rfsoc4x2_ps_control_100mhz",  # Optional calibration identity.
     platforms_root=Path("board_build/platforms"),
 )
 assert config.part == "xczu48dr-ffvg1517-2-e"
 assert config.clk_freq == 100e6
+assert config.resolved_clock is None  # No tool was invoked by configuration.
 ```
 
 `BuildConfig` derives and checks the board target before resolving the calibration
@@ -86,12 +90,84 @@ platform. It rejects conflicting explicit part/clock values and a mismatched
 calibration platform, including when `allow_platform_mismatch=True`. Existing
 builds without a board retain the upstream platform/default target behavior.
 
-A `ClockProfile` distinguishes physical frequency from the HLS scheduling target.
-For example, the declared `rf_axis` profile is 245.76 MHz physical and 250 MHz HLS;
-S1/S2 use `ps_control`, which is 100 MHz for both. `board.clock()` is a lookup.
-`board.resolve_clock(ClockRequest(...))` explicitly invokes Vivado; constructing
-`BuildConfig` never does. A resolved clock can be supplied as `resolved_clock`
-instead of `clock_profile`. It must be accepted and compatible with the board.
+The RFSoC4x2 clock inventory is in
+[`waveflow/board/rfsoc4x2.py`](../../../waveflow/board/rfsoc4x2.py).
+`Board.reference_clocks` records nominal inputs, source devices, output names and
+consumers. `Board.clock_devices` records the physical chips and internal PS PLLs,
+their input references and configuration methods. Neither map assigns an HLS target.
+Both maps are immutable and can be inspected without running tools:
+
+```python
+for name, ref in board.reference_clocks.items():
+    device = board.clock_devices[ref.source]
+    print(name, ref.frequency_hz, device.model, ref.output, device.configuration)
+print(board.clock_devices["ps_dpll"])  # PS DDR's preset source, not a PL clock.
+```
+
+The verified paths below follow the
+[RealDigital V3I1 schematic, sheets 15-18](https://www.realdigital.org/downloads/1859152f898cfb0d53c4792e23e91b35.pdf#page=15).
+Programmable frequencies are the documented PYNQ defaults in the
+[A6 reference manual, Figure 5](https://www.realdigital.org/downloads/d6a7543b5033e5dadde272a48bcb5090.pdf#page=8).
+
+| Reference name | Nominal MHz | Physical source / consumer |
+| --- | --- | --- |
+| `si5395_crystal` | 48 | Crystal to Si5395 |
+| `ps_reference` | 33.33333 | Si5395 OUT8 to PS_REF_CLK; frequency precision follows the PS preset |
+| `pl_system_reference` | 100 | Si5395 OUT0A to PL system clock |
+| `pl_ddr_reference` | 200 | Si5395 OUT1 to PL DDR controller reference |
+| `lmk_reference`, `lmk_vcxo` | 10, 160 | Si5395 OUT2 and VCXO to LMK04828 |
+| `pl_reference` | 122.88 | LMK DCLKout8 to PL |
+| `pl_sysref`, `rfdc_sysref` | 7.68 | LMK SDCLKout9 / SDCLKout3 to PL / RFDC SYSREF |
+| `adc_synth_reference`, `dac_synth_reference` | 245.76 | LMK DCLKout0 / DCLKout4 to the two LMX2594s |
+| `adc_reference` | 491.52 | LMX2594 PLL1 to ADC tiles 224 and 226 |
+| `dac_reference` | 491.52 | LMX2594 PLL2 to DAC tiles 228 and 230 |
+| `qsfp_reference`, `qsfp_gt_reference` | 156.25 | Si5395 OUT9A / OUT9 to PL / GTY |
+| `usb3_reference`, `displayport_reference`, `usb2_reference` | 100, 27, 24 | Si5395 OUT0 / OUT4 / OUT6 |
+
+The pinned `board.xml` applies the PS preset through `ps8_fixedio`; it contains no
+external clock interfaces or LMK/LMX programming tables. Its `preset.xml` already
+selects `PSS_REF_CLK` for APLL, DPLL, VPLL, IOPLL and RPLL; PL0 uses IOPLL, ACPU
+uses APLL, and PS DDR uses DPLL. These are preset selections, not exclusive PLL
+capabilities. The preset's PS DDR setting is 1200 MHz (DDR4-2400), a derived clock
+kept out of the reference inventory. S2 uses PS DDR through its AXI interface;
+its application PL clock remains a separate request. PL DDR instead needs the
+200 MHz reference and a PL memory-controller design.
+
+Si5395 uses factory ROM configuration. LMK/LMX outputs require PS-side SPI setup
+(for example, PYNQ `xrfclk` with suitable TICS tables); the board file and a plain
+overlay download do not establish those settings. Inventory values do not
+program or read back the chips. RFDC sampling rates, tile PLL/bypass choices and
+PL stream clocks belong to the RFDC design. SYSREF is a synchronization signal,
+not an interchangeable fabric clock.
+
+The schematic connects the Si5395 10 MHz reference to LMK **CLKIN0**, and the
+external CLK IN SMA to **CLKIN1**. Figure 5 reverses those input labels; the
+inventory follows schematic sheet 16. The external input has no assumed
+frequency and is described in the device notes, not assigned a numeric reference.
+
+The supported routes are `ps_pl0` from `ps_reference` through the PS preset's PLL
+and dividers, and `pl_ref_mmcm` from `pl_reference` through an MMCM. A reference
+without a supported route cannot be selected as a generator. The application
+requests the output frequency, a separate HLS target and allowed error in ppm.
+`board.resolve_clock(request)` explicitly invokes Vivado and checks the input
+reference, generated frequency, pin metadata, generator settings and tolerance.
+Its `ClockResolution` retains the request, actual nominal output and evidence.
+This is a configuration feasibility check; implementation timing and physical
+measurement are separate gates.
+The inventory does not add LMK/LMX, DDR, RFDC or peripheral generation recipes.
+The MMCM probe assumes the declared 122.88 MHz input has been configured; it
+does not set up the LMK or provide full external-pin constraints. Changes to
+the clock inventory invalidate prior resolution fingerprints.
+
+`BuildConfig(clock_request=...)` remains tool-free for software/model checks.
+`synthesize_for_board()` resolves an outstanding request before HLS starts;
+failure stops the build before synthesis/export. Alternatively, resolve manually
+and supply `BuildConfig(resolved_clock=...)`. Packaging requires a resolved clock
+and rejects mismatched requests or changed board/reference/recipe identities.
+S1/S2 request 100 MHz by default at the application level. Their CLIs accept
+`--clock-hz`, `--hls-clock-hz` (defaults to the output request), and
+`--clock-tolerance-ppm`. A calibration platform must match the requested HLS
+frequency; choosing another platform name alone does not change the clock.
 
 ## Build stages and artifact contracts
 
@@ -212,7 +288,7 @@ status is zero. The portable host rejects the old register-coefficient protocol.
 
 S2 uses separate SmartConnects for control and DDR access. DMA MM2S/S2MM access
 PS DDR through HP0 in the lower 2 GiB aperture. The accelerator, DMA, interconnect
-and reset use the same 100 MHz PS PL clock. New buffering or clock-domain crossings
+and reset share the requested PS PL clock (100 MHz by default). New buffering or clock-domain crossings
 must be designed explicitly if an extension needs them.
 
 Python owns the schemas and reference behavior. The current S2 generator emits
@@ -274,11 +350,13 @@ Build each overlay independently when ready:
 
 ```bash
 python -m examples.regmap.simp_fun_board \
+  --clock-hz 100e6 \
   --platform rfsoc4x2_ps_control_100mhz \
   --platforms-root examples/regmap/board_build/platforms \
   --through overlay --force --timing
 
 python -m examples.stream_inband.poly_board \
+  --clock-hz 100e6 \
   --platform rfsoc4x2_ps_control_100mhz \
   --platforms-root examples/stream_inband/board_build/platforms \
   --through overlay --force --timing

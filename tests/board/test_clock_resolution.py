@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from waveflow.board import (
-    Board, ClockProbeError, ClockProfile, ClockRequest, ClockRequestError, ClockSource,
+    Board, ReferenceClock, ClockProbeError, ClockProfile, ClockRequest, ClockRequestError, ClockSource,
 )
 from waveflow.board import clock as clock_module
 from waveflow.build.build import BuildConfig
@@ -68,7 +68,7 @@ def test_sources_are_board_owned_and_immutable(fake_vivado):
     board = Board.rfsoc4x2()
     assert board.clock_source("pl_ref_mmcm") == ClockSource("mmcm", "pl_reference")
     with pytest.raises(TypeError):
-        board.clock_sources["extra"] = ClockSource("ps_pl0")
+        board.clock_sources["extra"] = ClockSource("ps_pl0", "ps_reference")
     with pytest.raises(ValueError, match="unknown clock source"):
         board.resolve_clock(ClockRequest("adc_reference", 100e6))
     with pytest.raises(ValueError, match="unknown reference"):
@@ -133,7 +133,7 @@ def test_config_rejects_conflicts_and_stale_context(tmp_path, fake_vivado):
     clock = board.resolve_clock(ClockRequest("ps_pl0", 100e6, 100e6), work_dir=tmp_path)
     for kwargs, match in [
         ({"resolved_clock": clock}, "requires a board"),
-        ({"board": board, "resolved_clock": clock, "clock_profile": "ps_control"}, "mutually exclusive"),
+        ({"board": board, "resolved_clock": clock, "clock_request": ClockRequest("ps_pl0", 125e6, 125e6)}, "differs"),
         ({"board": board, "resolved_clock": clock, "clk_freq": clock.actual_hz}, "HLS target"),
         ({"board": board, "resolved_clock": clock, "part": "wrong"}, "does not match board"),
         ({"board": replace(board, vivado_version="2026.1"), "resolved_clock": clock}, "does not match board"),
@@ -156,7 +156,7 @@ def test_mmcm_profile_and_reference_change(tmp_path, fake_vivado):
     clock = board.resolve_clock(ClockRequest("pl_ref_mmcm", 245.76e6, 250e6), work_dir=tmp_path)
     assert clock.profile == ClockProfile(245.76e6, 250e6)
     assert tcl_target(BuildConfig(board=board, resolved_clock=clock)) == (board.part, 4)
-    changed = replace(board, clocks={**board.clocks, "pl_reference": ClockProfile(125e6, None)})
+    changed = replace(board, reference_clocks={**board.reference_clocks, "pl_reference": ReferenceClock(125e6)})
     with pytest.raises(ValueError, match="does not match board"):
         BuildConfig(board=changed, resolved_clock=clock)
 
@@ -233,6 +233,7 @@ def test_modified_board_files_invalidate_resolution(tmp_path, fake_vivado):
     ("ps_pl0", "divisor0", 0),
     ("ps_pl0", "divisor1", 1.5),
     ("ps_pl0", "clock_source", "unknown"),
+    ("ps_pl0", "reference_hz", 40e6),
     ("mmcm", "input_hz", 125e6),
     ("mmcm", "multiplier", 10),
     ("mmcm", "output_divider", None),
@@ -255,3 +256,36 @@ def test_invalid_generator_parameters_are_rejected(
     with pytest.raises(ClockProbeError):
         Board.rfsoc4x2().resolve_clock(ClockRequest(source, 100e6), work_dir=tmp_path)
     assert not list(tmp_path.glob("*/clock_resolution.json"))
+
+
+def test_reference_change_invalidates_ps_resolution(tmp_path, fake_vivado):
+    board = Board.rfsoc4x2()
+    clock = board.resolve_clock(ClockRequest("ps_pl0", 100e6, 100e6), work_dir=tmp_path)
+    changed = replace(board, reference_clocks={**board.reference_clocks,
+                                             "ps_reference": ReferenceClock(40e6)})
+    with pytest.raises(ValueError, match="does not match board"):
+        BuildConfig(board=changed, resolved_clock=clock)
+
+
+def test_clock_hardware_change_invalidates_resolution(tmp_path, fake_vivado):
+    board = Board.rfsoc4x2()
+    clock = board.resolve_clock(ClockRequest("ps_pl0", 100e6, 100e6), work_dir=tmp_path)
+    devices = {**board.clock_devices,
+               "si5395": replace(board.clock_devices["si5395"], model="different clock chip")}
+    with pytest.raises(ValueError, match="does not match board"):
+        clock.require_compatible(replace(board, clock_devices=devices))
+
+
+def test_unachievable_clock_stops_before_hls(tmp_path, fake_vivado, monkeypatch):
+    from waveflow.build import ip_export
+    def forbidden(*args, **kwargs):
+        pytest.fail("HLS must not launch for a rejected clock request")
+    monkeypatch.setattr(ip_export, "run_vitis_hls", forbidden)
+    source = tmp_path / "probe.cpp"
+    source.write_text("unsigned probe(unsigned x) { return x + 1; }\n")
+    config = BuildConfig(root_dir=tmp_path, board=Board.rfsoc4x2(),
+                         clock_request=ClockRequest("ps_pl0", 123.456e6, 125e6))
+    with pytest.raises(ClockRequestError):
+        ip_export.synthesize_for_board(config, top="probe", inputs={"probe.cpp": source},
+                                       sources=("probe.cpp",))
+    assert not list(tmp_path.rglob("synthesis_receipt.json"))

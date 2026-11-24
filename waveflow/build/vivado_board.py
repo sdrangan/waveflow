@@ -270,12 +270,8 @@ def prepare_bd(config, manifest_path, abi, design, *, work_dir):
     target = record["target"]
     config.board.clock_source(design.clock_source)
     clock = target["clock"]
-    if clock["kind"] == "resolved":
-        _require(clock["request"]["source"] == design.clock_source, "BD clock recipe mismatch")
-    else:
-        _require((clock["name"], design.clock_source) in
-                 (("ps_control", "ps_pl0"), ("rf_axis", "pl_ref_mmcm")),
-                 "declared profile has no supported BD clock recipe")
+    _require(clock["kind"] == "resolved", "BD requires a resolved application clock request")
+    _require(clock["request"]["source"] == design.clock_source, "BD clock recipe mismatch")
     matches = [a for a in design.addresses
                if a.segment.startswith(design.ip_cell + "/" + abi.interface + "/")]
     _require(len(matches) == 1 and matches[0].size >= abi.address_range,

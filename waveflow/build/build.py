@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from waveflow import events
-from waveflow.board import Board, ClockResolution
+from waveflow.board import Board, ClockRequest, ClockResolution
 
 
 # ---------------------------------------------------------------------------
@@ -81,15 +81,15 @@ class BuildConfig:
     clk_freq : float | None
         Synthesis clock frequency in Hz (its period drives HLS scheduling → the cycle counts).
     board : Board | None
-        Physical FPGA target. Select exactly one of ``clock_profile`` or ``resolved_clock``;
-        the board derives ``part`` and the HLS target before calibration-platform resolution.
-    clock_profile : str | None
-        Named clock profile on ``board``.  Profiles without an HLS target describe physical
-        references only and cannot drive a ``BuildConfig``.
+        Physical FPGA target and its available reference clocks/generation routes.
+    clock_request : ClockRequest | None
+        Application-owned output frequency, HLS target and tolerance. Construction validates
+        the route and derives the HLS target without launching Vivado. Board synthesis resolves
+        the request before HLS; an unresolved request is never hardware clock evidence.
     resolved_clock : ClockResolution | None
-        Result of an explicit ``board.resolve_clock()`` call. Mutually exclusive with
-        ``clock_profile``. Construction checks board/recipe identity and acceptance but never
-        launches Vivado. ``clk_freq`` still uses the HLS target, not the physical readback.
+        Result of ``board.resolve_clock()``. If a request is also supplied, it must match.
+        Construction checks board/recipe identity and acceptance but never launches Vivado.
+        ``clk_freq`` uses the requested HLS target, not the physical readback.
     platforms_root : Path | str | None
         The build's **primary** platform library — the write target, and the first root searched.
         Defaults to ``calib/platforms`` (a project-local library).  When a selected platform is not
@@ -112,48 +112,47 @@ class BuildConfig:
     platforms_root: Path | str | None = None
     allow_platform_mismatch: bool = False
     board: Board | None = None
-    clock_profile: str | None = None
+    clock_request: ClockRequest | None = None
     resolved_clock: ClockResolution | None = None
 
     def __post_init__(self) -> None:
         self.root_dir = Path.cwd() if self.root_dir is None else Path(self.root_dir)
         self.platforms_root = (
             Path("calib/platforms") if self.platforms_root is None else Path(self.platforms_root))
-        if self.board is None and (self.clock_profile is not None or self.resolved_clock is not None):
-            raise ValueError("clock_profile/resolved_clock requires a board")
-        if self.clock_profile is not None and self.resolved_clock is not None:
-            raise ValueError("clock_profile and resolved_clock are mutually exclusive")
+        if self.board is None and (self.clock_request is not None or self.resolved_clock is not None):
+            raise ValueError("clock_request/resolved_clock requires a board")
         if self.board is not None:
-            if self.clock_profile is None and self.resolved_clock is None:
-                raise ValueError("a board build requires clock_profile or resolved_clock")
+            if self.clock_request is None and self.resolved_clock is None:
+                raise ValueError("a board build requires clock_request or resolved_clock")
             if self.resolved_clock is not None:
                 if not isinstance(self.resolved_clock, ClockResolution):
                     raise TypeError("resolved_clock must be a ClockResolution")
                 self.resolved_clock.require_compatible(self.board)
-                profile = self.resolved_clock.profile
-                clock_name = self.resolved_clock.request.source
+                request = self.resolved_clock.request
+                if self.clock_request is not None and self.clock_request != request:
+                    raise ValueError("clock_request differs from resolved_clock request")
             else:
-                profile = self.board.clock(self.clock_profile)
-                clock_name = self.clock_profile
-            if profile.hls_target_hz is None:
-                raise ValueError(
-                    f"clock profile {clock_name!r} on board {self.board.name!r} "
-                    "is a physical reference and has no HLS target"
-                )
+                request = self.clock_request
+            if not isinstance(request, ClockRequest):
+                raise TypeError("clock_request must be a ClockRequest")
+            self.board.clock_source(request.source)
+            clock_name = request.source
+            if request.hls_target_hz is None:
+                raise ValueError("clock request has no HLS target")
             if self.part is not None and self.part != self.board.part:
                 raise ValueError(
                     f"explicit part {self.part!r} does not match board {self.board.name!r} "
                     f"part {self.board.part!r}"
                 )
             if self.clk_freq is not None and not math.isclose(
-                self.clk_freq, profile.hls_target_hz, rel_tol=1e-12, abs_tol=0.0
+                self.clk_freq, request.hls_target_hz, rel_tol=1e-12, abs_tol=0.0
             ):
                 raise ValueError(
-                    f"explicit clk_freq {self.clk_freq!r} does not match clock profile "
-                    f"{clock_name!r} HLS target {profile.hls_target_hz!r}"
+                    f"explicit clk_freq {self.clk_freq!r} does not match clock request "
+                    f"{clock_name!r} HLS target {request.hls_target_hz!r}"
                 )
             self.part = self.board.part
-            self.clk_freq = profile.hls_target_hz
+            self.clk_freq = request.hls_target_hz
         #: The resolved :class:`~waveflow.calib.platform.Platform` (created-or-confirmed), or ``None``
         #: when no ``platform`` was selected.
         self.platform_info = None
@@ -169,7 +168,7 @@ class BuildConfig:
                     raise
                 raise PlatformMismatchError(
                     f"calibration platform {self.platform!r} does not match board "
-                    f"{self.board.name!r}, clock profile {clock_name!r} "
+                    f"{self.board.name!r}, clock source {clock_name!r} "
                     f"({self.part}, HLS target {self.clk_freq:g} Hz). "
                     "Select a matching calibration platform; allow_platform_mismatch "
                     "cannot override a board target."

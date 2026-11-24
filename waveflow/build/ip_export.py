@@ -72,20 +72,22 @@ def _board_target(config: BuildConfig) -> dict:
     board = config.board
     if board is None:
         raise ValueError("board-targeted synthesis/export requires a Board")
-    if config.resolved_clock is not None:
-        if config.clock_profile is not None:
-            raise ValueError("clock_profile and resolved_clock are mutually exclusive")
-        config.resolved_clock.require_compatible(board)
-        profile = config.resolved_clock.profile
-        clock = {
-            "kind": "resolved", "request": asdict(config.resolved_clock.request),
-            "board_fingerprint": config.resolved_clock.board_fingerprint,
-            "generator_parameters": dict(config.resolved_clock.generator_parameters),
-            "validation_level": config.resolved_clock.validation_level,
-        }
-    else:
-        profile = board.clock(config.clock_profile)
-        clock = {"kind": "declared", "name": config.clock_profile}
+    if config.resolved_clock is None:
+        raise ValueError("board clock request is unresolved; resolve it before packaging hardware")
+    config.resolved_clock.require_compatible(board)
+    if (config.clock_request is not None
+            and config.clock_request != config.resolved_clock.request):
+        raise ValueError("clock_request differs from resolved_clock request")
+    profile = config.resolved_clock.profile
+    source = board.clock_source(config.resolved_clock.request.source)
+    clock = {
+        "kind": "resolved", "request": asdict(config.resolved_clock.request),
+        "reference_clock": source.reference_clock,
+        "reference_hz": board.reference_clock(source.reference_clock).frequency_hz,
+        "board_fingerprint": config.resolved_clock.board_fingerprint,
+        "generator_parameters": dict(config.resolved_clock.generator_parameters),
+        "validation_level": config.resolved_clock.validation_level,
+    }
     if (config.part != board.part or profile.hls_target_hz is None
             or config.clk_freq != profile.hls_target_hz):
         raise ValueError("BuildConfig no longer matches its board/HLS clock target")
@@ -216,6 +218,13 @@ def synthesize_for_board(
     immutable input snapshot, not live source paths. Changed source inputs need
     a new synthesis receipt. It does not alter any example's synthesis DAG.
     """
+    parent = Path(work_dir) if work_dir is not None else config.root_dir / "board_build" / "synthesis"
+    if config.board is not None and config.resolved_clock is None:
+        if config.clock_request is None:
+            raise ValueError("board synthesis requires an application clock request")
+        config.resolved_clock = config.board.resolve_clock(
+            config.clock_request, work_dir=parent.parent / "clocks",
+        )
     target = _board_target(config)
     _identifier(top, "top")
     mapped = {_relative(name): Path(path).resolve() for name, path in inputs.items()}
@@ -225,7 +234,6 @@ def synthesize_for_board(
         raise ValueError("every source must be present in the input snapshot")
     original_hashes = {name: _sha(path) for name, path in mapped.items()}
     _vitis_version(target["tool_version"])
-    parent = Path(work_dir) if work_dir is not None else config.root_dir / "board_build" / "synthesis"
     run = _new_run(parent, "synth-")
     for name, path in mapped.items():
         dest = run / "inputs" / name

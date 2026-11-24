@@ -33,6 +33,36 @@ def successful(results, target):
         n: r.traceback for n, r in results.items() if not r.success}
 
 
+@pytest.mark.parametrize("module_name", ["examples.regmap.simp_fun_board",
+                                        "examples.stream_inband.poly_board"])
+def test_application_clock_arguments_are_requests_not_board_defaults(tmp_path, monkeypatch, module_name):
+    import argparse
+    import importlib
+    from waveflow.build.build import BuildConfig
+    module = importlib.import_module(module_name)
+    captured = {}
+    def capture(factory, **kwargs):
+        captured.update(kwargs)
+    monkeypatch.setattr(module, "run_dag_cli", capture)
+    module.main()
+    parser = argparse.ArgumentParser()
+    for flags, options in captured["extra_args"]:
+        parser.add_argument(*flags, **options)
+    args = parser.parse_args(["--clock-hz", "125e6", "--hls-clock-hz", "150e6",
+                              "--clock-tolerance-ppm", "25"])
+    config = BuildConfig(root_dir=tmp_path, params=captured["params_from_args"](args),
+                         **captured["config_from_args"](args))
+    assert config.clock_request.requested_hz == 125e6
+    assert config.clock_request.hls_target_hz == config.params["clk_freq"] == 150e6
+    assert config.clock_request.tolerance_ppm == 25
+    assert config.resolved_clock is None
+    assert "ps_control" not in config.board.reference_clocks
+    helper_config = module.board_config(tmp_path, clock_hz=125e6, hls_clock_hz=150e6,
+                                       tolerance_ppm=25)
+    assert helper_config.clock_request == config.clock_request
+    assert helper_config.params == config.params
+
+
 def test_s1_host_uses_current_model_and_canonical_cases(tmp_path):
     assert simp_host.load_vectors() == {"default": DEFAULT_VECTOR, "cases": DEFAULT_CASES}
     result = simp_host.run(cases=DEFAULT_CASES * 2)

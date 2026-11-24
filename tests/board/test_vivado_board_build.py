@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from waveflow.board import Board
+from waveflow.board import Board, ClockRequest
 from waveflow.build.build import BuildConfig, BuildDag, SourceStep
 from waveflow.build.board_steps import (
     ExportIpStep, HlsControlSpecStep, HostDriverGenStep, BdGenStep,
@@ -31,7 +31,7 @@ def real_tools_opt_in(request):
 def real_bd(tmp_path_factory):
     # These explicitly selected acceptance tests fail on missing tools, never silently skip.
     root = tmp_path_factory.mktemp("s0d_real")
-    config = BuildConfig(root_dir=root, board=Board.rfsoc4x2(), clock_profile="ps_control",
+    config = BuildConfig(root_dir=root, board=Board.rfsoc4x2(), clock_request=ClockRequest("ps_pl0", 100e6, 100e6),
                          vitis_version="2025.1")
     receipt = synthesize_for_board(config, top="scalar_probe",
         inputs={"scalar_probe.cpp": FIXTURES / "scalar_probe.cpp"}, sources=("scalar_probe.cpp",))
