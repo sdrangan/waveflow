@@ -3,14 +3,16 @@ title: Installing the MCP Server
 parent: AI Tooling
 nav_order: 1
 has_children: false
-summary: "Setting up the Waveflow MCP server: which assistants are supported (VS Code chat with any model it offers, recommended; or Claude Code), why the server needs a clone of the Waveflow repository with an editable install rather than a plain pip install, and how to connect each assistant and check that the connection works."
+summary: "Setting up the Waveflow MCP server: which assistants are supported (VS Code chat with any model it offers, recommended; or Claude Code), why the server needs a clone of the Waveflow repository with an editable install rather than a plain pip install, how `waveflow init` sets a project up for every assistant (MCP server config, AGENTS.md, skills), what a claude.ai/code cloud session gets, and how to check that the connection works."
 ---
 
 # Installing the MCP Server
 
-Setting up has two parts. First, install Waveflow so the server can find the
-guide and the examples. Then, connect your assistant to the server. The first
-part is the same for every assistant.
+Setting up has two parts. First, [install Waveflow](#install-waveflow) so the
+server can find the guide and the examples. Then, run
+[`waveflow init`](#set-up-your-project-waveflow-init) in your project folder, which
+connects every assistant to the server and gives it the Waveflow instructions
+and skills.
 
 > The MCP server is experimental; see the [AI Tooling](./index.md) overview.
 
@@ -96,66 +98,104 @@ found, the environment is not active, or it was installed before the command
 existed. Re-run `pip install -e ".[dev]"`; do the same after any update that
 adds new commands.
 
-## Connect VS Code (recommended)
+## Set up your project: `waveflow init`
 
-1. **Activate** the virtual environment, then go to the folder you will work
-   in, which is your own project folder:
+The folders end up like this:
 
-   ```bash
-   cd /path/to/my_project
-   waveflow_mcp_setup --workspace .
-   ```
-
-   This writes `.vscode/mcp.json`, which tells VS Code how to start the server
-   with the interpreter you just ran:
-
-   ```json
-   {
-     "servers": {
-       "waveflow": {
-         "type": "stdio",
-         "command": "/path/to/waveflow-venv/bin/python",
-         "args": ["-m", "waveflow.mcp.server"]
-       }
-     }
-   }
-   ```
-
-   If the file already exists, add `--force` to replace it. Run the command
-   again whenever you move or recreate the virtual environment.
-
-2. **Open** the folder in VS Code (`code .`), open the chat view, and switch
-   it to **Agent** mode. Tools are only offered in Agent mode.
-
-3. **Confirm** the server is running. Run `MCP: List Servers` from the Command
-   Palette: `waveflow` should be listed and running. You can also check the
-   chat's tools button, where the `waveflow_*` tools should appear. From
-   `MCP: List Servers` you can also restart the server, for example after
-   updating Waveflow.
-
-**Working on a remote server** (for example over Remote-SSH): install Waveflow
-and run `waveflow_mcp_setup` **on the remote machine**, in the remote project
-folder. The server then runs there, next to the clone and the Vitis tools.
-
-## Connect Claude Code
-
-Register the server once, giving the full path to the virtual environment's
-interpreter:
-
-```bash
-# Linux / macOS
-claude mcp add waveflow -- /path/to/waveflow-venv/bin/python -m waveflow.mcp.server
-
-# Windows
-claude mcp add waveflow -- C:\path\to\waveflow-venv\Scripts\python.exe -m waveflow.mcp.server
+```text
+waveflow/           the clone (git clone); the guide and the examples live here
+waveflow-venv/      the virtual environment; pip install -e points it at the clone
+my_project/         your project: its own folder, its own git repository
+  AGENTS.md         written by waveflow init (a Waveflow section; yours is kept)
+  CLAUDE.md
+  .claude/skills/
+  .agents/skills/
+  .mcp.json         on this machine only (gitignored)
+  .vscode/mcp.json  on this machine only (gitignored)
 ```
 
-By default this registers the server for the **current folder** only, so run
-it from your project folder. To make it available in every folder, add
-`--scope user` after `add`.
+The virtual environment can also live inside `my_project/` (then add it to
+`.gitignore`). Nothing from Waveflow is copied into your project except the
+skills and the Waveflow section of `AGENTS.md`.
 
-**Confirm** it with `claude mcp list`, or with `/mcp` inside a Claude Code
-session, where `waveflow` should be listed as connected.
+**Activate** the virtual environment, go to your own project folder, and run:
+
+```bash
+cd /path/to/my_project
+waveflow init
+```
+
+This sets the folder up for every assistant at once:
+
+| file | what it is | commit it? |
+| --- | --- | --- |
+| `.mcp.json` | registers the MCP server for Claude Code | no (`init` adds it to `.gitignore`) |
+| `.vscode/mcp.json` | registers the MCP server for VS Code | no (likewise) |
+| `.claude/skills/`, `.agents/skills/` | the [agent skills](./skills.md) | yes |
+| `AGENTS.md` | a short Waveflow section (five lines) for any agent: the project uses Waveflow, load the `waveflow-start` skill, and how to install Waveflow when it is missing | yes |
+| `CLAUDE.md` | imports `AGENTS.md` (Claude Code reads `CLAUDE.md`) | yes |
+
+The two server files name the interpreter you ran `init` with, which is why
+they stay on your machine:
+
+```json
+{
+  "mcpServers": {
+    "waveflow": {
+      "type": "stdio",
+      "command": "/path/to/waveflow-venv/bin/python",
+      "args": ["-m", "waveflow.mcp.server"]
+    }
+  }
+}
+```
+
+The `AGENTS.md` section is kept short on purpose: a project's `AGENTS.md`
+usually holds its own instructions, and every line there is read in every
+session. The detail (how to look Waveflow up, what to do first) is in the
+`waveflow-start` skill, which an agent loads only when a task involves Waveflow.
+
+`init` never replaces your own content. An existing `AGENTS.md` or `CLAUDE.md`
+gets the Waveflow part appended, an existing `.mcp.json` gets a `waveflow`
+entry beside its other servers, and an installed skill is left alone. Run it
+again after upgrading Waveflow (with `--force-skills` to refresh the skills) or
+after moving the virtual environment.
+
+**Then open the project in your assistant:**
+
+- **VS Code**: open the folder (`code .`), open the chat view, and switch it
+  to **Agent** mode; tools are only offered there. Run `MCP: List Servers`
+  from the Command Palette: `waveflow` should be listed and running. From
+  there you can also restart the server, for example after updating Waveflow.
+- **Claude Code**: start `claude` in the folder. It asks once whether to use
+  the project's MCP servers: approve `waveflow`. `/mcp` should list it as
+  connected.
+
+**Working on a remote server** (for example over Remote-SSH): install Waveflow
+and run `waveflow init` **on the remote machine**, in the remote project
+folder. The server then runs there, next to the clone and the Vitis tools.
+
+**Registering the server by hand** (for every folder, say) still works:
+`claude mcp add --scope user waveflow -- <venv python> -m waveflow.mcp.server`.
+Do not register it both ways, or Claude Code starts two copies.
+
+## Cloud sessions (claude.ai/code)
+
+A cloud session works from a clone of your project's repository, on a machine
+that has neither your virtual environment nor the MCP server. The committed
+files still reach it: the skills, and `AGENTS.md`, which tells the agent to
+clone Waveflow beside the project and install it editable when `waveflow` is
+missing. From there the agent uses the same lookups through the shell
+(`waveflow kb search`, `waveflow kb doc`, ...), which return what the MCP
+tools would.
+
+This path is **not verified yet**: see
+[Evaluation: onboarding](../../evaluation/agent_skills/onboarding.md) for what has been tested and
+how to test the rest.
+
+A session opened on the **Waveflow repository itself** needs none of this: the
+guide and the examples are in the clone, and the repository commits its own
+`AGENTS.md` and skills.
 
 ## Check that it works
 
@@ -174,5 +214,5 @@ Recheck the connection steps for your assistant.
 | --- | --- |
 | A search tool fails with **"no Waveflow checkout found"** | Waveflow was installed without a clone. Use the editable install above, or set `WAVEFLOW_KB_ROOT`. |
 | **`waveflow: command not found`** | The virtual environment is not active, or it predates the command. Activate it; re-run `pip install -e ".[dev]"`. |
-| The server does not appear in VS Code | `.vscode/mcp.json` is in the wrong folder (it must be in the folder you opened), or it names an interpreter that has moved. Re-run `waveflow_mcp_setup --workspace . --force`. |
+| The server does not appear in VS Code or Claude Code | `.vscode/mcp.json` / `.mcp.json` is in the wrong folder (it must be in the folder you opened), or it names an interpreter that has moved. Re-run `waveflow init` there with the right environment active. |
 | The tools are listed but the assistant never uses them | Make sure VS Code chat is in Agent mode. Otherwise, name them in your request ("use the Waveflow tools to …"). |

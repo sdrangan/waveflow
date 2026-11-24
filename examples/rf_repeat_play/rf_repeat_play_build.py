@@ -70,9 +70,12 @@ WORD_BW_SUPPORTED = [SYNTH_W, TAG_BW]
 
 #: Solution-level tcl this design needs.  **The reset trap is closed here and only here**: an
 #: ``hls::task`` that writes before it reads advances its state during reset, and both task bodies
-#: carry ``#pragma HLS reset`` on every state register that Vitis 2025.1 ignored -- csynth reported
-#: "Register '<x>' is power-on initialization" for all of them.  This setting takes them to zero, and
-#: costs nothing measurable (the payload loop still schedules at II=1, the player still at II=1).
+#: carry ``#pragma HLS reset`` on their named statics.  This setting resets every state register,
+#: pipeline registers included, and costs nothing measurable (the payload loop still schedules at
+#: II=1, the player still at II=1).  An earlier note said Vitis 2025.1 ignored the pragmas, from
+#: csynth's "Register '<x>' is power-on initialization" warning; Vitis prints that whether or not a
+#: pragma took, and the pragmas do reset the named statics (checked 2026-11-19).  Whether they alone
+#: would close the trap here was never measured.
 SOLUTION_CONFIG = ("config_rtl -reset state",)
 
 

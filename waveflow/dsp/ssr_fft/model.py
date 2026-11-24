@@ -28,6 +28,15 @@ the bits are the unscaled transform's and only the binary point moves (``out_fmt
 ``log2 L`` fewer integer bits than :attr:`Geometry.raw_out_fmt`) -- exact and free.
 ``waveflow.vitis_l1.fft.ifft_scale`` maps these bits onto the library's.
 
+**Direction per frame** (``Geometry(runtime=True)``).  The inverse tables are the forward ones
+conjugated, exactly (every stored twiddle and radix-4 constant; checked for every ``L`` and twiddle
+width in the tests).  So a stage computes the inverse from the forward tables with two moves and no
+other arithmetic: the butterfly's outputs 1 and 3 swap (``W_4^{-qj} = W_4^{(4-q)j}``, the same
+products), and the rotation's twiddle has its imaginary part negated (``-t`` is exact in the twiddle
+format).  Every product and every truncation is then the inverse build's, so a runtime frame is the
+fixed build's frame bit for bit -- which conjugating the frame at both ends would not be: truncation
+does not commute with negation, and ``-(-2^(W-1))`` overflows.
+
 Scope: ``R = 4``, ``L = 4^S`` with ``S >= 2``, ``SSR_FFT_NO_SCALING`` -- what ``fft_general`` has
 measured, in both directions.
 """
@@ -53,6 +62,9 @@ class Geometry:
 
     ``in_w, in_i`` is the input ``ap_fixed`` format; ``tw_w, tw_i`` the twiddle table's;
     ``inverse`` selects the inverse transform (``1/L`` included, see the module docstring).
+    ``runtime`` is the build whose direction is chosen per frame (``SsrFft(direction="runtime")``):
+    its tables, formats and edges are the forward build's, and :meth:`direction` gives the geometry
+    a frame is computed with.
     """
     L: int
     in_w: int = 16
@@ -62,14 +74,30 @@ class Geometry:
     mode: str = NO_SCALING
     R: int = R
     inverse: bool = False
+    runtime: bool = False
 
     def __post_init__(self) -> None:
+        if self.runtime and self.inverse:
+            raise ValueError("Geometry(runtime=True) has no fixed direction: leave inverse=False.")
         if self.R != R:
             raise NotImplementedError(f"R={self.R}: only R={R} is modelled.")
         if self.mode != NO_SCALING:
             raise NotImplementedError(f"{self.mode}: only {NO_SCALING} is modelled (fft_general).")
         if self.S < 2:
             raise ValueError(f"L={self.L}: need L = {R}^S with S >= 2.")
+
+    def direction(self, inverse: bool) -> "Geometry":
+        """The fixed-direction geometry one frame is computed with: the model of a runtime build's
+        frame is the fixed build's, bit for bit (see :func:`stage`)."""
+        return Geometry(self.L, self.in_w, self.in_i, self.tw_w, self.tw_i, self.mode, self.R,
+                        inverse=bool(inverse))
+
+    @property
+    def inv_out_fmt(self) -> Format:
+        """How an inverse frame's output bits read: the inverse build's :attr:`out_fmt`.  A runtime
+        build's output edge carries the forward format; an inverse frame's words hold the same bits
+        as the inverse build's, so reading them through this format is the ``1/L``."""
+        return self.direction(True).out_fmt
 
     # -- shape ----------------------------------------------------------------------------
     @cached_property

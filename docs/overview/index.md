@@ -26,7 +26,8 @@ Waveflow and an honest status:
 - **[SALSA](./salsa.md)** — the reconfigurable wireless system Waveflow was built for.
 - **[Project status](./status.md)** — what works today, what's next, and the first integrated milestone.
 
-New to the project? The guide's [Flow Overview](../guide/systems/index.md) walks one design — the
+New to the project? The guide's [Waveflow Architecture](../guide/systems/index.md) says what is built,
+and its [Flow Overview](../guide/systems/flow.md) walks one design — the
 [free-running polynomial](../examples/stream_kernel/index.md) — through the whole flow, a page per
 step. For the data types alone, the [basic vectorization example](../examples/basic_vec/index.md) is one
 multiply-accumulate, bit-exact from Python to Vitis.

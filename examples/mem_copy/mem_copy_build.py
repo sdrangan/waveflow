@@ -75,7 +75,7 @@ class PySimStep(BuildStep):
 
     The **first checkpoint**: no toolchain, seconds not minutes, and the place most functional
     mistakes surface before any C++ exists.  Runs the canonical 16-job scenario (``XSI_JOBS`` — the
-    same one the RTL gate drives), so the timing it records is directly comparable to the 2908-cycle
+    same one the RTL gate drives), so the timing it records is directly comparable to the 3000-cycle
     RTL number.  Fails the build on any mismatch, so "it ran" is never mistaken for "it is correct".
     """
 
@@ -117,7 +117,7 @@ class PySimStep(BuildStep):
             "end_cycles": round(cycles),
             "done_tokens": ndone,
             "clk_freq": float(tb.clk.freq),
-            "note": "end-of-simulation, not time-to-last-completion; cf. the RTL 2908 (see pysim.md)",
+            "note": "end-of-simulation, not time-to-last-completion; cf. the RTL 3000 (see pysim.md)",
         }, indent=2), encoding="utf-8")
         print(f"[pysim] {len(tb._jobs)} jobs, all bit-exact, {ndone} done tokens, "
               f"end={round(cycles)} cycles")

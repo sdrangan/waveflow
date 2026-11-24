@@ -35,8 +35,9 @@ particular:
 
 The kernel boundary and everything under `include/` are **generated** and
 must never be hand-edited.  If the Waveflow machinery cannot express
-something you need, **stop and report it**.  Do not work around it by
-hand-writing a generated file.
+something you need, **stop and report it**, and propose the extension to
+Waveflow that would express it.  Do not work around it by hand-writing a
+generated file.
 
 **Do not hand-pack words.** Every header, footer and sample burst is
 serialized through its Waveflow schema or through the Waveflow array

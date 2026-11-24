@@ -16,6 +16,9 @@ starting a server.
     waveflow process stream_inband
     waveflow new-accel gain_clip --frame stream_inband
     waveflow blind-test --prompt examples/mcp_test/tiny_test.md
+    waveflow skills list
+    waveflow skills install              # into ./.claude/skills and ./.agents/skills
+    waveflow init                        # set this project up for AI agents (skills, AGENTS.md, MCP)
 
 Output is JSON by default, so the CLI and the MCP tools return the same thing;
 ``--text`` prints the human-readable rendering instead.
@@ -131,6 +134,20 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
         )
         out.append(f"  the agent's work: {data['folder']}")
         out.append(f"  read first:       {data['summary']}")
+    elif cmd == "list" and "skills" in data:
+        for s in data["skills"]:
+            out.append(f"{s['name']}\n    {s['description']}")
+    elif cmd == "install":
+        out += [f"installed {p}" for p in data["installed"]]
+        if data["note"]:
+            out.append(data["note"])
+    elif cmd == "init":
+        out.append(f"Set up {data['directory']} for AI coding agents")
+        out += [f"  {state:<10} {path}" for path, state in data["files"].items()]
+        if data["python"]:
+            out.append(f"  MCP server runs with {data['python']}")
+        out += [f"note: {n}" for n in data["notes"]]
+        out.append(f"next: {data['next']}")
     return "\n".join(out)
 
 
@@ -225,7 +242,42 @@ def build_parser() -> argparse.ArgumentParser:
     blind.add_argument("--no-waveflow", action="store_true",
                        help="the baseline arm: no MCP server, no Waveflow tools, the operator's "
                        "own Python, and a first message that says to use Vitis directly")
+    blind.add_argument("--skills", action="append", default=[],
+                       help="a skill folder (holding SKILL.md) or a folder of them, copied into "
+                       "the trial folder's .claude/skills/ with the Skill tool allowed; repeatable "
+                       "(e.g. waveflow/skills)")
+    blind.add_argument("--files", action="append", default=[],
+                       help="a file the agent is given, copied into the trial folder beside the "
+                       "spec (e.g. schemas it must use); repeatable")
+    blind.add_argument("--init", action="store_true",
+                       help="run `waveflow init` on the trial folder first (skills, AGENTS.md, "
+                       "CLAUDE.md), as a user would on their project")
     blind.add_argument("--text", action="store_true")
+
+    skills = sub.add_parser("skills", help="the agent skills shipped with Waveflow")
+    skillsub = skills.add_subparsers(dest="cmd", required=True)
+    p = skillsub.add_parser("list", help="every shipped skill and its description")
+    p.add_argument("--text", action="store_true")
+    p = skillsub.add_parser("install", help="copy the skills into a project, for each agent")
+    p.add_argument("--text", action="store_true")
+    p.add_argument("names", nargs="*", help="skills to install (default: all)")
+    p.add_argument("--dir", dest="directory", default=".", help="the project (default: .)")
+    p.add_argument("--for", dest="targets", default="claude,agents",
+                   help="comma-separated: claude (.claude/skills), agents (.agents/skills); "
+                   "default: both")
+    p.add_argument("--force", action="store_true", help="replace skills already installed")
+
+    init = sub.add_parser(
+        "init",
+        help="set a project up for AI coding agents: skills, AGENTS.md / CLAUDE.md, MCP server",
+    )
+    init.add_argument("--dir", dest="directory", default=".", help="the project (default: .)")
+    init.add_argument("--python", help="interpreter for the MCP server (default: this one)")
+    init.add_argument("--no-mcp", action="store_true",
+                      help="skip .mcp.json and .vscode/mcp.json")
+    init.add_argument("--force-skills", action="store_true",
+                      help="replace skills already installed (after upgrading Waveflow)")
+    init.add_argument("--text", action="store_true")
 
     return parser
 
@@ -256,7 +308,22 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             silent=args.silent,
             resume=args.resume,
             no_waveflow=args.no_waveflow,
+            skills=args.skills,
+            files=args.files,
+            init=args.init,
         )
+    if args.group == "init":
+        from waveflow.mcp.init_project import init_project
+
+        return init_project(args.directory, python=args.python, mcp=not args.no_mcp,
+                            force_skills=args.force_skills)
+    if args.group == "skills":
+        from waveflow.mcp.skills import install_skills, list_skills
+
+        if args.cmd == "list":
+            return list_skills()
+        return install_skills(args.directory, names=args.names or None, force=args.force,
+                              targets=[t.strip() for t in args.targets.split(",") if t.strip()])
 
     if args.root:
         os.environ["WAVEFLOW_KB_ROOT"] = args.root

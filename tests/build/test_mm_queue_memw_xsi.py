@@ -180,4 +180,8 @@ def test_memw_reaches_queue_cycles(memw_run: str):
 #: 13).  The adaptor is not the gap: test_mm_queue.py::test_pysim_timing_tracks_the_rtl_gate holds it
 #: to within 2 cycles of RTL.  Closing this one is MemWStream's calibration (its calib_dir), not this
 #: plan's.
-EXPECTED_SINK: dict[str, int] = {"first": 32, "p1": 39, "p2": 117, "p3": 149}
+#:
+#: Re-recorded 2026-11-19 (Vitis/Vivado 2025.1) when the xfer_msg cookie left MWCmd: was
+#: 32 / 39 / 117 / 149.  A command is now one 64-bit word instead of six, and each of the three costs 7
+#: cycles less, so the packets land 7, 14 and 21 cycles earlier.
+EXPECTED_SINK: dict[str, int] = {"first": 25, "p1": 32, "p2": 103, "p3": 128}

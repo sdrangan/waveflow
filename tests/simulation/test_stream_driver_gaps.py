@@ -56,3 +56,51 @@ def test_defaults_emit_nothing():
     from waveflow.hw.hw_module import discover_dyn_params
     dyn = discover_dyn_params(StreamDriver(name="d", sim=Simulation(), in_bundle="v"))
     assert "burst_gap_cycles" not in dyn and "burst_gaps" not in dyn
+
+
+def test_a_start_gap_delays_the_first_burst(tmp_path):
+    """start_gap_cycles: idle cycles before the FIRST burst, so an input's first frame can come late."""
+    assert _run(tmp_path, start_gap_cycles=6) == [10, 14, 18, 22]
+    assert _run(tmp_path, start_gap_cycles=6, burst_gaps=[10]) == [10, 24, 28, 32]
+    d = StreamDriver(name="d", sim=Simulation(), start_gap_cycles=7)
+    assert d.gap_before(0) == 7
+
+
+def test_an_unset_start_gap_emits_nothing():
+    from waveflow.hw.hw_module import discover_dyn_params
+    dyn = discover_dyn_params(StreamDriver(name="d", sim=Simulation(), in_bundle="v"))
+    assert "start_gap_cycles" not in dyn
+    dyn = discover_dyn_params(StreamDriver(name="d", sim=Simulation(), in_bundle="v", start_gap_cycles=9))
+    assert "start_gap_cycles" in dyn
+
+
+def test_a_workloads_gaps_reach_the_harness_driver():
+    """A module's workload says when its bursts arrive (StreamBurst.gap_before); the harness sets the
+    driver's start gap and per-burst gaps from it, so the build's own scenario plays them."""
+    import examples.ring_stub.ring_stub as rs
+    from waveflow.hw.harness import harness
+    from waveflow.utils.burst_io import StreamBurst
+
+    bursts = [StreamBurst(b.words, b.tlast, gap_before=g)
+              for b, g in zip(rs.stimulus(rs.jobs("test")), [300, 0, 50, 0] + [0] * 100)]
+    late = harness(rs.RingStub, workload={"s_in": bursts})
+    drv = late.stand_ins["s_in"]
+    assert drv.start_gap_cycles == 300 and drv.burst_gaps[:3] == [0, 50, 0]
+    late.run()
+    on_time = harness(rs.RingStub, workload={"s_in": rs.stimulus(rs.jobs("test"))})
+    on_time.run()
+    assert len(late.stand_ins["m_status"].words) == len(on_time.stand_ins["m_status"].words)
+    assert late.sim.env.now > on_time.sim.env.now          # the same answers, later
+
+
+def test_the_xsi_twin_declares_every_gap_member():
+    """The harness emits each set DynParam as ``<driver>.<name> = ...;`` on the XSI AxisMaster, so the
+    C++ class must declare a member of that name -- checked here, since this test needs no compiler."""
+    from pathlib import Path
+
+    import waveflow.build as build
+
+    src = (Path(build.__file__).parent / "xsi" / "xsi_bfm.h").read_text(encoding="utf-8")
+    body = src[src.index("class AxisMaster"):src.index("class AxisSlave")]
+    for member in ("int start_gap_cycles", "int burst_gap_cycles", "std::vector<int> burst_gaps"):
+        assert member in body, member

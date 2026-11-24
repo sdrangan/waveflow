@@ -3,7 +3,7 @@ title: Guide
 parent: Waveflow
 nav_order: 2
 has_children: true
-summary: "How the guide is organized: the flow first. The Flow Overview walks one design through the whole flow, a page per step -- designing the DUT (with the stream patterns and the command-response protocol), simulating it in Python, simulating it at RTL, verifying it, calibrating its timing and resources, exploring the design space -- and the sections after it are the reference those pages link into, from the outside in (modules, interfaces, schemas, simulation, code generation, hooks, build), then the libraries, timing and resources, and the legacy flows last."
+summary: "How the guide is organized: the flow first. Four concept pages say what is built (Waveflow Architecture, Kernels, Devices and the DUT, Command-response; terms in the Glossary), then the Flow Overview walks one design through the whole flow, a page per step -- designing the DUT (with the stream patterns and the command-response protocol), simulating it in Python, simulating it at RTL, verifying it, calibrating its timing and resources, exploring the design space -- and the sections after it are the reference those pages link into, from the outside in (modules, interfaces, schemas, simulation, code generation, hooks, build), then the libraries, timing and resources, and the legacy flows last."
 ---
 # Guide
 
@@ -11,12 +11,16 @@ Welcome to Waveflow.  This folder will have guides to use the Waveflow functiona
 
 ## How this guide is organized
 
-**Waveflow models concurrent systems**, and the guide starts with the flow that takes one from an idea
-to verified, measured hardware. The [Flow Overview](./systems/) walks it a page per step, on one running
-example: [designing the DUT](./systems/dut.md) -- its modules, interfaces and messages, the
-[stream patterns](./systems/streams.md) they talk by and the [command-response](./systems/command_response.md)
-protocol most designs speak -- then [simulating it in Python](./systems/pysim.md) beside anything else the
-question needs, [simulating it at RTL](./systems/rtl.md), [verifying](./systems/verification.md) it,
+**Waveflow models concurrent systems**, and the guide starts with what is built and the flow that
+takes one from an idea to verified, measured hardware. What is built comes first, on four concept
+pages: [Waveflow Architecture](./systems/index.md) (the three levels of simulation and the layer around
+the DUT), [Kernels](./systems/kernels.md), [Devices and the DUT](./systems/devices.md) and
+[Command-response](./systems/command_response.md), with every term in the
+[Glossary](./systems/glossary.md). Then the [Flow Overview](./systems/flow.md) walks the flow a page per
+step, on one running example: [designing the DUT](./systems/dut.md) -- its kernels, what each talks to
+and its messages, the [stream patterns](./systems/streams.md) they talk by -- then
+[simulating it in Python](./systems/pysim.md) beside anything else the question needs,
+[simulating it at RTL](./systems/rtl.md), [verifying](./systems/verification.md) it,
 [calibrating](./systems/calibration.md) its timing and resources, and [exploring](./systems/dse.md) the
 design space. Each step is done module by module: any module can be the DUT of its own harness.
 

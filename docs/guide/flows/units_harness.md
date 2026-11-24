@@ -103,6 +103,12 @@ def workload(self, kind: str = "test") -> dict:
     return {"s_cmd": cmds, "m_in": image}
 ```
 
+**When the bursts arrive** is part of the scenario too. `StreamBurst(words, gap_before=n)` makes the
+input's driver wait `n` idle cycles before that burst -- the first included, so one client's first job
+can come late while another's are already in flight. The harness turns a port's gaps into its driver's
+`start_gap_cycles` and `burst_gaps`, which the pysim driver and the RTL `AxisMaster` both play, so the
+build's own scenario carries them; a workload with no gaps is generated exactly as before.
+
 A one-off scenario is passed as the dict itself: `harness(MemRStream, workload={"s_cmd": [...],
 "m_mem": image})` ([`test_harness_memory.py`](../../../tests/hw/test_harness_memory.py)). A workload
 that names a port the module has no input of is refused.
@@ -129,6 +135,6 @@ scenario that needs longer is cut short at RTL and its `compare` fails on the mi
 workload (thousands of samples at one per cycle) raises it.
 
 At RTL (Vitis/Vivado 2025.1) the harness's memory and completions match pysim word for word, and the
-last completion lands at cycle **2908** -- the number [mem_copy's system](../../examples/memcpy/rtlsim.md)
+last completion lands at cycle **3000** -- the number [mem_copy's system](../../examples/memcpy/rtlsim.md)
 gates on, since the testbench is the same: a driver, a sink and one memory behind both bundles
 ([`test_mem_copy_unit_xsi.py`](../../../tests/examples/test_mem_copy_unit_xsi.py)).

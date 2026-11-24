@@ -44,6 +44,7 @@ struct share one source.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -51,12 +52,11 @@ from typing import ClassVar
 import numpy as np
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.dataschema import DataArray, DataList, IntField, ParamSchema
+from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
-from waveflow.hw.param import Param
 from waveflow.simulation.simobj import ProcessGen
 
 # --- command field types --------------------------------------------------------------------------
@@ -68,69 +68,45 @@ from waveflow.simulation.simobj import ProcessGen
 # absorb byte-vs-word.  So the command is unit-agnostic.
 Word32 = IntField.specialize(bitwidth=32, signed=False)   # word / element coordinate or count
 
-# ``MRCmd``/``MWCmd``/``MemComplete`` are ``ParamSchema``s parametrized only by ``max_xfer_len`` (the
-# capacity of the opaque ``xfer_msg`` correlation cookie). ``cpp_repr``/``include_filename`` are fixed
-# ClassVars — NOT overridden by ``ParamSchema.specialize()``'s subclass-creation (which only replaces
-# ``elements``) — so every specialization still emits the same stable C++ struct name / header
-# filename: the hand-written task headers (``#include "m_r_cmd.h"``, ``struct MRCmd``) and
-# ``mem_stream_gen.py``'s use of the bare classes for header generation stay valid unchanged.
+# The two-stream protocol (``inband=False``): a command on ``s_cmd``, the data on its own stream, and
+# with ``emit_done`` a :class:`MemComplete` on ``m_done``.  The commands carry no correlation cookie: a
+# design that must tell completions apart frames its own descriptor with the in-band protocol below,
+# where the mem-streams relay it opaquely (``fwd_bursts``).
 
 
-class MRCmd(ParamSchema):
+class MRCmd(DataList):
     """One ``MemRStream`` command (host/sequencer -> ``s_cmd``): burst ``len`` packed words
-    starting at ``addr`` (element/word offset within the bound buffer, unit-agnostic).  ``xfer_msg``
-    is an opaque per-job correlation cookie (a fixed-capacity :class:`~waveflow.hw.dataschema.DataArray`
-    of ``max_xfer_len`` words; ``xfer_len`` carries the active count) round-tripped unmodified on the
-    ``s_done`` completion echo (:class:`MemComplete`)."""
+    starting at ``addr`` (element/word offset within the bound buffer, unit-agnostic)."""
     cpp_repr: ClassVar[str] = "MRCmd"
     include_filename: ClassVar[str] = "m_r_cmd.h"
 
-    max_xfer_len = Param(8)
     elements = {
         "addr":      {"schema": Word32, "description": "element/word offset within the bound buffer"},
         "len":       {"schema": Word32, "description": "number of packed words to read"},
-        "xfer_len":  {"schema": Word32, "description": "active length of xfer_msg (<= max_xfer_len)"},
-        "xfer_msg":  {
-            "schema": DataArray.specialize(element_type=Word32, max_shape=(max_xfer_len,)),
-            "description": "opaque per-job correlation cookie, round-tripped on completion",
-        },
     }
 
 
-class MWCmd(ParamSchema):
+class MWCmd(DataList):
     """One ``MemWStream`` command (host/sequencer -> ``s_cmd``): drain ``len`` words off ``s_in``
-    and pure-write them starting at ``addr`` (element/word offset, unit-agnostic).  ``xfer_msg``
-    mirrors :class:`MRCmd`'s correlation cookie."""
+    and pure-write them starting at ``addr`` (element/word offset, unit-agnostic)."""
     cpp_repr: ClassVar[str] = "MWCmd"
     include_filename: ClassVar[str] = "m_w_cmd.h"
 
-    max_xfer_len = Param(8)
     elements = {
         "addr":      {"schema": Word32, "description": "element/word offset within the bound buffer"},
         "len":       {"schema": Word32, "description": "number of packed words to write"},
-        "xfer_len":  {"schema": Word32, "description": "active length of xfer_msg (<= max_xfer_len)"},
-        "xfer_msg":  {
-            "schema": DataArray.specialize(element_type=Word32, max_shape=(max_xfer_len,)),
-            "description": "opaque per-job correlation cookie, round-tripped on completion",
-        },
     }
 
 
-class MemComplete(ParamSchema):
-    """The completion echo a ``MemWStream``/``MemRStream`` with ``emit_done=True`` writes on
-    ``s_done``: the words transferred (``len``) plus the command's ``xfer_msg`` cookie, echoed back
-    unmodified — so the caller can correlate the completion with the job it issued."""
+class MemComplete(DataList):
+    """The completion a two-stream ``MemWStream``/``MemRStream`` with ``emit_done=True`` writes on
+    ``m_done``, one per command: the words transferred.  The writer sends it only once the memory has
+    acknowledged the burst."""
     cpp_repr: ClassVar[str] = "MemComplete"
     include_filename: ClassVar[str] = "mem_complete.h"
 
-    max_xfer_len = Param(8)
     elements = {
         "len":       {"schema": Word32, "description": "number of words transferred"},
-        "xfer_len":  {"schema": Word32, "description": "valid length of the echoed xfer_msg payload"},
-        "xfer_msg":  {
-            "schema": DataArray.specialize(element_type=Word32, max_shape=(max_xfer_len,)),
-            "description": "the command's xfer_msg, echoed back unmodified",
-        },
     }
 
 
@@ -143,7 +119,7 @@ class MemComplete(ParamSchema):
 # (how many following bursts this stage relays).  A composite frames one stream carrying
 # ``[MemRCmd | MemWCmd | response... ]``; the reader strips ``MemRCmd`` (relay ``fwd_bursts`` bursts,
 # then append the data it read), the writer strips ``MemWCmd`` (buffer ``fwd_bursts`` bursts across the
-# write, then emit them on ``s_done``).  Neither mem-stream constructs a typed message — the ONLY
+# write, then emit them on ``m_done``).  Neither mem-stream constructs a typed message — the ONLY
 # schema-aware component is the composite's sequencer.  The relayed bursts are opaque (a whole-burst
 # read needs ``has_tlast=True``: ``StreamIFSlave.get()`` refuses a countless read on an unframed
 # stream), so one reader/writer serves any application.
@@ -166,7 +142,7 @@ class MemRCmd(DataList):
 
 class MemWCmd(DataList):
     """In-band ``MemWStream`` descriptor: buffer the next ``fwd_bursts`` opaque bursts, drain ``len``
-    data words and pure-write them at ``addr``, then emit the buffered bursts on ``s_done``.  Same shape
+    data words and pure-write them at ``addr``, then emit the buffered bursts on ``m_done``.  Same shape
     as :class:`MemRCmd` — the forwarding protocol is symmetric."""
     cpp_repr: ClassVar[str] = "MemWCmd"
     include_filename: ClassVar[str] = "mem_w_cmd.h"
@@ -177,12 +153,6 @@ class MemWCmd(DataList):
         "fwd_bursts": {"schema": Word32,
                        "description": "opaque bursts to buffer across the write, then echo on s_done"},
     }
-
-
-#: The (shared, cached) ``xfer_msg`` array schema at the default ``max_xfer_len=8`` — needed as its
-#: own :class:`~waveflow.hw.dataschema.DataSchemaStep` entry (a ``DataArray`` gen-includes its own
-#: header; ``MRCmd``/``MWCmd``/``MemComplete``'s headers only ``#include`` it, they don't emit it).
-XferMsgArr = MRCmd.elements["xfer_msg"]["schema"]
 
 
 @dataclass(frozen=True)
@@ -211,7 +181,7 @@ class KernelTask:
 
 
 #: Schema classes the gen-include step emits C++ headers for (consumed by the kernel templates).
-SCHEMA_CLASSES = [MRCmd, MWCmd, MemComplete, XferMsgArr]
+SCHEMA_CLASSES = [MRCmd, MWCmd, MemComplete]
 
 #: Word widths the generated command headers (read_stream<W>) support.
 WORD_BW_SUPPORTED = [32, 64]
@@ -276,6 +246,22 @@ def _resolve_calib_dir(calib_dir, platform_dir, component: str,
     return (lib.component_dir(qualified) if qualified else bare), True
 
 
+def _deprecated_s_done(stream: "MemRStream | MemWStream") -> StreamIFMaster:
+    """``s_done`` was the completion endpoint's name before it became ``m_done``: it *sends* the
+    :class:`MemComplete` echo, and a sending endpoint takes the ``m_`` prefix like ``m_out``.  Kept as
+    an alias so existing designs and course material keep working; ``AttributeError`` when there is no
+    completion endpoint (``emit_done=False``), as before."""
+    warnings.warn(
+        f"{type(stream).__name__}.s_done is renamed m_done (it is the sending end of the completion "
+        f"stream); use {stream.name}.m_done", DeprecationWarning, stacklevel=3)
+    try:
+        return stream.m_done
+    except AttributeError:
+        raise AttributeError(
+            f"{type(stream).__name__} {stream.name!r} has no completion endpoint: construct it with "
+            f"emit_done=True (its name is m_done; s_done is the deprecated alias)") from None
+
+
 @dataclass
 class MemRStream(FreeRunMod):
     """The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst.
@@ -291,10 +277,9 @@ class MemRStream(FreeRunMod):
 
     mem_dwidth: HwParam[int] = 64      # MEM_DW — memory / stream word width (LW = MEM_DW/32)
     mem_awidth: HwParam[int] = 32      # m_axi / command address width
-    max_xfer_len: HwParam[int] = 8     # xfer_msg capacity — bridged into MRCmd/MemComplete's Param
-    #: When ``True`` the endpoint also exposes an ``s_done`` :class:`StreamIFMaster` and emits a
-    #: :class:`MemComplete` echo (words read + the command's ``xfer_msg`` cookie) per job.  Default
-    #: ``False`` keeps the standalone Gate-1 kernel (3-arg ``mem_r_stream_task``) unchanged.
+    #: When ``True`` the endpoint also exposes an ``m_done`` :class:`StreamIFMaster` and emits a
+    #: :class:`MemComplete` (the words read) per job.  Default ``False`` keeps the standalone Gate-1
+    #: kernel (3-arg ``mem_r_stream_task``) unchanged.
     emit_done: bool = False
     #: **In-band framing** (``plans/memcopy_inband_integration.md``).  When ``True`` the command stream
     #: carries a :class:`MemRCmd`, and this component relays its ``fwd_bursts`` opaque bursts verbatim to
@@ -312,8 +297,6 @@ class MemRStream(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self._cmd_cls = MRCmd.specialize(max_xfer_len=int(self.max_xfer_len))
-        self._complete_cls = MemComplete.specialize(max_xfer_len=int(self.max_xfer_len))
         # m_mem is the sole read owner, and the TYPE says so: a stray write is an AttributeError in
         # the model and a compile error in the generated C++ (const pointer + #pragma HLS stable),
         # both derived from this one declaration rather than restated in a codegen table.
@@ -331,10 +314,10 @@ class MemRStream(FreeRunMod):
             has_tlast=bool(self.inband))
         eps = [self.m_mem, self.s_cmd, self.m_out]
         if self.emit_done:
-            self.s_done = StreamIFMaster(
-                name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
+            self.m_done = StreamIFMaster(
+                name=f"{self.name}_m_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
                 has_tlast=bool(self.inband))
-            eps.append(self.s_done)
+            eps.append(self.m_done)
         for ep in eps:
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
@@ -372,11 +355,16 @@ class MemRStream(FreeRunMod):
 
     @property
     def Cmd(self) -> type[MRCmd]:
-        return self._cmd_cls
+        return MRCmd
+
+    @property
+    def s_done(self) -> StreamIFMaster:
+        """Deprecated name of :attr:`m_done` (the completion endpoint *sends*, so it takes ``m_``)."""
+        return _deprecated_s_done(self)
 
     def kernel_task(self) -> "KernelTask":
         """The fixed ``hls::task`` body descriptor for the composite codegen.  The ``emit_done``
-        variant is the 4-arg ``mem_r_stream_done_task`` (adds ``s_done``); the default is the
+        variant is the 4-arg ``mem_r_stream_done_task`` (adds ``m_done``); the default is the
         standalone 3-arg ``mem_r_stream_task`` (unchanged Gate-1 body)."""
         if self.inband:
             # In-band/framed reader (plans/memcopy_inband_integration.md): reads a MemRCmd off the framed
@@ -387,7 +375,7 @@ class MemRStream(FreeRunMod):
         if self.emit_done:
             return KernelTask(
                 "mem_r_stream_done_task", "mem_r_stream_done_task.h",
-                ("s_cmd", "m_mem", "m_out", "s_done"), template_args=(int(self.mem_dwidth),))
+                ("s_cmd", "m_mem", "m_out", "m_done"), template_args=(int(self.mem_dwidth),))
         return KernelTask("mem_r_stream_task", "mem_r_stream_task.h", ("s_cmd", "m_mem", "m_out"),
                           template_args=(int(self.mem_dwidth),))
 
@@ -396,12 +384,11 @@ class MemRStream(FreeRunMod):
         template).  Dequeue an :class:`MRCmd`, read the word-run off ``m_mem`` through a word-typed
         :class:`~waveflow.hw.memif.Region` (which owns byte↔word), and burst it out on ``m_out``
         **early-anchored** so the read and write overlap (``~n_words + fill``).  With ``emit_done`` it
-        then writes a :class:`MemComplete` echo (words read + the command's ``xfer_msg`` cookie) on
-        ``s_done``."""
+        then writes a :class:`MemComplete` (the words read) on ``m_done``."""
         if self.inband:
             yield from self._run_iter_inband()
             return
-        cmd = yield from self.s_cmd.get_schema(self._cmd_cls)
+        cmd = yield from self.s_cmd.get_schema(MRCmd)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
         t_start = self.now
@@ -417,8 +404,7 @@ class MemRStream(FreeRunMod):
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
-            complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
-            yield from self.s_done.write(complete)
+            yield from self.m_done.write(MemComplete(len=nw))
         yield from self._timed_tail(nw)
 
     def _timed_tail(self, nw: int) -> ProcessGen[None]:
@@ -471,18 +457,14 @@ class MemWStream(FreeRunMod):
 
     mem_dwidth: HwParam[int] = 64
     mem_awidth: HwParam[int] = 32
-    max_xfer_len: HwParam[int] = 8     # LEGACY xfer_msg capacity — bridged into MWCmd/MemComplete's Param
     #: **In-band only**: bound on the local forward **buffer** — the total words this component holds
     #: across the write while relaying the response bursts (the C++ body's fixed ``fwd[MAX_FWD]``
-    #: array).  A bound on the *buffer*, not the protocol.  Distinct from :attr:`max_xfer_len`, which is
-    #: the legacy two-stream ``xfer_msg`` array capacity — the two meant the same number once and no
-    #: longer do, so they are separate knobs.
+    #: array).  A bound on the *buffer*, not the protocol.
     max_fwd_words: HwParam[int] = 8
-    #: When ``True`` the endpoint also exposes an ``s_done`` :class:`StreamIFMaster` and emits one
-    #: :class:`MemComplete` echo (words written + the command's ``xfer_msg`` cookie) per job — the
-    #: composition variant used by the ``MemCopy`` composite (its fixed body is
-    #: ``mem_w_stream_done_task``).  Default ``False`` keeps the standalone Gate-1 kernel (3-arg
-    #: ``mem_w_stream_task``) unchanged.
+    #: When ``True`` the endpoint also exposes an ``m_done`` :class:`StreamIFMaster`.  Two-stream: one
+    #: :class:`MemComplete` (the words written) per job, from the fixed body
+    #: ``mem_w_stream_done_task``.  In-band: the relayed bursts.  Default ``False`` keeps the
+    #: standalone Gate-1 kernel (3-arg ``mem_w_stream_task``) unchanged.
     emit_done: bool = False
     #: **In-band framing** (``plans/memcopy_inband_integration.md``).  When ``True`` there is **no
     #: ``s_cmd``**: ``s_in`` carries ``[MemWCmd | fwd_bursts opaque bursts | len data words]``, so a
@@ -490,8 +472,8 @@ class MemWStream(FreeRunMod):
     #: forward buffer (this component holds the response bursts across the write, then echoes them).
     #: Default ``False`` keeps the legacy protocol.
     inband: HwParam[bool] = False
-    #: In-band only: whether ``s_done`` carries TLAST in pysim.  The HLS port never does (it is a plain
-    #: ``hls::stream<ap_uint<MEM_DW>>``), so ``False`` is the faithful choice when ``s_done`` feeds an
+    #: In-band only: whether ``m_done`` carries TLAST in pysim.  The HLS port never does (it is a plain
+    #: ``hls::stream<ap_uint<MEM_DW>>``), so ``False`` is the faithful choice when ``m_done`` feeds an
     #: unframed consumer -- a queue-out view, say (``examples/markov``).  ``True`` (default) keeps the
     #: whole-burst reads ``MemCopy``'s host makes.
     done_framed: bool = True
@@ -509,11 +491,19 @@ class MemWStream(FreeRunMod):
     #: without recalibrating (:class:`~waveflow.calib.platform.PlatformCalib`).  Prefer this over
     #: ``calib_dir`` for the framework components; ``calib_dir`` remains the one-off/local override.
     platform_dir: "str | Path | None" = None
+    #: Cycles a firing with a completion spends in its ``hls::fence({m_mem}, {s_done})``: the fence
+    #: holds the completion until the bus has acknowledged every write, and the round trip through
+    #: the kernel's ``m_axi`` adapter costs this much after the firing's last input word **whether or
+    #: not the firing wrote anything**.  Measured on markov's traced RTL (Vitis/Vivado 2025.1, BFM write
+    #: slave): its zero-length response firing echoes 14 cycles after its last input word, and its
+    #: 8-word chunk firings end 17 after theirs (the write's own drain, then the fence).  Charged on
+    #: every firing with ``emit_done``, inside the firing, so a calibrated residual fitted on top of it
+    #: (mem_copy's) is the writer's other control cost.  A structural constant of the body at this
+    #: tool version, not a calibration knob.
+    fence_cycles: ClassVar[float] = 14.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self._cmd_cls = MWCmd.specialize(max_xfer_len=int(self.max_xfer_len))
-        self._complete_cls = MemComplete.specialize(max_xfer_len=int(self.max_xfer_len))
         # The sole write owner — the type declares it (see MemRStream.m_mem above).
         self.m_mem = MMIFWriteMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth),
@@ -528,10 +518,10 @@ class MemWStream(FreeRunMod):
         # In-band: the descriptor rides on s_in, so there is no separate command port.
         eps = [self.m_mem, self.s_in] if self.inband else [self.m_mem, self.s_cmd, self.s_in]
         if self.emit_done:
-            self.s_done = StreamIFMaster(
-                name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
+            self.m_done = StreamIFMaster(
+                name=f"{self.name}_m_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
                 has_tlast=bool(self.inband) and bool(self.done_framed))
-            eps.append(self.s_done)
+            eps.append(self.m_done)
         for ep in eps:
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
@@ -563,11 +553,16 @@ class MemWStream(FreeRunMod):
 
     @property
     def Cmd(self) -> type[MWCmd]:
-        return self._cmd_cls
+        return MWCmd
+
+    @property
+    def s_done(self) -> StreamIFMaster:
+        """Deprecated name of :attr:`m_done` (the completion endpoint *sends*, so it takes ``m_``)."""
+        return _deprecated_s_done(self)
 
     def kernel_task(self) -> KernelTask:
         """The fixed ``hls::task`` body descriptor for the composite codegen.  The ``emit_done``
-        variant is the 4-arg ``mem_w_stream_done_task`` (adds ``s_done``); the default is the
+        variant is the 4-arg ``mem_w_stream_done_task`` (adds ``m_done``); the default is the
         standalone 3-arg ``mem_w_stream_task`` (unchanged Gate-1 body)."""
         if self.inband:
             # In-band/framed writer (plans/memcopy_inband_integration.md): NO s_cmd -- the MemWCmd rides
@@ -576,12 +571,12 @@ class MemWStream(FreeRunMod):
             # (mem_w_stream_framed_done_task<MEM_DW, MAX_FWD>).  emit_done is implied here.
             return KernelTask(
                 "mem_w_stream_framed_done_task", "mem_w_stream_framed_done_task.h",
-                ("s_in", "m_mem", "s_done"),
+                ("s_in", "m_mem", "m_done"),
                 template_args=(int(self.mem_dwidth), int(self.max_fwd_words)))
         if self.emit_done:
             return KernelTask(
                 "mem_w_stream_done_task", "mem_w_stream_done_task.h",
-                ("s_cmd", "s_in", "m_mem", "s_done"), template_args=(int(self.mem_dwidth),))
+                ("s_cmd", "s_in", "m_mem", "m_done"), template_args=(int(self.mem_dwidth),))
         return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"),
                           template_args=(int(self.mem_dwidth),))
 
@@ -590,12 +585,11 @@ class MemWStream(FreeRunMod):
         template).  Dequeue an :class:`MWCmd`, drain its ``len`` words off ``s_in`` (pipelined — the
         first-word anchor), and pure-write the burst through a word-typed
         :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap.  With
-        ``emit_done`` it then writes a :class:`MemComplete` echo (words written + the command's
-        ``xfer_msg`` cookie) on ``s_done``."""
+        ``emit_done`` it then writes a :class:`MemComplete` (the words written) on ``m_done``."""
         if self.inband:
             yield from self._run_iter_inband()
             return
-        cmd = yield from self.s_cmd.get_schema(self._cmd_cls)
+        cmd = yield from self.s_cmd.get_schema(MWCmd)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
         t_start = self.now
@@ -609,18 +603,24 @@ class MemWStream(FreeRunMod):
             yield from region.write_slice_pipelined(
                 w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
                 num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        yield from self._fence()
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
-            complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
-            yield from self.s_done.write(complete)
+            yield from self.m_done.write(MemComplete(len=nw))
+
+    def _fence(self) -> ProcessGen[None]:
+        """The body's fence before its completion: :attr:`fence_cycles` when one follows
+        (``emit_done``) -- on a zero-length command too, whose firing still runs the fence."""
+        if self.emit_done and self.fence_cycles:
+            yield self.timeout(self.fence_cycles * self.clk.period)
 
     def _run_iter_inband(self) -> ProcessGen[None]:
         """One framed transfer off ``s_in`` (``inband=True``) — the forwarding writer.
 
         ``[MemWCmd | fwd_bursts opaque bursts | len data words]``: read the descriptor, **buffer** the
         opaque bursts (they are the response, and must not go out before the data is stored), drain and
-        pure-write the ``len`` data words, then emit the buffered bursts on ``s_done``.  The writer
+        pure-write the ``len`` data words, then emit the buffered bursts on ``m_done``.  The writer
         never parses what it forwards — it constructs no completion of its own; the composite's
         sequencer framed the response.  ``max_fwd_words`` bounds the buffer.
         """
@@ -646,25 +646,27 @@ class MemWStream(FreeRunMod):
         # does NOT: it pulls a whole burst off the buffer and then truncates the RESULT to zero words,
         # so an unguarded drain silently eats the next command's burst here while the RTL stays in step.
         # A zero-length write is a real command (the no-output opcode -- see examples/fir_block, where a
-        # LOAD_TAPS job still echoes its descriptor on s_done), not a degenerate case to reject.
+        # LOAD_TAPS job still echoes its descriptor on m_done), not a degenerate case to reject.
         if nw > 0:
             words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
             region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
             yield from region.write_slice_pipelined(
                 w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
                 num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        yield from self._fence()
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
-        if self.emit_done:
-            for burst in fwd:
-                yield from self.s_done.write(burst)
-        # Trailing calibration delay: the posted-write drain the RTL keeps running after s_done, so
-        # the firing is not really done -- and the next cannot start -- until it completes.  A no-op
-        # (0, but still records the firing) when uncalibrated; see FreeRunMod.timed_delay.
-        # `n_fwd` (the forwarded/echoed bursts) is a feature too: buffering and echoing them costs
-        # cycles that scale with the count.  A model whose basis omits n_fwd ignores the key; one that
-        # includes it (a fixture that swept it) charges the per-message cost.
+        # Calibrated delay: the write-response drain.  The RTL echo waits for the memory to
+        # acknowledge the write (the body's hls::fence), so the drain comes BEFORE m_done -- the
+        # response never announces data the memory has not taken.  A no-op (0, but still records the
+        # firing) when uncalibrated; see FreeRunMod.timed_delay.  `n_fwd` (the forwarded/echoed
+        # bursts) is a feature too: buffering and echoing them costs cycles that scale with the
+        # count.  A model whose basis omits n_fwd ignores the key; one that includes it (a fixture
+        # that swept it) charges the per-message cost.
         dly = self.timed_delay(
             {"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST), "n_fwd": n_fwd})
         if dly:
             yield self.timeout(dly)
+        if self.emit_done:
+            for burst in fwd:
+                yield from self.m_done.write(burst)

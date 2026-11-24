@@ -23,9 +23,9 @@ Users can auto-generate the corresponding Vitis code, verified to match the Pyth
 - Core [interfaces](../guide/interface/) such as HLS stream, AXI memory-mapped, and other memory interfaces are also in place.  Users can create [hardware modules](../guide/flows/modules.md) with the interfaces, auto-generate Vitis HLS code implementing core transactions including block and pipelined reads of raw data and schemas.  These have also been verified as functionally correct and cycle approximate.  Hardware modules support [parameterization](../guide/flows/parametrization.md).
 - A SimPy-based discrete-event simulator (DES) has also been developed, enabling cycle-approximate timing of processing and interface transactions of the hardware modules.
 - A [build DAG](../guide/build/)
-has been developed that provides pre-built steps for the [system flow](../guide/systems/index.md): DES simulation, code generation, csynth, RTL simulation under Vivado's simulator (XSI), and the comparison of the RTL against the DES.  Tools are available for timing and resource extraction, [calibration](../guide/systems/calibration.md) and visualization enabling closed-loop functional and timing verification.  (The older Vitis C-simulation / co-simulation path is kept under [Legacy flows](../guide/legacy/index.md).)
+has been developed that provides pre-built steps for the [system flow](../guide/systems/flow.md): DES simulation, code generation, csynth, RTL simulation under Vivado's simulator (XSI), and the comparison of the RTL against the DES.  Tools are available for timing and resource extraction, [calibration](../guide/systems/calibration.md) and visualization enabling closed-loop functional and timing verification.  (The older Vitis C-simulation / co-simulation path is kept under [Legacy flows](../guide/legacy/index.md).)
 - The framework has been validated **end to end**
-on a set of [examples](../examples/), from individual kernels over a variety of interfaces to multi-module systems: a three-stage pipeline ([block_eq](../examples/block_eq/index.md)), two kernels, a memory and a host on a bus ([markov](../examples/markov/index.md)), and a CG detector composed from two linear-algebra modules ([mimo_cg](../examples/mimo_cg/index.md)).  The validation demonstrated bit-exact match and near exact timing match with proper calibration ([Timing and resources](../guide/systems/calibration.md)).
+on a set of [examples](../examples/), from individual kernels over a variety of interfaces to multi-module systems: a three-stage pipeline ([block_eq](../examples/block_eq/index.md)), two kernels, a memory and a host on a bus ([markov](../examples/markov/index.md)), and a CG detector composed from two linear-algebra modules ([mimo_cg](../examples/mimo_cg/detector.md)).  The validation demonstrated bit-exact match and near exact timing match with proper calibration ([Timing and resources](../guide/systems/calibration.md)).
 - An [MCP server](../guide/ai_tooling/index.md) gives an AI assistant the guide, the reference examples and a process per system shape (experimental).
 
 
@@ -46,7 +46,7 @@ Several new core modules and capabilities are on the horizon.
 ## The first system-level milestone: a conjugate-gradient demonstrator
 
 The first *system-level* result is **conjugate gradient (CG)** — a real linear-solve kernel, as an
-MMSE detector for the massive-MIMO uplink ([mimo_cg](../examples/mimo_cg/index.md)) — built from
+MMSE detector for the massive-MIMO uplink ([mimo_cg](../examples/mimo_cg/detector.md)) — built from
 Waveflow's two [linear-algebra modules](../guide/dsp/linalg_common.md):
 
 - a **systolic array** (matrix–matrix product), and

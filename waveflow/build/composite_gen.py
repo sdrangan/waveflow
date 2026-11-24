@@ -124,7 +124,10 @@ class TaskInst:
 def _vitis_type_name(word_type: str) -> str:
     """How Vitis spells a framed port's word type in a task instance's name, as its csynth RTL shows
     (Vitis 2025.1, markov's chain core): ``streamutils::axi4s_word<64>`` (an ``ap_axis``) ->
-    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``."""
+    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``.  A prediction only: the same
+    Vitis spells it ``framed_word`` in an arbiter-demux pair's tasks, and with the width on the last
+    of three only in a dispatcher pool's arbiter; :func:`~waveflow.utils.trace.load_trace` binds such
+    an instance by its ``<body>_<template args>`` prefix."""
     import re
 
     m = re.fullmatch(r"streamutils::(axi4s_word|framed_word)<(\d+)>", word_type.replace(" ", ""))
@@ -3085,9 +3088,11 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     *solution_config* are extra tcl lines emitted after ``create_clock`` and before
     ``csynth_design`` — solution-level settings that change the RTL rather than the schedule.  The
     one this exists for is ``config_rtl -reset state``: an ``hls::task`` that writes before it reads
-    advances its state during reset, and ``#pragma HLS reset`` **in the body does not close it**
-    (measured, Vitis 2025.1 — csynth still reports every state register as "power-on
-    initialization"), whereas the solution-level setting does.
+    advances its state during reset, and the solution-level setting resets every state register,
+    the pipeline registers a looped body keeps its state in included.  ``#pragma HLS reset`` in
+    the body resets only the statics it names (it does take, Vitis 2025.1: csynth's "power-on
+    initialization" warning is printed whether or not it did); whether that alone closes the
+    trap in ``examples/rf_repeat_play`` was never measured.
 
     **Opt-in, and deliberately not the default.**  Turning it on globally would add reset logic to
     every generated top, and several of those are gated on exact RTL cycle counts — so the safe

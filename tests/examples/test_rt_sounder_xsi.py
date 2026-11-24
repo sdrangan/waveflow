@@ -24,7 +24,6 @@ from __future__ import annotations
 import itertools
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +47,12 @@ from tests.examples.test_rf_loopback_xsi import (
     WANT_IQ_SINK_BLOCKS,
     WANT_IQ_SINK_LAST_BLOCK_CYCLE,
 )
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from waveflow.build.trace_steps import (
+    XSI_RUNNER,
+    rtl_staleness,
+    run_xsi,
+    xsi_runner_cmd,
+)
 from waveflow.toolchain.toolchain import find_vivado_path
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rt_sounder"
@@ -152,7 +156,7 @@ def test_source_mode_replays_through_the_rtl_word_for_word():
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     # Never pass on the last run's output.
     shutil.rmtree(XSI / OUT_BUNDLE_SRC, ignore_errors=True)
-    r = subprocess.run(
+    r = run_xsi(
         xsi_runner_cmd(TOP, COUNTERS),
         cwd=str(XSI),
         capture_output=True,

@@ -191,7 +191,7 @@ kernel in them as its DUT. `RfLoopbackSim` owns the scenario, the run and the go
 
 ## 4. The DUT, and why it is two tasks
 
-`RfSampPassThrough` is a [`FreeRunMod`](../../guide/systems/index.md): one burst in, the same
+`RfSampPassThrough` is a [`FreeRunMod`](../../guide/systems/kernels.md): one burst in, the same
 burst out — as **two tasks over an internal channel**.
 
 ```

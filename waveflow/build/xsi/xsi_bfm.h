@@ -388,7 +388,7 @@ public:
     //: vector — so the driver plays the same on-disk vectors the pysim StreamDriver does.
     std::string in_bundle;
     void pre_sim() override {
-        if (in_bundle.empty()) return;
+        if (in_bundle.empty()) { apply_start_gap(); return; }
         const int kb = BurstBundle::read_chunks(in_bundle);
         if (kb != k_) {
             std::fprintf(stderr, "FATAL: bundle %s holds %d-chunk words; this AxisMaster's port takes "
@@ -400,7 +400,14 @@ public:
         if (bounds_.empty()) one_burst();
         widx_ = 0;
         h_valid_ = nwords() == 0 ? 0u : 1u;
+        apply_start_gap();
     }
+
+    //: Optional: idle cycles before the FIRST burst -- TVALID held low from the start for that many
+    //: cycles, so a stimulus can make an input's first frame arrive late.  The twin of the pysim
+    //: StreamDriver.start_gap_cycles DynParam (a workload's StreamBurst.gap_before on burst 0).
+    //: Default 0 = the first word presented at once, exactly as before.
+    int start_gap_cycles = 0;
 
     void sample() override { ready_ = d_.get1(P_ready); beat_ = (h_valid_ && ready_); }
 
@@ -487,6 +494,14 @@ private:
 
     /// Beats held: the vector's length in words of *k_* chunks.
     int nwords() const { return (int)(words_.size() / (size_t)k_); }
+
+    /// Hold TVALID low for start_gap_cycles before the first burst (none: unchanged).
+    void apply_start_gap() {
+        if (start_gap_cycles > 0 && nwords() > 0) {
+            gap_left_ = start_gap_cycles;
+            h_valid_ = 0u;
+        }
+    }
 
     /// Idle cycles before burst *k* (k >= 1) -- the same rule as StreamDriver.gap_before.
     int gap_before(int k) const {

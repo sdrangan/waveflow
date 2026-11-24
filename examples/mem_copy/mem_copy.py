@@ -20,6 +20,7 @@ Run (project venv, from repo root)::
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -41,6 +42,7 @@ from waveflow.hw.hw_module import HwParam  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
+    MEM_AXI_MAX_BURST,
     KernelTask,
     MemRCmd,
     MemRStream,
@@ -270,7 +272,7 @@ class MemCopy(FreeRunMod):
         self.s_cmd = self.seq.s_cmd
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
-        self.s_done = self.wstream.s_done
+        self.s_done = self.wstream.m_done
 
     def workload(self, kind: str = "test") -> dict:
         """The scenario of this module's harness (:func:`~waveflow.hw.harness.harness`): ``"test"`` is
@@ -364,9 +366,9 @@ def xsi_jobs(n_words: int = XSI_N, num_cmds: int = XSI_NUM_CMDS) -> tuple:
 def xsi_run_cycles(n_words: int = XSI_N, num_cmds: int = XSI_NUM_CMDS) -> int:
     """A generous ``h.run(N)`` bound covering the scenario's time-to-last-completion.
 
-    From the measured law (``~41 + n + 2·ceil(n/16)`` per job, plus pipeline fill and drain), with
+    From the measured law (``~45 + n + 2·ceil(n/16)`` per job, plus pipeline fill and drain), with
     margin.  The harness runs *exactly* this many cycles, so it must clear completion; overshoot is
-    only wasted sim cycles.  The default (``16 × 128``) lands ~3600, comfortably past the 2908 gate —
+    only wasted sim cycles.  The default (``16 × 128``) lands ~3600, comfortably past the 3000 gate —
     but the gate keeps its own committed 3400 (this is for sweep points that need more)."""
     period = 60 + n_words + 3 * ((n_words + 15) // 16)
     return 300 + num_cmds * period
@@ -521,6 +523,45 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int | None, width: in
         f"mem_copy completion cycle moved: got {done_cycle}, expected {want_cycles} — a real behaviour "
         f"change (regression, or an improvement worth re-recording).")
     return done_cycle
+
+
+def check_completion_after_write_response(vcd_path: Path, width: int = DEFAULT_MEM_DW,
+                                          jobs=None) -> list[tuple[int, int]]:
+    """Check, on a traced XSI run, that each job's ``CopyResp`` follows its write response.
+
+    The completion means "the copy is in memory".  That holds only if its first ``s_done`` beat
+    comes after the job's **last B handshake** on the writer's ``m_axi`` bundle (``gmem1``): until
+    B, the memory has not acknowledged the data, and a host that reads the destination on the
+    completion may read the old contents.  Each job writes ``ceil(n_words / 16)`` bursts, one B
+    each, in job order.
+
+    Returns ``[(last_b, first_done), ...]`` per job (clock-edge indices of the trace); raises
+    ``AssertionError`` naming every job whose completion came first.
+    """
+    from waveflow.utils.vcd import handshake_cycles
+
+    jobs = [CopyJob.coerce(j) for j in make_xsi_tb(width, jobs=jobs).jobs]
+    hs = handshake_cycles(vcd_path, {
+        "b": ("m_axi_gmem1_BVALID", "m_axi_gmem1_BREADY"),
+        "done": ("s_done_TVALID", "s_done_TREADY"),
+    })
+    per_job = [math.ceil(j.n_words / MEM_AXI_MAX_BURST) for j in jobs]
+    done_words = _done_words(width)
+    assert len(hs["b"]) == sum(per_job), (
+        f"mem_copy trace: {len(hs['b'])} write responses, expected {sum(per_job)}")
+    assert len(hs["done"]) == len(jobs) * done_words, (
+        f"mem_copy trace: {len(hs['done'])} s_done beats, expected {len(jobs)}*{done_words}")
+    order, early = [], []
+    n_b = 0
+    for j, n in enumerate(per_job):
+        n_b += n
+        last_b, first_done = int(hs["b"][n_b - 1]), int(hs["done"][j * done_words])
+        order.append((last_b, first_done))
+        if first_done <= last_b:
+            early.append(f"job {j}: completion at {first_done}, last B at {last_b}")
+    assert not early, ("mem_copy: a completion left before its write was acknowledged:\n  "
+                       + "\n  ".join(early))
+    return order
 
 
 def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW, jobs=None) -> Path:

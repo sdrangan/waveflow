@@ -60,9 +60,9 @@ for path, comp, ident in walk_modules(top):
 ```text
 fir_block                        fir_block-d8242bfe         {'mem_dwidth': 32, 'ntap': 32, 'samp_i': 2, 'samp_w': 16, 'unroll_lane': 0}
 fir_block.fir_block_rx           fir_cmd_rx-93cb7e21        {'mem_dwidth': 32, 'samp_w': 16}
-fir_block.fir_block_memr         mem_r_stream-04919c18      {'inband': 1, 'max_xfer_len': 8, 'mem_awidth': 32, 'mem_dwidth': 32}
+fir_block.fir_block_memr         mem_r_stream-04919c18      {'inband': 1, 'mem_awidth': 32, 'mem_dwidth': 32}
 fir_block.fir_block_compute      fir_compute-4d3d359e       {'mem_dwidth': 32, 'ntap': 32, 'samp_i': 2, 'samp_w': 16, 'unroll_lane': 0}
-fir_block.fir_block_memw         mem_w_stream-cc38eace      {'inband': 1, 'max_fwd_words': 8, 'max_xfer_len': 8, ...}
+fir_block.fir_block_memw         mem_w_stream-cc38eace      {'inband': 1, 'max_fwd_words': 8, 'mem_awidth': 32, ...}
 ```
 
 `fir_cmd_rx` sees only `{mem_dwidth, samp_w}`. Both mem-streams see *neither* `ntap` nor `samp_w`.

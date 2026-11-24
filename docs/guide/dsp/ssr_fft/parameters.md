@@ -6,7 +6,7 @@ nav_order: 1
 audience: python
 api: [SsrFft, Geometry]
 snippets: run
-summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the boundary (one RadixWord port each way, or VitisFft's four lanes), the reorder implementation, the direction (inverse=True, with an exact 1/L), the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
+summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the boundary (one RadixWord port each way, or VitisFft's four lanes), the reorder implementation, the direction (inverse=True, with an exact 1/L, or direction='runtime', chosen per frame on s_dir, each frame bit-exact with the fixed build), the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
 ---
 
 # Parameters
@@ -106,6 +106,51 @@ AMD's library divides at the old resolution instead, truncating toward zero, so 
 bits of its inverse are always zero; `waveflow.vitis_l1.fft.ifft_scale` maps these outputs onto its
 bits exactly.
 
+### The direction chosen per frame
+
+`direction="runtime"` builds one FFT that runs either direction, chosen frame by frame on a third
+port, `s_dir`: one word a frame, bit 0 set for the inverse. This is the FFT a
+[shared kernel](../../systems/shared_kernels.md) needs, where one unit does a channel's forward pass
+and then its inverse:
+
+```python
+rt = SsrFft(name="fft", sim=Simulation(), clk=Clock(freq=250e6), L=1024, direction="runtime")
+print("ports:", [n for n, _ in rt.boundary], "- s_dir", rt.s_dir.bitwidth, "bits")
+o, i = rt.out_fmt, rt.inv_out_fmt
+print(f"a forward frame reads ap_fixed<{o.W},{o.int_bits}>, an inverse one ap_fixed<{i.W},{i.int_bits}>")
+```
+
+```text
+ports: ['s_in', 's_dir', 'm_out'] - s_dir 8 bits
+a forward frame reads ap_fixed<27,13>, an inverse one ap_fixed<27,3>
+```
+
+- **Each frame is the fixed build's of its direction, bit for bit.** The inverse tables are the forward
+  ones conjugated, exactly. So an inverse frame needs only two moves in each stage, with the forward
+  ROMs: the butterfly's outputs 1 and 3 swap places, and the twiddle's imaginary part is negated.
+  Every product and every truncation is then the inverse build's. Conjugating the frame at both ends
+  would not give the same bits: truncation does not commute with negation, and negating the most
+  negative input overflows.
+- **The output port carries the forward format.** An inverse frame's words hold the inverse build's
+  bits, so read them through `inv_out_fmt`: that reinterpretation is the `1/L`. The direction does
+  not come back out of the FFT. Whoever reads the output knows each frame's direction already, from
+  the tag that travels beside it.
+- **The timing is the fixed build's.** A frame still leaves every `L/R` cycles, with the ping-pong
+  reorder, in both directions and when they alternate. See [Timing](timing.md).
+- **What it costs** (xczu48dr at 250 MHz, csynth Vitis HLS 2025.1, out-of-context place and route
+  Vivado 2025.1, against the forward build): no timing -- csynth's estimate is the fixed build's
+  (2.855 ns at L = 64, 2.901 ns at L = 1024), every build meets 4 ns routed (WNS +0.962 ns and
+  +0.886 ns for the runtime builds), and the worst of the six is a *fixed* inverse, +0.399 ns, a
+  placement outcome. Resources: about 10% more FF and LUT in csynth, 1.5-6.5% routed (L = 64: +275 FF,
+  +401 LUT; L = 1024: +326 FF, +629 LUT); the same DSPs and BRAM. The extra goes to the input register
+  and one or two butterfly stages, each a pipeline stage deeper: latency, not rate
+  (`plans/shared_kernel_rfsoc_timing.md`).
+- **Inside, the input register reads the direction** at each frame's first word and hands a copy to
+  every stage on its own small FIFO. Each stage reads its copy when that frame's first word arrives.
+  The FIFOs are sized for the frames the chain holds, so the register never waits on them.
+
+It takes the `RadixWord` boundary only, and leaves `inverse` at `False`.
+
 ## Every parameter
 
 | parameter | type / binding | default | meaning |
@@ -118,6 +163,7 @@ bits exactly.
 | `reorder` | `str` | `"sob"` | the reorder's frame buffer: `"sob"` (a `stream_of_blocks` between two tasks) or `"pingpong"` (both halves in one task) |
 | `lanes` | `bool` | `False` | the boundary: one `RadixWord` port each way (`s_in`, `m_out`), or with `True` `VitisFft`'s four-lane group (`s_in_0..3`, `m_out_0..3`) |
 | `inverse` | `bool` | `False` | the inverse transform: conjugated twiddle ROMs, `1/L` as `log2 L` fewer integer bits on the output |
+| `direction` | `str` | `"fixed"` | `"fixed"`: the direction is `inverse`; `"runtime"`: chosen per frame on `s_dir` (bit 0 = inverse), each frame bit-exact with the fixed build of its direction -- see [above](#the-direction-chosen-per-frame) |
 | `timed` | `bool` | `True` | `False` gives exact bits in zero simulated time |
 | `pysim` | `str` | `"tasks"` | the pysim's granularity: `"tasks"`, one process per task; or `"flat"`, one process for the whole FFT with the same frames at the same cycles (ping-pong reorder only) -- see [Timing](timing.md#the-flat-pysim-one-process-for-the-fft) |
 
@@ -133,7 +179,8 @@ structure. See [Timing](timing.md).
 
 - **`geo`**, the `Geometry`: stages `S`, words per frame `L/R`, every commutator's block size, every
   edge's format (`geo.edges()`), the twiddle table and the reorder's permutation.
-- **`out_fmt`**, the output format -- read it rather than computing it.
+- **`out_fmt`**, the output format -- read it rather than computing it.  With
+  `direction="runtime"`, `inv_out_fmt` is how an inverse frame's bits read.
 - **`tasks`**: the children, in pipeline order, each with its `kernel_task()` -- the generated wrapper
   it synthesizes to.
 - **The ports**: `s_in` / `m_out`, one endpoint each; with `lanes=True`, `s_in` / `m_out` are lists
@@ -157,4 +204,4 @@ ValueError: reorder='fifo': one of ('sob', 'pingpong')
 
 Also refused, in `Geometry`: a radix other than 4, and a scaling mode other than `NO_SCALING` -- the
 modes the per-stage model has measured.  And `pysim="flat"` with `reorder="sob"`: that reorder's
-frames queue inside the chain, which one process would not reproduce. The inverse transform is not built yet.
+frames queue inside the chain, which one process would not reproduce.

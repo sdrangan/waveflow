@@ -102,11 +102,13 @@
 // per firing during reset, whereas a looped body enters once and its state lives in pipeline
 // registers.  What closes it is the same thing either way.
 //
-// MEASURED 2026-08-20, Vitis HLS 2025.1: THE `#pragma HLS reset` LINES BELOW DID NOT TAKE.  csynth
-// reported "WARNING: [RTGEN 206-101] Register '<name>' is power-on initialization" for every one of
-// them.  What closes the trap is `config_rtl -reset state` at the SOLUTION level.  They are kept
-// here because they state the intent at the point it applies, and because a future Vitis may honour
-// them; a build that relies on them ALONE is relying on nothing.
+// The build closes the trap with `config_rtl -reset state` at the SOLUTION level, which resets every
+// state register -- including the pipeline registers a looped body keeps its state in, which no
+// pragma can name.  The `#pragma HLS reset` lines below DO put the named statics on reset (checked
+// 2026-11-19, Vitis HLS 2025.1: the RTL gets `if (ap_rst) x <= 0`).  An earlier note here said they
+// did not take; it read csynth's "Register '<name>' is power-on initialization" warning, which
+// Vitis prints whether or not the pragma took.  Whether the pragmas alone would close the trap in
+// this body was never measured.
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "rf_tagged_samp.h"

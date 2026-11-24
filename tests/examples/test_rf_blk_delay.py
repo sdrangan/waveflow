@@ -186,7 +186,7 @@ def test_the_delay_floor_is_measured_not_assumed():
 
     Below the floor the TX loader refuses every command: the play pointer reaches the slot while the
     block is still being written into it. The signature is *partial* placement rather than none —
-    measured at ``MIN_DELAY_BLOCKS - 1``, every block gets 116 of its 256 samples in before the player
+    measured at ``MIN_DELAY_BLOCKS - 1``, every block gets 216 of its 256 samples in before the player
     overtakes it — because the loader keeps draining the frame after the verdict, which is what keeps
     the next command aligned. A refusal that abandoned the payload would desynchronise everything
     after it, so "refused" has to mean "refused and drained".
@@ -199,8 +199,9 @@ def test_the_delay_floor_is_measured_not_assumed():
     resp = tx_responses(below)
     late = [s for _t, s, _n in resp if s == RF_SAMP_BUF_TOO_LATE]
     # SOME miss, not all: one block below the floor the loop is marginal rather than hopeless, and
-    # how many miss depends on how far below.  Measured at MIN_DELAY_BLOCKS - 1 = 5: five of twelve.
-    # Asserting "all" would pin a number that is a property of how deep the sweep went.
+    # how many miss depends on how far below.  Measured at MIN_DELAY_BLOCKS - 1 = 3, 250 MSa/s: all
+    # twelve; at 400 MSa/s, one below that rate's floor of 6: five of twelve.  Asserting "all" would
+    # pin a number that is a property of how deep the sweep went.
     assert late, (
         f"a delay of {MIN_DELAY_BLOCKS - 1} blocks was expected to miss at least one slot, got {resp}")
     assert below.tx.n_too_late == len(late)
@@ -210,8 +211,9 @@ def test_the_delay_floor_is_measured_not_assumed():
         f"short by the player, so it should be neither total nor absent")
     # **A refusal is a block cut short, never a block silently dropped or silently completed**, and
     # that is the invariant worth pinning rather than the shape of the shortfall.  The shape depends
-    # on the rate: at 250 MSa/s one below the floor the refusals alternate 244 / 0, at 400 MSa/s they
-    # degrade 232 / 176 / 152 / ... as the loop falls further behind.  Asserting either pattern would
+    # on the rate and on pysim's granularity: at a delay of 3 every refusal places 216 at 250 MSa/s and
+    # 24 at 400 MSa/s, and they were 244 / 0 alternating and about 52 while the RX capture's twin
+    # emitted one word per burst (RfSampBufCapture.pysim_burst_words).  Asserting any pattern would
     # pin a number that belongs to a configuration rather than to the contract.
     refused = [n for _t, s, n in resp if s == RF_SAMP_BUF_TOO_LATE]
     assert all(0 <= n < BLKSIZE for n in refused), (
@@ -226,6 +228,28 @@ def test_the_delay_floor_is_measured_not_assumed():
                                    delay_blocks=MIN_DELAY_BLOCKS))
     assert all(s == RF_SAMP_BUF_OK and n == BLKSIZE for _t, s, n in tx_responses(at))
     assert at.tx.n_too_late == 0
+
+
+def test_the_delay_floor_at_400_msps_is_six_blocks():
+    """**The floor scales with the rate** (see ``DELAY_BLOCKS``): 6 blocks at 400 MSa/s, not 4.
+
+    Pinned because the RX capture's pysim burst size moves it.  A burst reaches the next stage only
+    when its last word has, so a capture that sent a whole window as one burst put a window's worth of
+    store-and-forward delay into the loop, and this floor became 7.  Bounding the burst
+    (:attr:`~waveflow.hw.rf_samp_buf.RfSampBufCapture.pysim_burst_words`) keeps it at the one-word
+    body's 6.  Below the floor only *some* commands miss: the loop is marginal there.
+    """
+    late = {}
+    for d in (MIN_DELAY_BLOCKS + 1, MIN_DELAY_BLOCKS + 2):
+        run = run_pysim(tb=RfBlkDelayTB(name=f"d{d}", sim=Simulation(), delay_blocks=d,
+                                        samp_rate=400e6))
+        late[d] = sum(1 for _t, s, _n in tx_responses(run) if s == RF_SAMP_BUF_TOO_LATE)
+    assert late[MIN_DELAY_BLOCKS + 1] > 0, (
+        f"at 400 MSa/s a delay of {MIN_DELAY_BLOCKS + 1} blocks met every slot: the floor fell "
+        f"below 6 ({late})")
+    assert late[MIN_DELAY_BLOCKS + 2] == 0, (
+        f"at 400 MSa/s a delay of {MIN_DELAY_BLOCKS + 2} blocks missed {late[MIN_DELAY_BLOCKS + 2]} "
+        f"slots: the floor rose above 6 -- the round trip got longer ({late})")
 
 
 # ---------------------------------------------------------------------------

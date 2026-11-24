@@ -33,11 +33,13 @@ every name below is one call away.
 
 All of these are also `waveflow kb <cmd>` on the command line.
 
-**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` -- the
-*Flow Overview*: what a Waveflow system is (a testbench and a DUT, the DUT a tree of modules, any module
-the DUT of its own harness), the two levels of simulation (anything can join a `Simulation`; only what has
-an RTL twin can join an `HwSystem`), and a page per step of the flow.  The steps below follow those
-pages, in order:
+**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` --
+*Waveflow Architecture*: what a Waveflow system is (a testbench and a DUT, the DUT a tree of kernels,
+adaptors and devices, any module the DUT of its own harness), the three levels of simulation (the golden;
+anything can join a `Simulation`; only what has an RTL twin can join an `HwSystem`).  Then
+`docs/guide/systems/kernels.md` (*Kernels*: streams only) and `docs/guide/systems/devices.md` (*Devices
+and the DUT*); the terms are in `docs/guide/systems/glossary.md`.  The *Flow Overview*,
+`docs/guide/systems/flow.md`, is a page per step; the steps below follow those pages, in order:
 
 | step | page |
 |---|---|
@@ -71,7 +73,9 @@ you may read and must never edit.
   through its Waveflow schema or the Waveflow array utilities, in Python and
   in C++ alike.
 - **Never edit a generated file.** If the machinery cannot express something
-  you need, **stop and report it** with the exact error you saw.
+  you need, **stop and report it** with the exact error you saw, and propose
+  the extension to Waveflow that would express it (what, where, its parts).
+  Waveflow is early and meant to grow; changing it is the user's call.
 - **Never write your own PASS column.** A criterion passes when a check step
   or the build says so.
 - **The Stage 1 artifacts are frozen in Stage 2.** If you believe one is

@@ -1,0 +1,209 @@
+{
+  "basis": [
+    "n",
+    "rr",
+    "kind"
+  ],
+  "targets": [
+    "residual"
+  ],
+  "table": [
+    {
+      "point": [
+        2.0,
+        0.0,
+        0.0
+      ],
+      "values": {
+        "residual": 3.0
+      }
+    },
+    {
+      "point": [
+        2.0,
+        0.0,
+        1.0
+      ],
+      "values": {
+        "residual": 4.0
+      }
+    },
+    {
+      "point": [
+        2.0,
+        1.0,
+        0.0
+      ],
+      "values": {
+        "residual": 3.0
+      }
+    },
+    {
+      "point": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "values": {
+        "residual": 4.0
+      }
+    },
+    {
+      "point": [
+        4.0,
+        0.0,
+        0.0
+      ],
+      "values": {
+        "residual": 3.0
+      }
+    },
+    {
+      "point": [
+        4.0,
+        0.0,
+        1.0
+      ],
+      "values": {
+        "residual": 4.0
+      }
+    },
+    {
+      "point": [
+        4.0,
+        1.0,
+        0.0
+      ],
+      "values": {
+        "residual": 5.0
+      }
+    },
+    {
+      "point": [
+        4.0,
+        1.0,
+        1.0
+      ],
+      "values": {
+        "residual": 5.0
+      }
+    },
+    {
+      "point": [
+        8.0,
+        0.0,
+        0.0
+      ],
+      "values": {
+        "residual": 6.0
+      }
+    },
+    {
+      "point": [
+        8.0,
+        0.0,
+        1.0
+      ],
+      "values": {
+        "residual": 6.0
+      }
+    },
+    {
+      "point": [
+        8.0,
+        1.0,
+        0.0
+      ],
+      "values": {
+        "residual": 10.0
+      }
+    },
+    {
+      "point": [
+        8.0,
+        1.0,
+        1.0
+      ],
+      "values": {
+        "residual": 7.0
+      }
+    },
+    {
+      "point": [
+        16.0,
+        0.0,
+        0.0
+      ],
+      "values": {
+        "residual": 5.0
+      }
+    },
+    {
+      "point": [
+        16.0,
+        0.0,
+        1.0
+      ],
+      "values": {
+        "residual": 10.0
+      }
+    },
+    {
+      "point": [
+        16.0,
+        1.0,
+        0.0
+      ],
+      "values": {
+        "residual": 15.0
+      }
+    },
+    {
+      "point": [
+        16.0,
+        1.0,
+        1.0
+      ],
+      "values": {
+        "residual": 12.0
+      }
+    }
+  ],
+  "_fit_summary": {
+    "features": [
+      "n",
+      "rr",
+      "kind"
+    ],
+    "ranges": {
+      "n": [
+        2.0,
+        16.0
+      ],
+      "rr": [
+        0.0,
+        1.0
+      ],
+      "kind": [
+        0.0,
+        1.0
+      ],
+      "span_rtl": [
+        3.0,
+        15.0
+      ],
+      "span_pysim": [
+        3.0,
+        15.000000000000002
+      ],
+      "current_dly": [
+        3.0,
+        15.000000000000002
+      ]
+    },
+    "n_points": 16,
+    "max_abs_residual": 0.0,
+    "max_rel_residual": 0.0,
+    "n_free_params": 16
+  }
+}

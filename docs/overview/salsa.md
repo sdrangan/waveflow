@@ -79,7 +79,7 @@ onto a Waveflow abstraction, and the whole thing simulates, verifies, and genera
   **Bus/memory I/F** of the figure above) and a behavior: modeled in Python, simulated at NumPy
   speed, verified bit-exact against its golden, and realized in HLS. The first PEs through that flow
   are Waveflow's [linear-algebra components](../guide/dsp/linalg_common.md) — a systolic matrix multiply and
-  a conjugate-gradient vector unit, composed into the [CG massive-MIMO detector](../examples/mimo_cg/index.md)
+  a conjugate-gradient vector unit, composed into the [CG massive-MIMO detector](../examples/mimo_cg/detector.md)
   and bit-exact at RTL — and an [SSR FFT](../examples/ssr_fft/index.md): concrete SALSA building blocks,
   not sketches.
 - **The tasklet vocabulary maps straight onto Waveflow.** A *tasklet* is the behavior of a PE

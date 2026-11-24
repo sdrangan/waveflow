@@ -273,6 +273,17 @@ class FreeRunMod(HwModule):
             return None
         return self._run_iter_forever() if self._kind() == 'standalone' else None
 
+    def post_sim(self) -> None:
+        """After a pysim run, a **composite** checks its cycles: a link on one that carried a burst
+        larger than its depth is warned about (:mod:`waveflow.hw.loop_check`) -- pysim passed that
+        burst whole, RTL stalls its writer word by word, and on a cycle that can deadlock where pysim
+        did not.  The hazards stay on :attr:`loop_depth_hazards`."""
+        super().post_sim()
+        if self.sub_comps and self.interfaces:
+            from waveflow.hw.loop_check import warn_loop_depth_hazards
+
+            self.loop_depth_hazards = warn_loop_depth_hazards(self)
+
     #: Set by :meth:`make_passive`: a parent's coarser pysim does this module's work.
     _sim_passive: ClassVar[bool] = False
 
@@ -297,6 +308,15 @@ class FreeRunMod(HwModule):
                 self._pending_firing["span"] = self.now - t0
                 self._pending_firing["end"] = self.now
                 self.firing_records.append(self._pending_firing)
+
+    def wait_any(self, *eps, begun: bool = False) -> ProcessGen[int]:
+        """Block until one of the stream slaves *eps* holds a burst; the index of the first that does.
+        The pysim form of a body that polls several inputs with ``empty()``: see
+        :func:`waveflow.hw.interface.wait_any`, and wait only on the inputs this firing can act on.
+        *begun*: a burst counts from its first word, for a body that copies as the words arrive."""
+        from waveflow.hw.interface import wait_any
+
+        return (yield from wait_any(*eps, begun=begun))
 
     def kernel_task(self):
         """The ``hls::task`` body descriptor: its C++ name, header, argument order, and template args.

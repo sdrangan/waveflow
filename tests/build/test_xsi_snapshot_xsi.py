@@ -1,7 +1,7 @@
 """XsiSnapshot against real RTL: what a no-change rebuild skips, and what a run costs
 (plans/incremental_xsi.md Stages 1-3).
 
-On ``mem_r_stream`` (``examples/interleaver``), the smallest of the gated kernels: 158 cycles, the
+On ``mem_r_stream`` (``examples/interleaver``), the smallest of the gated kernels: 151 cycles, the
 same count ``tests/examples/test_xsi_bfm.py`` holds the full runner to.  These gates check the
 incremental path does not change that, and that it is incremental:
 
@@ -30,7 +30,7 @@ from waveflow.build.xsi_snapshot import XsiSnapshot
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "interleaver"
 XSI = ROOT / "xsi"
-TOP, TB, CYCLES = "mem_r_stream", "mem_r_bfm_tb", 158
+TOP, TB, CYCLES = "mem_r_stream", "mem_r_bfm_tb", 151
 
 pytestmark = pytest.mark.xsi
 
@@ -131,7 +131,7 @@ MC_XSI = MC_ROOT / "xsi"
 def test_one_mem_copy_testbench_serves_every_workload(tmp_path):
     """Stage 4: the scenario's sizes ride in ``vectors/run.json``, so one compiled testbench runs
     every workload -- including one whose arena (33344 words) is larger than the 24640 it was
-    generated with.  Each run is checked bit-exact; the gate scenario keeps its 2908."""
+    generated with.  Each run is checked bit-exact; the gate scenario keeps its 3000."""
     from examples.mem_copy.mem_copy import (
         XSI_N, XSI_NUM_CMDS, check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles, xsi_jobs,
         xsi_run_cycles,
@@ -154,7 +154,39 @@ def test_one_mem_copy_testbench_serves_every_workload(tmp_path):
         with events.collect() as evs:
             out = snap.run(point / "vectors")
         assert [e["name"] for e in evs if e["kind"] == "phase"] == ["simulate"], f"n={n} rebuilt"
-        cyc = check_mem_copy_xsi_outputs(point, 2908 if default else None, jobs=xsi_jobs(n, k))
+        cyc = check_mem_copy_xsi_outputs(point, 3000 if default else None, jobs=xsi_jobs(n, k))
         assert cyc > 0
         if n == 1024:
             assert "WF_RUN_PARAM mem_words=33344" in out, out[-2000:]
+
+
+def test_every_mem_copy_completion_follows_its_write_response(tmp_path):
+    """The completion means "the copy is in memory", so each job's ``CopyResp`` must leave after the
+    job's last write response (B) on ``gmem1`` -- the writer's ``hls::fence``.  Without it, Vitis
+    2025.1 sent the completion while B was outstanding: 25 cycles early on every job of the gate
+    scenario (plans/mem_stream_followups.md, item 1).  Checked from a traced run, on the gate
+    scenario and on short jobs, where a single burst leaves the least room to hide the wait."""
+    from examples.mem_copy.mem_copy import (
+        XSI_N, XSI_NUM_CMDS, check_completion_after_write_response, write_mem_copy_xsi_bundles,
+        xsi_jobs, xsi_run_cycles,
+    )
+
+    if not (MC_ROOT / "mem_copy_proj" / "solution1" / "syn" / "verilog").is_dir():
+        pytest.skip("XSI gate prerequisite missing: no csynth RTL for mem_copy")
+    why = rtl_staleness(MC_ROOT, "mem_copy")
+    if why is not None:
+        pytest.skip(f"XSI gate prerequisite missing: {why}")
+    (MC_XSI / "rtl_mem_copy.f").write_text(render_rtl_f("mem_copy", MC_ROOT, stamp_sources=False),
+                                           encoding="utf-8")
+    traced = XsiSnapshot(MC_XSI, "mem_copy", "mem_copy_bfm_tb", trace=True)
+    traced.build()
+    vcd = MC_XSI / "mem_copy_trace.vcd"
+    for n, k in [(XSI_N, XSI_NUM_CMDS), (16, 4)]:
+        default = (n, k) == (XSI_N, XSI_NUM_CMDS)
+        point = tmp_path / f"n{n}x{k}"
+        write_mem_copy_xsi_bundles(point, jobs=xsi_jobs(n, k),
+                                   n_cycles=None if default else xsi_run_cycles(n, k))
+        vcd.unlink(missing_ok=True)
+        traced.run(point / "vectors")
+        order = check_completion_after_write_response(vcd, jobs=xsi_jobs(n, k))
+        assert len(order) == k

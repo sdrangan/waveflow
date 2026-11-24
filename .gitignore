@@ -421,3 +421,21 @@ board_build/
 
 # Local secrets: the agent runs' API credential (plans/dse_cg.md step 7); never committed
 /.secrets/
+# examples/ring_stub (plans/shared_kernel.md Stage 1): the bodies are src/; the rest is build output.
+examples/ring_stub/include/
+examples/ring_stub/gen/
+examples/ring_stub/*_proj/
+examples/ring_stub/xsi_work/
+examples/ring_stub/logs/
+# examples/os_filterbank (plans/shared_kernel.md Stage 5): the bodies are src/; the rest is build output.
+examples/os_filterbank/include/
+examples/os_filterbank/gen/
+examples/os_filterbank/*_proj/
+examples/os_filterbank/xsi_work/
+examples/os_filterbank/logs/
+# examples/cg_pool (plans/dse_matrix_sched.md 7a, E1): the bodies are src/; the rest is build output.
+examples/cg_pool/include/
+examples/cg_pool/gen/
+examples/cg_pool/*_proj/
+examples/cg_pool/xsi_work/
+examples/cg_pool/logs/

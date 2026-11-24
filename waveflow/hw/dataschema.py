@@ -3481,6 +3481,22 @@ class DataArray(DataSchema):
     def __abs__(self) -> "DataArray":
         return _datarray_abs(self)
 
+    # --- ordering, for fixed-point elements: exact, as ap_fixed compares (any two formats, signed
+    # or not) -- see waveflow.hw.fixpoint.lt.  Other kinds return NotImplemented, so Python raises
+    # the TypeError it always has.  No __eq__: == stays identity, so a DataArray stays hashable;
+    # fixpoint.eq / ne compare values.
+    def __lt__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "lt")
+
+    def __le__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "le")
+
+    def __gt__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "gt")
+
+    def __ge__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "ge")
+
     @classmethod
     def _normalized_shape(cls) -> tuple[int, ...]:
         max_shape = cls.max_shape
@@ -5530,6 +5546,11 @@ class VarDataArray(DataSchema):
         return "\n".join(lines)
 
 
+class MissingSchemaHeaderWarning(UserWarning):
+    """A schema's generated header includes a dependency's header that no step in the BuildDag
+    generates (:meth:`DataSchemaStep.resolve_deps`)."""
+
+
 class DataSchemaStep(Buildable):
     """Buildable that generates C++ include headers for a :class:`DataSchema` class.
 
@@ -5798,6 +5819,7 @@ class DataSchemaStep(Buildable):
         self._streamutils_output_dir = su_step.output_dir
         self.deps.append(su_step)
 
+        missing = []
         for dep_schema in self._schema.get_dependencies():
             dep_step = next(
                 (
@@ -5808,11 +5830,29 @@ class DataSchemaStep(Buildable):
             )
             if dep_step is not None:
                 self.deps.append(dep_step)
+            else:
+                missing.append(dep_schema)
+        # Every dependency get_dependencies() names has a generated header of its own that this one
+        # #includes, so a dependency with no step is a header that will not exist -- found only at
+        # csynth.  Refuse here, naming what to register (an array or a nested message's step).
+        # Warned, not refused: a step resolved on its own (a unit test), or a header another build
+        # wrote into the same include directory, is legitimate.
+        if missing:
+            import warnings
+
+            names = ", ".join(d.__name__ for d in missing)
+            warnings.warn(
+                f"{self.name}: {self._schema.__name__}'s header includes the generated header of "
+                f"{names}, but no DataSchemaStep in this BuildDag generates it -- unless another build "
+                f"writes it, csynth will not find it. Register DataSchemaStep(<schema>, ...) for each "
+                f"(list them in your schema classes, dependencies first).",
+                MissingSchemaHeaderWarning, stacklevel=2)
 
 
 __all__ = [
     "DataSchema",
     "DataSchemaStep",
+    "MissingSchemaHeaderWarning",
     "DataField",
     "IntField",
     "MemAddr",
@@ -5902,6 +5942,14 @@ def _datarray_abs(a: DataArray) -> DataArray:
     raise TypeError(
         f"abs() is not defined for {a.element_type.__name__} arrays (int, fixed or float only; "
         "a complex magnitude is not type-preserving).")
+
+
+def _datarray_compare(a: DataArray, b: Any, op: str) -> Any:
+    """``a < b`` and the like: exact fixed-point ordering, else ``NotImplemented``."""
+    if _elem_kind(a.element_type) != "fixed":            # complex is its own kind, never "fixed"
+        return NotImplemented
+    from waveflow.hw.fixpoint import _compare          # lazy import avoids a module cycle
+    return _compare(a, b, op)
 
 
 def _datarray_binop(a: DataArray, b: Any, op: str) -> DataArray:

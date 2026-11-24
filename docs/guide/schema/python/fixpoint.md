@@ -138,6 +138,37 @@ m.element_type.cpp_type   # 'ap_fixed<9, 5, AP_TRN, AP_WRAP>'
 to_real(m)                # array([8. , 3.5])
 ```
 
+## Comparison
+
+`a < b`, `a <= b`, `a > b` and `a >= b` on fixed-point arrays compare **exactly**, as `ap_fixed`
+does in C++. Any two formats can be compared, including a signed one with an unsigned one, which
+the arithmetic above refuses. The functions `lt`, `le`, `gt`, `ge`, `eq` and `ne` in
+[`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) do the same, and each side can be an
+array (broadcast as NumPy does) or a single `FixedField` value:
+
+```python
+from waveflow.hw.fixpoint import FixedField, eq, from_real
+
+Sample = FixedField.specialize(12, 1)                  # ap_fixed<12, 1>
+Thresh = FixedField.specialize(16, 4, signed=False)    # ap_ufixed<16, 4>
+
+x = from_real([0.0, 0.5, -0.75, 0.25, 0.3125], Sample)
+thresh = Thresh(int(0.25 * 2**12))                     # a stored integer, as a field read gives it
+x > thresh                 # array([False,  True, False, False,  True])
+eq(from_real([0.5], Sample), from_real([0.5], Thresh))   # array([ True]): equal in value
+```
+
+- **How.** Both stored integers are shifted to the finer of the two fraction lengths, in a signed
+  integer wide enough for either, and compared. There is no rounding and no float, so the result is
+  exact for every format, including 64-bit ones.
+- **Matching C++.** `x > thresh` on an `ap_fixed<12, 1>` and an `ap_ufixed<16, 4>` is the same
+  comparison.
+- **A plain number is refused.** `x > 0.25` raises a `TypeError`, because a plain number could be a
+  stored integer or a real value. Wrap a stored integer as `Thresh(stored)`, or quantize a real
+  value with `from_real(0.25, Thresh)`.
+- **`==` and `!=` are functions only.** On a `DataArray`, `==` stays identity, so arrays stay
+  hashable. Compare values with `eq` and `ne`.
+
 ## Integer-backed storage and the real view
 
 Storage is the **stored integer** (decision: integer-backed). A scalar `FixedField`'s
@@ -153,6 +184,12 @@ To quantize a **real** value into a format, use `from_real` (which returns a
 `DataArray[FixedField]` — see the vector page); assigning a non-integer real directly
 to a scalar `FixedField` raises, to keep "stored integer" and "real value"
 unambiguous.
+
+`from_real(values, T)` and `quantize(a, T)` return an array of `T` itself, so what `T` carries
+beyond its format comes along. For example, `T = FixedField.specialize(12, 1, include_dir="include")`
+tells the array utilities where to put their header. An operation such as `a * b` has a new format,
+and its result is an array of the plain class of that format. The array and file helpers
+(`write_array`, `write_uint32_file` and the rest) accept either class wherever the format is the same.
 
 `FixedField` subclasses `IntField` and reuses its W-bit word
 [serialization](./datalists.md) unchanged — the stored integer *is* the payload; only

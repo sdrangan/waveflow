@@ -1,4 +1,5 @@
 from enum import IntEnum
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -1500,3 +1501,24 @@ def test_vardataarray_cpp_clamps_len_to_len_max():
     assert decl.count("n_act = static_cast<int>(this->len) < len_max") == 3, \
         "all three loops (nwords_active, write_array, read_array) must clamp"
     assert decl.count("for (int i = 0; i < n_act; ++i)") == 3
+
+
+def test_a_dependency_header_no_step_generates_is_warned(tmp_path: Path):
+    """A schema whose header #includes a dependency's generated header (an array field's) with no
+    DataSchemaStep for that dependency: warned at resolve time, not found only at csynth."""
+    from waveflow.hw.dataschema import DataArray, MissingSchemaHeaderWarning
+
+    s32 = IntField.specialize(bitwidth=32, signed=True)
+    grid = DataArray.specialize(s32, max_shape=(8,))
+
+    class GridCmd(DataList):
+        elements = {"n": {"schema": s32, "description": "n"},
+                    "grid": {"schema": grid, "description": "grid"}}
+
+    su_step = StreamUtilsStep()
+    with pytest.warns(MissingSchemaHeaderWarning, match="Int32Array"):
+        GridCmd.as_buildable().resolve_deps([su_step])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", MissingSchemaHeaderWarning)
+        step = GridCmd.as_buildable()
+        step.resolve_deps([su_step, grid.as_buildable()])

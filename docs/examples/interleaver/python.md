@@ -6,7 +6,7 @@ summary: "Building the design in Python: four hand-written FreeRunMod leaves, th
 ---
 # Python Model
 
-This page builds the design in Python — the four hand-written [`FreeRunMod`](../../guide/systems/index.md)
+This page builds the design in Python — the four hand-written [`FreeRunMod`](../../guide/systems/kernels.md)
 leaves, the two framework mem-streams they compose with, and the composite that wires all six — and shows
 *how to write each kind of block* for a gather `Y[i] = X[P[i]]`. The whole design is
 `examples/interleaver/interleaver_inband.py`.
@@ -188,7 +188,7 @@ self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
 self.s_cmd  = self.rx.s_cmd
 self.m_in   = self.rstream.m_mem      # → gmem0
 self.m_out  = self.wstream.m_mem      # → gmem1
-self.s_done = self.wstream.s_done
+self.s_done = self.wstream.m_done
 ```
 
 Everything else about the graph is *derived* from `add_comp` / `add_if`, exactly as in `mem_copy`: which

@@ -1448,3 +1448,56 @@ def resample_signal(
 
     return sampled
 
+
+
+def handshake_cycles(
+        vcd_path,
+        handshakes : dict[str, tuple[str, str]],
+        clk : str = "ap_clk") -> dict[str, np.ndarray]:
+    """
+    The clock-edge indices at which each VALID/READY pair handshook, from a traced XSI run.
+
+    Signals are named by their **leaf** (``m_axi_gmem1_BVALID``), the way the top-level dumper
+    (:class:`~waveflow.build.trace_steps.AddVcdTopStep`) records the top's ports; when a leaf is
+    present at several depths the shallowest is taken.  Signals are read just before each edge
+    (:func:`clock_sample_times`), so a handshake is counted on the cycle the flops took it.
+
+    Parameters
+    ----------
+    vcd_path : str | Path
+        The VCD file.
+    handshakes : dict[str, tuple[str, str]]
+        ``{label: (valid_leaf, ready_leaf)}``, e.g. ``{"b": ("m_axi_gmem1_BVALID",
+        "m_axi_gmem1_BREADY")}``.
+    clk : str
+        Leaf name of the clock.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        ``{label: indices}``: ascending clock-edge indices, one per accepted beat.  The indices of
+        all labels share one clock, so they can be compared across channels.
+    """
+    vcd = VCDVCD(str(vcd_path), store_tvs=True)
+    parser = VcdParser(vcd)
+
+    def _leaf(name : str) -> str:
+        hits = sorted((s for s in vcd.signals if s.split(".")[-1].split("[")[0] == name), key=len)
+        if not hits:
+            raise ValueError(f"{vcd_path}: no signal named {name!r}")
+        return hits[0]
+
+    clk_name = _leaf(clk)
+    parser.add_signal(clk_name)
+    parser.sig_info[clk_name].get_values()
+    sample_times = clock_sample_times(extract_clock_times(parser.sig_info[clk_name]))
+
+    def _sampled(name : str) -> np.ndarray:
+        full = _leaf(name)
+        if full not in parser.sig_info:
+            parser.add_signal(full)
+            parser.sig_info[full].get_values()
+        return np.asarray(resample_signal(parser.sig_info[full], sample_times)).astype(np.int64)
+
+    return {label: np.flatnonzero(_sampled(v) & _sampled(r))
+            for label, (v, r) in handshakes.items()}

@@ -16,8 +16,10 @@ runs the vectorized integer op on the stored ``.val`` arrays via
 (to a declared format) is the only lossy step.  :func:`from_real` is the other
 quantizing entry point (loading real data into a format).
 
-Mixed signed/unsigned operands raise (a v1 limitation; promote to a common signed
-format first).  Any derived format wider than 64 bits raises at derivation.
+Mixed signed/unsigned operands raise in the arithmetic (a v1 limitation; promote to a common
+signed format first).  Any derived format wider than 64 bits raises at derivation.  The
+comparisons (:func:`lt` ... :func:`ne`, and ``<`` ... ``>=`` on a ``DataArray``) take any two
+formats, signed or not, and compare exactly, as ``ap_fixed`` does.
 """
 from __future__ import annotations
 
@@ -134,9 +136,17 @@ def _fmt(da: DataArray) -> Format:
     return da.element_type.get_format()
 
 
-def _wrap(stored: np.ndarray, fmt: Format) -> DataArray:
-    """Wrap a stored-int array + format into a DataArray[FixedField<fmt>]."""
-    cls = FixedField.specialize(fmt.W, fmt.int_bits, fmt.signed, fmt.q_mode, fmt.o_mode)
+def _wrap(stored: np.ndarray, fmt: Format, cls: type[FixedField] | None = None) -> DataArray:
+    """Wrap a stored-int array + format into a DataArray[FixedField<fmt>].
+
+    *cls* is the class the caller declared, when the result has its format (:func:`from_real`,
+    :func:`quantize`): the array keeps it, and with it what the class carries beyond the format
+    (``include_dir``, say).  Without it -- an op's derived format -- the cached class of the format.
+    """
+    if cls is None:
+        cls = FixedField.specialize(fmt.W, fmt.int_bits, fmt.signed, fmt.q_mode, fmt.o_mode)
+    elif cls.get_format() != fmt:
+        raise ValueError(f"{cls.__name__} is {cls.cpp_type}, not the result's format {fmt}")
     arr = np.asarray(stored)
     shape = arr.shape if arr.shape else (1,)
     return DataArray.specialize(cls, max_shape=shape)(arr.reshape(shape))
@@ -144,9 +154,12 @@ def _wrap(stored: np.ndarray, fmt: Format) -> DataArray:
 
 # --- real <-> fixed entry points ----------------------------------------------
 def from_real(values: Any, fixed_cls: type[FixedField]) -> DataArray:
-    """Quantize real value(s) into ``DataArray[fixed_cls]`` (the load-data path)."""
+    """Quantize real value(s) into ``DataArray[fixed_cls]`` (the load-data path).
+
+    The array's element type is *fixed_cls* itself, not another class of the same format.
+    """
     stored = fixputils.quantize_real(np.asarray(values, dtype=np.float64), fixed_cls.get_format())
-    return _wrap(stored, fixed_cls.get_format())
+    return _wrap(stored, fixed_cls.get_format(), fixed_cls)
 
 
 def to_real(da: DataArray) -> np.ndarray:
@@ -210,6 +223,81 @@ def fixed_sum(a: DataArray, axis: int | None = None) -> DataArray:
 
 
 def quantize(a: DataArray, target: type[FixedField]) -> DataArray:
-    """Requantize to a declared ``target`` format — the only lossy operation."""
+    """Requantize to a declared ``target`` format — the only lossy operation.
+
+    The result's element type is *target* itself, not another class of the same format.
+    """
     stored = fixputils.quantize(np.asarray(a), _fmt(a), target.get_format())
-    return _wrap(stored, target.get_format())
+    return _wrap(stored, target.get_format(), target)
+
+
+# --- comparisons ------------------------------------------------------------------
+# ap_fixed compares exactly: the two binary points are aligned and the values compared, whatever
+# the two formats -- widths, integer bits, signedness.  So does this: both operands' stored
+# integers are shifted to the finer of the two fraction lengths, in a signed integer wide enough
+# for either (int64 when that fits, Python ints otherwise), and compared.  No rounding, no floats,
+# and a signed operand compares with an unsigned one -- which the arithmetic above refuses, because
+# there a result format must be derived and numpy would mix int64 with uint64 into float64.
+
+_COMPARE = {"lt": np.less, "le": np.less_equal, "gt": np.greater, "ge": np.greater_equal,
+            "eq": np.equal, "ne": np.not_equal}
+
+
+def _cmp_operand(x: Any, side: str) -> tuple[np.ndarray, Format]:
+    if isinstance(x, DataArray) and isinstance(x.element_type, type) \
+            and issubclass(x.element_type, FixedField):
+        return np.asarray(x.val), x.element_type.get_format()
+    if isinstance(x, FixedField):
+        return np.asarray(x.val), type(x).get_format()
+    raise TypeError(
+        f"a fixed-point comparison needs a FixedField array or value on the {side}, got "
+        f"{type(x).__name__}.  A plain number is ambiguous (a stored integer, or a real value?): "
+        "wrap a stored integer as T(stored), or quantize a real with from_real(value, T).")
+
+
+def _compare(a: Any, b: Any, op: str) -> np.ndarray:
+    va, fa = _cmp_operand(a, "left")
+    vb, fb = _cmp_operand(b, "right")
+    frac = max(fa.frac_bits, fb.frac_bits)
+    sa, sb = frac - fa.frac_bits, frac - fb.frac_bits
+    # Bits a signed container needs for each aligned operand (an unsigned one, one more for the sign).
+    need = max(fa.W + sa + (not fa.signed), fb.W + sb + (not fb.signed))
+    dtype: Any = np.int64 if need <= 64 else object
+    xa = va.astype(dtype) << sa
+    xb = vb.astype(dtype) << sb
+    return _COMPARE[op](xa, xb)
+
+
+def lt(a: Any, b: Any) -> np.ndarray:
+    """``a < b``, element-wise and exact, as ``ap_fixed`` compares: any two formats, signed or not.
+
+    Operands are ``DataArray[FixedField]`` (broadcast as numpy does) or scalar ``FixedField``
+    values.  Also spelled ``a < b`` on a ``DataArray``; ``==`` / ``!=`` are only the functions
+    :func:`eq` / :func:`ne`, because a ``DataArray``'s ``==`` stays identity (it is hashable).
+    """
+    return _compare(a, b, "lt")
+
+
+def le(a: Any, b: Any) -> np.ndarray:
+    """``a <= b``, exact (see :func:`lt`)."""
+    return _compare(a, b, "le")
+
+
+def gt(a: Any, b: Any) -> np.ndarray:
+    """``a > b``, exact (see :func:`lt`)."""
+    return _compare(a, b, "gt")
+
+
+def ge(a: Any, b: Any) -> np.ndarray:
+    """``a >= b``, exact (see :func:`lt`)."""
+    return _compare(a, b, "ge")
+
+
+def eq(a: Any, b: Any) -> np.ndarray:
+    """Equal in value, exact: ``0.5`` in ``fixed<12, 1>`` equals ``0.5`` in ``ufixed<16, 4>``."""
+    return _compare(a, b, "eq")
+
+
+def ne(a: Any, b: Any) -> np.ndarray:
+    """Not equal in value, exact (see :func:`eq`)."""
+    return _compare(a, b, "ne")

@@ -20,19 +20,16 @@ it into a build.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
 
-from waveflow.build.build import Buildable, BuildConfig
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
+from waveflow.streams.body_step import StreamBodyStep
 from waveflow.utils.burst_io import StreamBurst
-
-_SRC_DIR = Path(__file__).resolve().parent / "src"
 
 __all__ = ["StreamBroadcast", "StreamBroadcastStep"]
 
@@ -89,23 +86,8 @@ class StreamBroadcast(FreeRunMod):
         return {"s_in": [StreamBurst(rng.integers(0, top, n, dtype=np.uint64), True) for n in lengths]}
 
 
-class StreamBroadcastStep(Buildable):
+class StreamBroadcastStep(StreamBodyStep):
     """Copy ``stream_broadcast_task.h`` into a build (``output_dir`` relative to the build root) --
     framework code, shipped from ``waveflow/streams/src`` as the RF blocks' bodies are."""
 
-    def __init__(self, output_dir: str | Path = ".") -> None:
-        super().__init__()
-        self._output_dir = Path(output_dir)
-
-    @property
-    def output_dir(self) -> Path:
-        return self._output_dir
-
-    @property
-    def build_outputs(self) -> dict[str, Path]:
-        return {"stream_broadcast_task": self._output_dir / "stream_broadcast_task.h"}
-
-    def generate(self, key: str, config: BuildConfig) -> str:
-        if key != "stream_broadcast_task":
-            raise KeyError(f"Unknown StreamBroadcastStep output key: {key!r}")
-        return (_SRC_DIR / "stream_broadcast_task.h").read_text(encoding="utf-8")
+    KEY = "stream_broadcast_task"

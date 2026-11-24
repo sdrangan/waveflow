@@ -45,8 +45,8 @@ synthesis modes differ in time, not in area:
 
 | markov, xc7z020, 10 ns | LUT | Vivado seconds, cold | after a one-device change (slowest) |
 |---|---:|---:|---:|
-| global + `opt_design` | 6,228 | 132 s | 132 s |
-| per device, linked | 6,250 (+0.35%) | 226 s | 84 s |
+| global + `opt_design` | 6,233 | 132 s | 132 s |
+| per device, linked | 6,256 (+0.37%) | 226 s | 84 s |
 
 (markov's [route comparison](../../examples/markov/synth.md#routes) has the parts, the link term and
 the figure; the seconds are Vivado's own run timers, start-up excluded.)
@@ -61,7 +61,7 @@ the figure; the seconds are Vivado's own run timers, start-up excluded.)
 
 **The default is global synthesis** (`system_synth`'s `synth_route="global"`, and the block design's
 `synth_checkpoint_mode` set to `None`). Losing optimization across device boundaries costs only
-0.35% LUT on markov, so either mode would do for area. Global wins on the measure that decides a
+0.37% LUT on markov, so either mode would do for area. Global wins on the measure that decides a
 bitstream build, which is cold: one run is faster than several that each pay a run's fixed
 overhead.
 Per device pays off when one part changes and the rest does not, which is a design-space search's

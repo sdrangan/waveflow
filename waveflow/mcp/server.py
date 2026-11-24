@@ -23,7 +23,7 @@ Waveflow is recent and specialised, so assume you do not know its API. Do not gu
 - **Read.** `waveflow_get_doc` for a whole page, `waveflow_list_examples` and `waveflow_get_example` for the reference designs, `waveflow_find_usage` to see a name used in real code. Search returns pointers; read whole files before writing anything that depends on them.
 - **Schemas.** `waveflow_get_components` for the vocabulary, `waveflow_validate_schema` to check one you drafted.
 
-Two rules that hold everywhere: anything a tool tags as **generated** is code-generation output that must never be hand-edited, and headers, footers and sample bursts are always serialized through their schema or the Waveflow array utilities, never packed into words by hand. If the machinery cannot express something, stop and report it rather than working around it.
+Two rules that hold everywhere: anything a tool tags as **generated** is code-generation output that must never be hand-edited, and headers, footers and sample bursts are always serialized through their schema or the Waveflow array utilities, never packed into words by hand. If the machinery cannot express something, do not work around it: report the gap and propose the extension to Waveflow that would close it (what it is, where it would live, its model, HLS body and tests). Waveflow is early and meant to grow.
 """
 
 def build_mcp(

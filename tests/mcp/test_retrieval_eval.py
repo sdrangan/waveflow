@@ -40,7 +40,11 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
     # --- the flow (Flow Overview, plans/guide_system_first.md Stage 7) ----
     ("build a system", ("docs/guide/systems/",)),
     ("two levels of simulation Simulation and HwSystem", ("docs/guide/systems/",)),
-    ("design the DUT modules interfaces and messages", ("docs/guide/systems/dut.md",)),
+    # the concept pages (2026-11-20 restructure): Architecture, Kernels, Devices
+    ("three levels of simulation golden pysim RTL", ("docs/guide/systems/index.md",)),
+    ("a kernel is a FreeRunMod whose interfaces are all streams", ("docs/guide/systems/kernels.md",)),
+    ("adaptor device HLS top sub-top", ("docs/guide/systems/devices.md",)),
+    ("design the DUT golden first kernels messages", ("docs/guide/systems/dut.md",)),
     ("a message is a burst closed by TLAST", ("docs/guide/systems/streams.md",)),
     ("status stream fatal error command response", ("docs/guide/systems/command_response.md",)),
     ("run a module alone in its harness", ("docs/guide/systems/pysim.md", "docs/guide/flows/units")),

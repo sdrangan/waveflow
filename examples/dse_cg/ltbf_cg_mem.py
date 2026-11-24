@@ -222,7 +222,7 @@ class LtbfCgMemAdaptor(DseAdaptor):
                 ("the systolic engine", "docs/guide/dsp/systolic/systolic_engine_mem.md"),
                 ("the vector unit", "docs/guide/dsp/vecunit/index.md"),
                 ("the processor model", "docs/guide/cpu/index.md"),
-                ("building a system", "docs/guide/systems/index.md"),
+                ("building a system", "docs/guide/systems/flow.md"),
                 ("the system", f"{ex}/hw/system.py"),
                 ("the job graphs", f"{ex}/hw/graphs.py"),
                 ("the scheduler", f"{ex}/hw/sched.py"),

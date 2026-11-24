@@ -1,6 +1,6 @@
 ---
 title: Design-space exploration
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 8
 audience: python
 api: [ParamGrid, SweepRunner, sweep_cli, ResourceModel, HwParam]
@@ -49,8 +49,8 @@ Built: parameterized modules, sweeps, calibrated timing composition, resource mo
 per-device synthesis. Not yet a framework tool: the exploration loop itself -- choosing the next points
 from the models, and deciding which to confirm by building. Today an example writes that loop.
 
-**The worked case is [mimo_cg](../../examples/mimo_cg/index.md)**: a conjugate-gradient detector whose
+**The worked case is [mimo_cg](../../examples/mimo_cg/detector.md)**: a conjugate-gradient detector whose
 study swept accuracy against cost, priced points with calibrated cost models, and checked its exploration
 against a 1,440-build brute force.
 
-This is the last step of the flow. Back to the [Flow Overview](index.md).
+This is the last step of the flow. Back to the [Flow Overview](flow.md).

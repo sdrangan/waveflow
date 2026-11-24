@@ -71,6 +71,8 @@ Three properties matter in practice:
 - [Frames](./frames.md): how an assistant asked for an accelerator chooses an
   architecture from the spec and follows its process -- the three frames, the stop for review
   between specification and build, and how to add a frame.
+- [Agent Skills](./skills.md): short instruction folders an assistant loads
+  when a task matches, installed into a project with `waveflow skills install`.
 - [Blind Testing the MCP Server](./blind.md): run a fresh agent on a spec
   with nothing but the Waveflow tools, and get a report of what it did.
 - [VS Code Extension](./vscode.md): building the Waveflow VS Code extension.

@@ -963,7 +963,8 @@ def _instance(k: KernelRtl, spec: SystemTopSpec, dw: int, aw: int, idw: int) -> 
     prefix_port = {p.xsi_prefix: p.name for p in k.ports if p.kind in ("maxi_read", "maxi_write")}
     si_sigs = {name for name, _w, _m in axi_signals(dw, aw, idw)}
     scalars = {n: (w, v) for n, w, v in k.scalars}
-    conns = []
+    conns: list[str] = []
+    pads: list[str] = []
     for d, name in kernel_pins(k):
         tie = "0" if d == "input" else ""
         if name in ("ap_clk", "ap_rst_n"):
@@ -992,8 +993,34 @@ def _instance(k: KernelRtl, spec: SystemTopSpec, dw: int, aw: int, idw: int) -> 
             port, _, sig = name.rpartition("_")
             if port not in ports or port not in net_of:
                 raise LoweringError(f"{k.inst}: pin {name!r} belongs to no wired stream port")
-            conns.append(f".{name}({net_of[port]}_{sig})")
-    return f"  {k.module} {k.inst} (\n    " + ",\n    ".join(conns) + "\n  );"
+            net = net_of[port]
+            w = _narrow_bits(ports[port], sig, dw)
+            if d == "output" and w:
+                # A kernel output narrower than the system's stream nets (a 32-bit status beside
+                # 184-bit data): it drives the low bits; the rest are driven 0 below, never left X.
+                conns.append(f".{name}({net}_{sig}[{w - 1}:0])")
+                pads.append(f"  assign {net}_{sig}[{_sig_width(sig, dw) - 1}:{w}] = "
+                            f"{_sig_width(sig, dw) - w}'d0;")
+            else:
+                conns.append(f".{name}({net}_{sig})")
+    return (f"  {k.module} {k.inst} (\n    " + ",\n    ".join(conns) + "\n  );"
+            + "".join("\n" + p for p in pads))
+
+
+def _sig_width(sig: str, dw: int) -> int:
+    """The width of stream signal *sig* on a ``dw``-bit net."""
+    return dw if sig == "TDATA" else dw // 8 if sig in ("TKEEP", "TSTRB") else 1
+
+
+def _narrow_bits(port, sig: str, dw: int) -> int:
+    """How many bits of stream signal *sig* an AXIS *port* narrower than the ``dw``-bit nets has, or 0
+    when it is as wide (or its width is not known).  Vitis rounds TDATA up to whole bytes."""
+    if port.kind not in ("axis_in", "axis_out") or not port.width:
+        return 0
+    data = -(-int(port.width) // 8) * 8
+    if data >= dw:
+        return 0
+    return {"TDATA": data, "TKEEP": data // 8, "TSTRB": data // 8}.get(sig, 0)
 
 
 def _axis_ports(net: str, dw: int, drives: bool) -> list[str]:

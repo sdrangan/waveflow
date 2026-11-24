@@ -70,7 +70,7 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
         raise ValueError(f"no mem-stream top for {comp_class!r}")
     leaf = comp_class(name=comp_class.cpp_kernel_name, sim=Simulation(), mem_dwidth=width)
     # The command struct header the generated top must include; the schema knows its own filename.
-    leaf.cmd_headers = (leaf._cmd_cls.resolved_include_filename(),)
+    leaf.cmd_headers = (leaf.Cmd.resolved_include_filename(),)
     return composite_top_spec(leaf, width=width)
 
 

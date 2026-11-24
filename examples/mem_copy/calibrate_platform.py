@@ -15,9 +15,9 @@ Provenance of the numbers (all from the closed mem_copy calibration loop, gated 
   from the committed XSI trace at 512 words): write ``nwords + 2·(num_trans-1)``, read
   ``nwords + (num_trans-1)`` cycles.  The idealised XSI BFM memory, hence the ``bfm`` in the name — a
   real DDR controller would widen it.
-* **Writer residual** — the writer's ap_done-anchored RTL firing span is 183 cycles at n=128, 615 at
+* **Writer residual** — the writer's ap_done-anchored RTL firing span is 187 cycles at n=128, 619 at
   n=512 (measured).  Fit against a pysim run that already charges the bus law, so the residual is the
-  writer's own *control* cost (~22 cycles), not the bus term.
+  writer's own *control* cost (~13 cycles), not the bus term nor the fence (``MemWStream.fence_cycles``).
 
 The pysim side is run live here (no toolchain); only the RTL spans are measured constants.
 """
@@ -36,7 +36,7 @@ from waveflow.hw.clock import Clock
 #: The writer task body id — the component key its firings carry and the shared-library subdir.
 COMPONENT = "mem_w_stream_framed_done_task"
 #: Measured writer RTL firing span (cycles), ap_done-anchored, per n_words.
-RTL_SPAN = {128: 183.0, 512: 615.0}
+RTL_SPAN = {128: 187.0, 512: 619.0}
 #: Sweep sizes and the job count each was measured with (more small jobs to exercise steady state).
 SWEEP = {128: 16, 512: 4}
 

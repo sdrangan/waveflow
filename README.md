@@ -12,4 +12,8 @@ Modern AI models can generate individual hardware modules, but they struggle to 
 
 ## Documentation
 
-Documentation will be published on GitHub Pages once the repository becomes public. For now, all documentation is available in the `docs/` directory of this repository.
+The documentation is at <https://sdrangan.github.io/waveflow/>; its source is the `docs/` directory of this repository.
+
+## Using Waveflow with an AI coding agent
+
+Clone the repository, install it editable (`pip install -e ".[dev]"` in a virtual environment), then run `waveflow init` in your own project folder. That gives any agent (Claude Code, VS Code chat, Codex, ...) the Waveflow MCP server, the Waveflow skills and an `AGENTS.md` telling it how to look Waveflow up. See [Installing the MCP Server](docs/guide/ai_tooling/mcp_setup.md).

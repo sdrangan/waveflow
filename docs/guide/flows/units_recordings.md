@@ -90,4 +90,4 @@ arrived = np.fromfile(vdir / "s_done" / "cycles.bin", dtype="<u8")       # when 
 mem_copy's harness at RTL (Vitis/Vivado 2025.1): its 16 commands are 32 words, accepted from cycle 2,
 the last at cycle 2361 -- the driver offers a word every cycle, so the spread is the kernel's
 back-pressure -- and the last completion
-lands at 2908 ([`test_mem_copy_unit_xsi.py`](../../../tests/examples/test_mem_copy_unit_xsi.py)).
+lands at 3000 ([`test_mem_copy_unit_xsi.py`](../../../tests/examples/test_mem_copy_unit_xsi.py)).

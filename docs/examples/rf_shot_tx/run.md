@@ -56,8 +56,11 @@ statements rather than two.
 `SOLUTION_CONFIG` carries it, and it is not boilerplate. The player holds four `static`s and **writes
 before it reads** — writing without being asked is what *the side that cannot stop* means — and an
 `hls::task` in that shape advances during reset. Every static carries `#pragma HLS reset` *and* the
-solution needs `config_rtl -reset state`, which is what actually closed it under Vitis 2025.1. The
-loader opens with a blocking read and inherits none of this.
+solution sets `config_rtl -reset state`, which resets every state register, pipeline registers
+included; the RTL gates pass with both. (The pragmas alone do reset the statics they name, under
+Vitis 2025.1, despite csynth's "power-on initialization" warning, which it prints either way; whether
+they alone would close the trap was never measured.) The loader opens with a blocking read and
+inherits none of this.
 
 ## The figure rungs need no toolchain, deliberately
 

@@ -154,16 +154,16 @@ On markov (xc7z020, 10 ns):
 | | LUT | FF | BRAM18 |
 |---|---:|---:|---:|
 | gen device, alone | 2,299 | 2,560 | 2 |
-| chain device, alone | 3,028 | 3,934 | 0 |
+| chain device, alone | 3,034 | 3,936 | 0 |
 | memory, alone | 103 | 39 | 2 |
 | top (crossbar and glue), alone | 1,292 | 808 | 0 |
 | link term | −472 | −242 | 0 |
-| **linked** | **6,250** | **7,099** | **4** |
-| global synthesis + `opt_design` | 6,228 | 7,091 | 4 |
+| **linked** | **6,256** | **7,101** | **4** |
+| global synthesis + `opt_design` | 6,233 | 7,092 | 4 |
 
 The parts plus the link term equal the linked total exactly. The link term is measured, not assumed,
 and it is mostly the crossbar's: 1,292 LUT out of context, against 849 in context. Against the global
-synthesis with the same `opt_design`, synthesizing apart costs 22 LUT (0.35%) and 8 FF. The memory
+synthesis with the same `opt_design`, synthesizing apart costs 23 LUT (0.37%) and 9 FF. The memory
 needs one RAMB36 even alone, because its idle port B is tied off inside its own module.
 
 The time is what changes:

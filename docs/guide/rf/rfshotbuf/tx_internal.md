@@ -374,9 +374,12 @@ the table above.
 
 **An `hls::task` that WRITES before it READS advances during reset.** An owner cannot avoid that
 shape — writing without being asked is what *the side that cannot stop* means — so `ShotTxPlayer`'s
-statics all carry `#pragma HLS reset` (`shot_tx_player_task.h:102-119`, five of them since `absolute_index` added `pending`) **and** the build needs
-`config_rtl -reset state`, which is what actually closed it under Vitis 2025.1. The solution config
-lives in the example's build (`examples/rf_shot_tx/rf_shot_tx_build.py`, `SOLUTION_CONFIG`).
+statics all carry `#pragma HLS reset` (`shot_tx_player_task.h:102-119`, five of them since `absolute_index` added `pending`) **and** the build sets
+`config_rtl -reset state`, which resets every state register, the pipeline registers included; the
+RTL gates pass with both. The pragmas do reset the statics they name (Vitis 2025.1; csynth's
+"power-on initialization" warning is printed whether or not they took), but whether they alone would
+close the trap here was never measured. The solution config lives in the example's build
+(`examples/rf_shot_tx/rf_shot_tx_build.py`, `SOLUTION_CONFIG`).
 
 `ShotTxLoader` opens with a **blocking** read of the header (`shot_tx_loader_task.h:99`), so at reset
 its input is empty and it stalls. It inherits none of this. `busy` carries the pragma anyway, because

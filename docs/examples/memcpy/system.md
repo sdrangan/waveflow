@@ -135,4 +135,4 @@ page.
 ## Next
 
 [RTL simulation](./rtlsim.md) — run the system flow end to end, compare the RTL's recordings with
-pysim's, and check the golden at 2908 cycles.
+pysim's, and check the golden at 3000 cycles.

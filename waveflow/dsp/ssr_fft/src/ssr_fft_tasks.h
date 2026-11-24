@@ -124,6 +124,114 @@ void ssr_fft_stage_task(hls::stream<ap_uint<C::in_e::W> >& s_in,
     }
 }
 
+// ---- The direction chosen per frame (SsrFft(direction="runtime"), plans/shared_kernel.md Stage 3) ----
+//
+// The inverse tables are the forward ones conjugated, exactly (waveflow.dsp.ssr_fft.model).  So the
+// inverse stage is the forward stage with two moves: butterfly outputs 1 and 3 swap
+// (W_4^{-qj} = W_4^{(4-q)j}: the same products, landing on the other output), and the rotation's
+// twiddle has its imaginary part negated (exact in tw_t).  Every product and truncation is then the
+// inverse build's -- bit for bit -- with the forward ROMs only.  The fixed-direction bodies above are
+// untouched.
+template <typename C>
+inline void ssr_butterfly_dir(const typename C::in_e::value_type x[R], typename C::out_e::value_type y[R],
+                              int m, bool inv) {
+#pragma HLS INLINE
+    typedef typename C::in_e::value_type::value_type in_t;
+    typedef typename C::prod_t prod_t;
+    typedef typename C::acc1_t acc1_t;
+    typedef typename C::acc2_t acc2_t;
+    typedef typename C::out_t out_t;
+    typedef typename C::tw_t tw_t;
+    std::complex<out_t> n[R];
+    for (int q = 0; q < R; q++) {
+#pragma HLS UNROLL
+        std::complex<prod_t> p[R];
+        for (int j = 0; j < R; j++) {
+#pragma HLS UNROLL
+            std::complex<tw_t> w(C::ex_re((q * j) % R), C::ex_im((q * j) % R));
+            p[j] = ssr_cmul<in_t, tw_t, prod_t>(x[j], w);
+        }
+        std::complex<acc1_t> a = ssr_cacc<prod_t, acc1_t>(p[0], p[1]);
+        std::complex<acc1_t> b = ssr_cacc<prod_t, acc1_t>(p[2], p[3]);
+        std::complex<acc2_t> s = ssr_cacc<acc1_t, acc2_t>(a, b);
+        n[q] = std::complex<out_t>(out_t(s.real()), out_t(s.imag()));
+    }
+    for (int q = 0; q < R; q++) {
+#pragma HLS UNROLL
+        const std::complex<out_t> v = (inv && (q & 1)) ? n[R - q] : n[q];
+        if (C::ROTATE) {
+            const tw_t ti = C::tw_im(m * q);
+            std::complex<tw_t> w(C::tw_re(m * q), inv ? tw_t(-ti) : ti);
+            y[q] = ssr_cmul<out_t, tw_t, out_t>(v, w);
+        } else {
+            y[q] = v;
+        }
+    }
+}
+
+// One word to every direction FIFO.
+inline void ssr_put_dir(const ap_uint<8>&) {}
+template <typename T, typename... TD>
+inline void ssr_put_dir(const ap_uint<8>& d, T& s, TD&... rest) {
+#pragma HLS INLINE
+    s.write(d);
+    ssr_put_dir(d, rest...);
+}
+
+// Bits to hold 0 .. N-1 (at least 1).
+template <int N>
+struct ssr_bits;
+
+// The input register of a runtime-direction build: ssr_fft_pass_task, plus one direction word a
+// frame.  At a frame's first word it also reads s_dir and writes one copy to every stage's FIFO
+// (m_dir...), before the word itself, so the copy is always waiting when the frame reaches the
+// stage.  It reads only when both are there (no blocking read at a loop head).
+template <typename E, int NW, typename... TD>
+void ssr_fft_dir_in_task(hls::stream<ap_uint<E::W> >& s_in, hls::stream<ap_uint<8> >& s_dir,
+                         hls::stream<ap_uint<E::W> >& s_out, TD&... m_dir) {
+#pragma HLS INLINE
+    static ap_uint<ssr_bits<NW>::value> w = 0;     // word within the frame
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        const bool head = (w == 0);
+        if (!s_in.empty() && (!head || !s_dir.empty())) {
+            if (head) ssr_put_dir(s_dir.read(), m_dir...);
+            s_out.write(s_in.read());
+            w = (w == NW - 1) ? 0 : (int)w + 1;
+        }
+    }
+}
+
+// A runtime-direction stage: ssr_fft_stage_task, with the frame's direction read at its first word.
+template <typename C, int NW>
+void ssr_fft_stage_dir_task(hls::stream<ap_uint<C::in_e::W> >& s_in, hls::stream<ap_uint<8> >& s_dir,
+                            hls::stream<ap_uint<C::out_e::W> >& s_out) {
+#pragma HLS INLINE
+    static int m = 0;                              // butterfly index within the sub-transform
+    static ap_uint<ssr_bits<NW>::value> w = 0;     // word within the frame
+    static bool inv = false;                       // this frame's direction
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        const bool head = (w == 0);
+        if (!s_in.empty() && (!head || !s_dir.empty())) {
+            bool iv = inv;
+            if (head) {
+                iv = s_dir.read()[0];
+                inv = iv;
+            }
+            typename C::in_e::value_type x[R];
+#pragma HLS ARRAY_PARTITION variable = x complete
+            typename C::out_e::value_type y[R];
+#pragma HLS ARRAY_PARTITION variable = y complete
+            C::in_e::read(s_in, x);
+            ssr_butterfly_dir<C>(x, y, m, iv);
+            C::out_e::write(s_out, y);
+            m = (m == C::MC - 1) ? 0 : m + 1;
+            w = (w == NW - 1) ? 0 : (int)w + 1;
+        }
+    }
+}
+
 // A delay line of N ticks: read the oldest entry, write the newest in its place.
 template <typename T, int N>
 struct ssr_delay {

@@ -252,7 +252,7 @@ _CONTEXT_ATTRS = frozenset({
     "axi_burst",                                        # MMIFMaster
     "turnaround",                                       # MMIFSlave
     "mm_device",          # a view/adaptor's back-reference to its MmSlaveDevice (an address-map walk)
-    # MemWStream.done_framed only chooses whether pysim's s_done carries TLAST (the HLS port never
+    # MemWStream.done_framed only chooses whether pysim's m_done carries TLAST (the HLS port never
     # does); the endpoint's own has_tlast still tells two such writers apart.  Adding the field moved
     # every FirBlock key -- caught by test_key_stability, again.
     "done_framed",

@@ -28,3 +28,6 @@ vendor library and rebuild what is not.
   run on it as programs.
 - [Retired Components](legacy/index.md) -- `SystolicUnit` and `CgVectorUnit`, kept only for the
   MIMO-CG study; not for new designs.
+
+Every reusable block, these and the rest (memory, the RF converters, the processor), with the state of
+its timing and resource models, is listed on [Library blocks and their models](../systems/library.md).

@@ -206,6 +206,32 @@ def unpack_samples(words, word_bw: int, samp_per_word: int) -> np.ndarray:
     return np.asarray(getattr(out, "val", out), dtype=np.uint64).ravel()
 
 
+def _word_period(depth: int, samp_per_word: int) -> int:
+    """Words after which the buffer address of a running sample index repeats.
+
+    The address of the word holding sample index ``i`` is ``(i // spw) & (depth - 1)``, with ``i``
+    wrapping at ``2**IDX_BW``.  Consecutive words therefore take consecutive addresses, wrapping at
+    ``depth`` -- unless the counter wraps first, which it does when ``depth * spw > 2**IDX_BW``: then
+    the addresses wrap at ``2**IDX_BW // spw`` and the top of the buffer is never used.  Only
+    power-of-two ``depth`` and ``samp_per_word`` are enforced, so both cases are possible.
+    """
+    return min(int(depth), (1 << IDX_BW) // int(samp_per_word))
+
+
+def _word_runs(addr: int, count: int, period: int):
+    """The contiguous runs that *count* consecutive words starting at *addr* occupy.
+
+    Yields ``(addr, offset, n)``: *n* words from *offset* in the sequence land at buffer addresses
+    ``addr .. addr+n-1``.  One run, or more when the sequence wraps past *period*.
+    """
+    off = 0
+    while off < count:
+        n = min(count - off, period - addr)
+        yield addr, off, n
+        off += n
+        addr = 0
+
+
 # ---------------------------------------------------------------------------
 # The two tasks
 # ---------------------------------------------------------------------------
@@ -338,16 +364,14 @@ class RfSampBufIngress(FreeRunMod):
         non-blockingly (``write_nb``) exactly so a stale position never costs a sample, so the twin
         keeps :meth:`~waveflow.hw.interface.StreamIFMaster.offer`.  A dropped progress update is
         correct rather than tolerated: only the newest position means anything.
+
+        **The burst is stored as a block, not word by word** -- see :meth:`_store`.  No ``yield``
+        separates the words, so nothing can observe the difference, and the loop it replaced was
+        half of a long run's time (``plans/rf_samp_buf_pysim_speed.md``).
         """
         words = yield from self.s_in.get()
         raw = np.asarray(words).ravel()
-
-        mask = int(self.depth) - 1
-        spw = int(self.samp_per_word)
-        wrap = 1 << IDX_BW
-        for x in raw:
-            self.buf_w.write((self.wr // spw) & mask, int(x))
-            self.wr = (self.wr + spw) % wrap
+        self._store(raw)
 
         # THE RATE CONTRACT, made of time rather than of a comment.  One word per cycles_per_word
         # fabric cycles; the next `get` therefore happens that much later, and a converter offering
@@ -359,6 +383,41 @@ class RfSampBufIngress(FreeRunMod):
         # same reason.  What it drops is counted on the interface, and a nonzero count there is
         # normal rather than a fault -- only the newest position has meaning.
         yield from self.wr_out.offer(np.array([self.wr], dtype=np.uint64))
+
+    def _store(self, raw: np.ndarray) -> None:
+        """Write the burst *raw* at the write pointer and advance it -- the RTL's per-word loop
+        (``buf_w[(wr / SPW) & (N - 1)] = x; wr += SPW``) as one numpy assignment per contiguous run.
+
+        Exactly what that loop leaves behind, and the three ways a block write could differ are each
+        handled rather than assumed away:
+
+        - **Addresses.**  Each word goes where the loop would put it; the runs wrap at
+          :func:`_word_period`, which is ``depth`` unless the sample counter wraps first.
+        - **A burst longer than the buffer.**  Only its last ``period`` words survive the loop, so
+          only those are written (a numpy assignment through repeated addresses would not say which
+          value lands).
+        - **A value that does not fit the word** is refused, as the per-word store refused it.  A
+          block assignment into the narrower storage dtype would wrap it silently instead.
+
+        :meth:`~waveflow.hw.bram.BramIFMaster.array_ref` keeps the port's direction check and the
+        memory's range check, once per run instead of once per word.
+        """
+        n = int(raw.size)
+        if n == 0:
+            return
+        w = int(self.bitwidth)
+        lo, hi = int(raw.min()), int(raw.max())
+        if lo < 0 or (w < 64 and hi >> w):
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': a word in the burst is outside 0..2**{w}-1 "
+                f"(min {lo}, max {hi}); the buffer holds {w}-bit words and would wrap it silently.")
+        depth, spw = int(self.depth), int(self.samp_per_word)
+        period = _word_period(depth, spw)
+        skip = max(0, n - period)                       # overwritten within this same burst
+        start = ((self.wr // spw) + skip) % period      # period divides depth: the loop's & mask
+        for addr, off, cnt in _word_runs(start, n - skip, period):
+            self.buf_w.array_ref(addr, cnt)[:] = raw[skip + off:skip + off + cnt]
+        self.wr = (self.wr + spw * n) % (1 << IDX_BW)
 
 
 @dataclass
@@ -380,7 +439,9 @@ class RfSampBufCapture(FreeRunMod):
 
     **The horizon is checked per sample, not per command.**  A long capture whose output is
     back-pressured can start legal and go stale mid-stream — valid when it was asked for, overwritten
-    by the time it is read — so both bounds live inside the loop.
+    by the time it is read — so both bounds live inside the loop.  The RTL checks every word; the
+    pysim twin checks every burst of up to :attr:`pysim_burst_words` words, on its oldest word, and
+    reads the burst at the moment it checks it.
 
     **What the margin is for.**  :attr:`last_wr` is a *lower bound* on the true write pointer, because
     the progress channel drops rather than stalls.  Staleness makes the "already written?" test
@@ -414,6 +475,18 @@ class RfSampBufCapture(FreeRunMod):
     #: to 400 MSa/s at ``samp_per_word = 4`` and breaks at exactly 500, which is
     #: ``samp_per_word * f_axis / 2`` — this stage's ceiling, and the loop's.
     cycles_per_word: ClassVar[int] = 2
+
+    #: **The pysim twin's largest output burst, in words** -- a modelling granularity, not a hardware
+    #: number.  The RTL emits one word at a time; the twin emits every word owed that is already
+    #: written, up to this many, as one burst, because a one-word burst costs a few SimPy events and
+    #: those were a third of a long run's time (``plans/rf_samp_buf_pysim_speed.md``).
+    #:
+    #: **Bounded, because a burst reaches the next stage only when its last word has.**  Unbounded,
+    #: a whole window became one store-and-forward hop, and ``examples/rf_blk_delay``'s floor at
+    #: 400 MSa/s moved from 6 blocks to 7.  At 16 (and at 4) the floors at 250 and 400 MSa/s are the
+    #: one-word body's, 4 and 6 -- ``test_rf_blk_delay.py`` pins both -- and the run stays within 4%
+    #: of the unbounded speed.
+    pysim_burst_words: ClassVar[int] = 16
 
     bitwidth: HwParam[int] = WORD_BW
     samp_per_word: HwParam[int] = 1
@@ -499,7 +572,9 @@ class RfSampBufCapture(FreeRunMod):
             self.count_misaligned()
             nword = 0
 
-        for _ in range(nword):
+        period = _word_period(int(self.depth), spw)
+        left = nword
+        while left:
             # 1. Wait until the word holding sample `idx` has been written.  Poll first (take the
             #    newest position the channel is holding), and only then block -- there is nothing to
             #    do until the ingress advances, and blocking costs one event instead of one per
@@ -514,16 +589,23 @@ class RfSampBufCapture(FreeRunMod):
                 got = yield from self.wr_in.get()
                 self.last_wr = int(np.asarray(got).ravel()[-1])
 
-            # 2. Horizon, per word.
-            if sdiff(self.last_wr, idx) > usable:
+            # 2. Horizon, on the burst's OLDEST word: every later word in it is younger.
+            age = sdiff(self.last_wr, idx)
+            if age > usable:
                 status = RF_SAMP_BUF_TOO_OLD
                 self.count_too_old()
                 break
 
-            val = self.buf_r.read((idx // spw) & mask)
-            yield from self.s_out.write(np.array([val], dtype=np.uint64))
-            sent += spw
-            idx = (idx + spw) % wrap
+            # 3. The words owed that are already written, up to pysim_burst_words, read now and
+            #    sent as one burst -- the RTL's per-word loop, a burst at a time.
+            k = max(1, min(left, age // spw, self.pysim_burst_words))
+            vals = np.empty(k, dtype=np.uint64)
+            for addr, off, cnt in _word_runs((idx // spw) & mask, k, period):
+                vals[off:off + cnt] = self.buf_r.array_ref(addr, cnt)
+            yield from self.s_out.write(vals)
+            sent += spw * k
+            idx = (idx + spw * k) % wrap
+            left -= k
 
         if waited:
             self.count_waited()

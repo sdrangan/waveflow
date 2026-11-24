@@ -16,7 +16,6 @@ absorb the first kind.
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,7 @@ from examples.interleaver.mem_stream_gen import (
     write_mem_w_xsi_bundles,
 )
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, run_xsi, xsi_runner_cmd
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -63,18 +62,22 @@ ROOT_OF = {
 #:
 #: What the numbers say: mem_copy is the IN-BAND forwarding chain (plans/memcopy_inband_integration.md)
 #: -- Sequencer frames [MemRCmd | MemWCmd | CopyResp], each stage strips its descriptor and relays the
-#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient).  The reads hide behind
+#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient) until 2026-11-17; since the
+#: writer's hls::fence (its completion waits for the write response) 3000 = 195 + 15*187.  The reads hide behind
 #: the writes (per-job cost ~= max(read, write) + the in-band descriptor beats that ride ahead of each
 #: 128-word data burst), the ~1.9x free-running overlap the generated testbench preserves.  The s_done
 #: response is one CopyResp word per job.
+#:
+#: mem_r_stream 158 -> 151 and mem_w_stream 176 -> 169 on 2026-11-19 (Vitis/Vivado 2025.1): the
+#: xfer_msg cookie left MRCmd / MWCmd, so a command is one 64-bit word {addr, len} instead of six.
 GATES = [
-    ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
-    ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
+    ("mem_r_stream", "mem_r_bfm_tb", 151, "collected=128"),
+    ("mem_w_stream", "mem_w_bfm_tb", 169, "w_count=128"),
     # interleaver retired from the gate with InterleaverCanon (2026-07); the in-band interleaver's RTL
     # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
     # an exact-cycle gate here.
     #
-    # mem_copy (2908) and rf_pass_through (1066) moved to the system flow (plans/system_model.md
+    # mem_copy (3000) and rf_pass_through (1066) moved to the system flow (plans/system_model.md
     # S3f): tests/examples/test_mem_copy_system_xsi.py and test_rf_dut_system_xsi.py.
     #
 ]
@@ -134,8 +137,8 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     # On Windows this is ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and
     # the bare form fails with "not recognized as an internal or external command" rather than
     # anything useful.  xsi_runner_cmd handles that and the Linux `bash run.sh` form.
-    r = subprocess.run(xsi_runner_cmd(top, tb), cwd=str(xsi),
-                       capture_output=True, text=True, timeout=1800)
+    r = run_xsi(xsi_runner_cmd(top, tb), cwd=str(xsi),
+                capture_output=True, text=True, timeout=1800)
     out = (r.stdout or "") + (r.stderr or "")
 
     if checker is not None:

@@ -75,7 +75,7 @@ What the flows then use:
 
 A flow given an object that is not a `HwSystem` refuses it by naming this contract. A system written
 before this form subclasses `HwSystem` and implements `dut()` and `run()` itself; the flows take both.
-[`harness(module)`](../systems/index.md) builds the same object around one module, with generated
+[`harness(module)`](../systems/pysim.md#the-cut) builds the same object around one module, with generated
 stand-ins as its testbench.
 
 **The DUT is a tree.** `build_mm_device` returns each kernel's **device**, a composite module
@@ -470,7 +470,7 @@ paths, `pysim_cycles` and `trace_mismatches`.
 from waveflow.build.system_xsi import run_system_xsi
 
 run = run_system_xsi(markov_system(jobs, link="mm"), work_dir, top="markov_top")
-run.cycles, run.trace_mismatches          # 1870, []
+run.cycles, run.trace_mismatches          # 1951, []
 ```
 
 [`run_system_xsi`](../../../waveflow/build/system_xsi.py) is the same DAG as a one-call wrapper:

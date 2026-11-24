@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import io
 import re
 import shutil
@@ -124,8 +125,20 @@ OWNED = ("waveflow/linalg/", f"{PLATFORM}/")
 OWNED_HEADERS = re.compile(r"waveflow/build/(wf_|systolic_|cg_vector)\w*\.h$")
 
 
+#: The platform's calibration data that blocks' own sweeps file -- data rather than these phases' code, so
+#: outside the audit.  Prefix globs: the per-module resource records (the stream blocks' since
+#: plans/shared_kernel.md), and the stream blocks' decision tables (``waveflow/streams/timing.py``;
+#: plans/stream_dispatch.md Stage 7, plans/osfb_pysim_fidelity.md; the user, 2026-11-22).
+NOT_OWNED = (f"{PLATFORM}/modules/", f"{PLATFORM}/components/stream_*_task.decision/")
+
+
+def _not_owned(path: str) -> bool:
+    return any(fnmatch.fnmatchcase(path, prefix + "*") for prefix in NOT_OWNED)
+
+
 def test_waveflow_gained_only_the_manifest():
-    gained = [p for p in _gained() if p.startswith(OWNED) or OWNED_HEADERS.match(p)]
+    gained = [p for p in _gained() if (p.startswith(OWNED) or OWNED_HEADERS.match(p))
+              and not _not_owned(p)]
     assert set(gained) <= set(MANIFEST), sorted(set(gained) - set(MANIFEST))
     missing = [p for p in MANIFEST if not (ROOT / p).is_file()]
     assert not missing, missing

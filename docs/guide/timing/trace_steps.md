@@ -137,7 +137,7 @@ each component:
 
 ```json
 {"component": "...", "index": 8,
- "start": 1488, "end": 1670, "span": 183,
+ "start": 1520, "end": 1706, "span": 187,
  "nwords": 128, "num_trans": 8, "blocked": 0}
 ```
 

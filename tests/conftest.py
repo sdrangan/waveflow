@@ -249,7 +249,40 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 256 + 2 -> 258 on 2026-11-16: ``origin/main`` merged into ``paper/ltbf_cg_dse_agentic`` -- this
 #: branch's 256 and main's two SIMD-core gates; ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q``
 #: counts 258.
-WANT_XSI_GATES = 258
+#: 258 -> 259 on 2026-11-17 (plans/mem_stream_followups.md, item 1): every mem_copy completion follows
+#: its job's write response, checked on a traced run (tests/build/test_xsi_snapshot_xsi.py).
+#: 259 + 6 -> 265 on 2026-11-21 (plans/shared_kernel.md, Stage 1): the ring stub at RTL -- K alone, Post
+#: alone, the composite with its cycle on two scenarios, and the loop's exact timing on both
+#: (tests/examples/test_ring_stub.py).
+#: 265 + 4 -> 269 on 2026-11-21 (plans/shared_kernel.md, Stage 2): StreamDemux alone (by s_sel, by a
+#: header field) and StreamArbiter -> StreamDemux under both policies (tests/streams/test_arbiter_demux.py).
+#: 269 + 3 -> 272 on 2026-11-21 (plans/shared_kernel.md, Stage 3): SsrFft(direction="runtime") --
+#: bits per frame, interval, timing at 250 MHz (tests/dsp/ssr_fft/test_xsi.py, pingpong-runtime).
+#: 272 + 6 -> 278 on 2026-11-21 (plans/shared_kernel.md, Stage 5): the overlap-save filter bank on one
+#: shared SsrFft -- a front alone, post alone, the bank on two scenarios, and the bank's timing on both
+#: (tests/examples/test_os_filterbank.py).
+#: 278 + 1 -> 279 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes): StreamFramer in its harness
+#: (tests/streams/test_framer.py).  279 + 1 -> 280: the ring stub's `late` scenario, its first job
+#: delayed -- the XSI AxisMaster's start_gap_cycles (tests/examples/test_ring_stub.py).  280 + 1 -> 281:
+#: the arbiter-demux pair at 4 inputs on the long workload, the case the arbiter hung on before its
+#: copy_frame was INLINE (tests/streams/test_arbiter_demux.py; plans/shared_kernel_rfsoc_timing.md).
+#: 281 + 1 -> 282 on 2026-11-22 (plans/shared_kernel.md, Stage 7 fixes at RTL): the late scenario's
+#: timing pinned -- its last status at cycle 1231, its first word accepted after the 300-cycle start gap
+#: (tests/examples/test_ring_stub.py::test_rtl_loop_timing_is_exact[late]).
+#: 282 + 4 -> 286 on 2026-11-22 (plans/stream_dispatch.md, Stage 4): the dispatch pool -- StreamDispatch
+#: -> links -> StreamArbiter, m_sel back as the credits -- at 2, 3 and 4 workers under both policies,
+#: its output checked as a multiset (tests/streams/test_dispatch.py).  Written without vendor tools;
+#: first run pending on a machine with Vitis / Vivado 2025.1.  (All four passed there, 2026-11-22.)
+#: 286 + 2 -> 288 on 2026-11-22 (plans/stream_dispatch.md, Stage 7): the decision cycles' table -- the
+#: dispatcher and the arbiter at 4 ports, round-robin, re-measured at xczu48dr 4 ns against the
+#: platform's committed lookup, and pysim on it (tests/streams/test_stream_timing.py).
+#: 288 + 1 -> 289 on 2026-11-22 (plans/osfb_pysim_fidelity.md, cause F): the same for StreamDemux's
+#: decision table -- the demux at 4 outputs, routed by a header field, re-measured at xczu48dr 4 ns
+#: (tests/streams/test_stream_timing.py::test_rtl_decision_cost_is_the_platforms[demux4_hdr]).
+#: 289 + 4 -> 293 on 2026-11-22 (plans/dse_matrix_sched.md 7a, E1): the B1 CG engine -- the worker alone,
+#: the split alone, the pool at 2 and 4 workers, X bit-exact and cycles against pysim
+#: (tests/examples/test_cg_pool.py).
+WANT_XSI_GATES = 293
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

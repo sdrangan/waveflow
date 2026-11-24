@@ -72,10 +72,17 @@ class StreamBurst:
     ``tlast=False`` is how a stimulus describes a malformed transaction (a missing TLAST).  On
     the wire TLAST is the only boundary, so a *recorded* stream splits at TLAST and nowhere
     else: see ``bundle_tb.h``, the C++ side of the same format.
+
+    ``gap_before`` is the idle cycles the driver waits before this burst -- in a module's workload, how
+    a stimulus says when its bursts arrive (an input whose first frame comes late, jobs spread out).
+    The harness turns a port's gaps into its driver's ``start_gap_cycles`` and ``burst_gaps``, which
+    both backends play.  It is not stored in the bundle files: the words are, the timing is the
+    driver's.
     """
 
     words: np.ndarray
     tlast: bool = True
+    gap_before: int = 0
 
 
 def write_bursts(bursts: list[StreamBurst], bundle_dir: str | Path,

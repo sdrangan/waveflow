@@ -1,6 +1,6 @@
 ---
 title: Timing and resources
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 7
 audience: python
 api: [TimedPhase, add_calib_steps, ModuleStore, MemCalibStep, CsynthParser]

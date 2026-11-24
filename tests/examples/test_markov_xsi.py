@@ -44,9 +44,13 @@ WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 #:   1865  the chain's queue 64 -> 128 words: the credit window must cover the link's bandwidth-delay
 #:         product, or credit throttled the generator at every job start and starved the chain;
 #:   1870  the credit handling moved into the framework's credit::Producer / credit::Consumer
-#:         (credit_stream_hls.h) -- equivalent logic, scheduled slightly differently (+5 cycles).
-EXPECTED_CYCLES = 1870
-#: pysim must stay within this of RTL (it is +3.3%, with the two per-chunk overheads it now charges).
+#:         (credit_stream_hls.h) -- equivalent logic, scheduled slightly differently (+5 cycles);
+#:   1951  the writer's completion waits for the memory's write response (hls::fence in
+#:         mem_w_stream_framed_done_task.h, plans/mem_stream_followups.md item 1) -- it used to
+#:         leave before the write was acknowledged.  Correctness, not speed: +81 cycles.
+EXPECTED_CYCLES = 1951
+#: pysim must stay within this of RTL.  It is -1.4% (1924 against 1951): pysim charges the writer's
+#: fence, 14 cycles a firing (MemWStream.fence_cycles); without it, -5.0% (1854).
 PYSIM_TOLERANCE = 0.05
 
 
