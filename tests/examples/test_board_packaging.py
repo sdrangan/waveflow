@@ -169,13 +169,73 @@ def test_board_codegen_uses_current_sources(tmp_path, factory, config, top):
     if top == "poly":
         assert "ap_uint<8>& error" in header
         assert "coeffs" not in header
-        source = results["gen_kernel"].path("poly_body_impl")
-        assert source.read_bytes() == (Path(__file__).parents[2] / "examples/stream_inband/poly_body_impl.tpp").read_bytes()
+        source = results["poly_body_impl"].path("poly_body_impl")
+        assert source == Path(__file__).parents[2] / "examples/stream_inband/poly_body_impl.tpp"
+        assert not (tmp_path / "poly_body_impl.tpp").exists()
+        assert not (tmp_path / "poly_tb.cpp").exists()
         # Upstream checks schema header dependencies separately from the kernel boundary.
         includes = dag.run(cfg, through="gen_include", force=True)
         successful(includes, "gen_include")
     else:
         assert "int32_t" in header or "ap_int<32>" in header
+
+
+def test_s2_codegen_ignores_existing_workspace_sources(tmp_path):
+    stale = {"poly_body_impl.tpp": "// stale body\n", "poly_tb.cpp": "// stale testbench\n"}
+    for name, content in stale.items():
+        (tmp_path / name).write_text(content)
+    dag, config = build_poly_board_dag(), board_config(tmp_path)
+    results = dag.run(config, through="gen_kernel", force=True)
+    successful(results, "gen_kernel")
+    paths = dag.artifact_paths(config)
+    source_dir = Path(__file__).parents[2] / "examples/stream_inband"
+    assert paths["poly_body_impl"] == source_dir / "poly_body_impl.tpp"
+    assert paths["poly_tb"] == source_dir / "poly_tb.cpp"
+    header = results["gen_kernel"].path("poly_hpp").read_text()
+    assert '#include "../poly_body_impl.tpp"' in header
+    assert str(source_dir) not in header
+    assert "sources" not in dag.step_names()
+    assert all((tmp_path / name).read_text() == content for name, content in stale.items())
+
+
+def test_s2_synthesis_snapshots_current_formal_sources(tmp_path, monkeypatch):
+    from examples.stream_inband import poly_board
+
+    source_dir, build_dir = tmp_path / "sources", tmp_path / "build"
+    source_dir.mkdir()
+    build_dir.mkdir()
+    for name in ("poly_body_impl.tpp", "poly_tb.cpp"):
+        (build_dir / name).write_text("// stale workspace copy\n")
+    monkeypatch.setattr(poly_board, "HERE", source_dir)
+    config = poly_board.board_config(build_dir)
+    dag = poly_board.build_poly_board_dag()
+    step = next(step for step in dag.steps() if step.name == "synthesize")
+    paths = dag.artifact_paths(config)
+    assert {"poly_body_impl", "poly_tb"} <= set(step.consumes)
+    inputs = {name: paths[name] for name in step.consumes if name in paths}
+    captured = []
+
+    class SnapshotCaptured(Exception):
+        pass
+
+    def capture_snapshot(config, *, top, inputs, sources, work_dir):
+        names = ("poly_body_impl.tpp", "poly_tb.cpp")
+        assert all(inputs[name] == source_dir / name for name in names)
+        captured.append({name: inputs[name].read_text() for name in names})
+        raise SnapshotCaptured
+
+    monkeypatch.setattr(poly_board, "synthesize_for_board", capture_snapshot)
+    for revision in (1, 2):
+        current = {name: f"// current source revision {revision}: {name}\n"
+                   for name in ("poly_body_impl.tpp", "poly_tb.cpp")}
+        for name, content in current.items():
+            (source_dir / name).write_text(content)
+        with pytest.raises(SnapshotCaptured):
+            step.run(config, **inputs)
+        assert captured[-1] == current
+    assert len(captured) == 2
+    assert all((build_dir / name).read_text() == "// stale workspace copy\n"
+               for name in ("poly_body_impl.tpp", "poly_tb.cpp"))
 
 
 def synthetic_overlay(root, name, cls, host, *, legacy_coefficients=False, schema_version=2):

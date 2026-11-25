@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from xml.etree import ElementTree
 
@@ -16,7 +17,7 @@ EXPECTED_BOARD_FILE_HASHES = {
     "part0_pins.xml": "7625d0602a60693f5ec16b0e233f89410611f101a8211dd05affa8282bf6f6cf",
     "preset.xml": "bccc431bb0b525936a9e59b83f98d108d66bcfd2e945048171481a213d4380e3",
     "rfsoc4x2_board.png": "c77f9f8e4cdfd22c8f7c300e59802715b1f73924ee3183bfdd5dd17a7ee3ca3c",
-    "xitem.json": "129056fee98c61761d7414250934f6e0105541ac7c14719a84e18f47d34dd005",
+    "xitem.json": "7fd10ab84bea27b4098ff25ddaacf290e6ed431790214d7579ae86435d0d63f3",
 }
 
 
@@ -104,6 +105,18 @@ def test_vendored_board_files_match_pinned_reference():
         if path.is_file()
     }
     assert actual == EXPECTED_BOARD_FILE_HASHES
+
+
+def test_vendored_catalog_metadata_preserves_both_contributors():
+    board = Board.rfsoc4x2()
+    catalog = json.loads((board.board_files_dir / "xitem.json").read_text())
+    infra = catalog["config"]["items"][0]["infra"]
+    assert infra["name"] == board.name
+    assert infra["revision"] == board.board_files_version
+    assert infra["contributors"] == [
+        {"group": "RealDigital", "url": "https://www.realdigital.org/"},
+        {"group": "Xilinx", "url": "https://www.xilinx.com/"},
+    ]
 
 
 def test_clock_map_is_immutable_and_unknown_name_is_clear():

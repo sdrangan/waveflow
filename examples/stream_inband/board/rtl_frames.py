@@ -3,28 +3,36 @@ from bisect import bisect_right
 from pathlib import Path
 import subprocess
 
-import numpy as np
 from vcdvcd import VCDVCD
 
 from waveflow.toolchain import find_vivado_path
+from waveflow.toolchain.toolchain import _build_final_cmd, _tool_env
 
 
 def dump_cosim_vcd(sim_dir):
     """Replay the compiled XSim snapshot with a small boundary-only VCD dump."""
     sim_dir = Path(sim_dir)
+    vivado = find_vivado_path()
+    if vivado is None:
+        raise RuntimeError("Vivado not found; set WAVEFLOW_VIVADO_PATH before XSim replay")
+    executable = Path(vivado).with_name("xsim" + Path(vivado).suffix)
+    if not executable.is_file():
+        raise RuntimeError(f"XSim executable not found: {executable}")
     script = sim_dir / "frames.tcl"
     script.write_text('open_vcd frames.vcd\n'
         'log_vcd /apatb_poly_top/AESL_inst_poly/*\n'
         'run all\nclose_vcd\nquit\n')
-    executable = Path(find_vivado_path()).with_name("xsim")
-    result = subprocess.run([str(executable), "poly", "-tclbatch", script.name,
+    command, use_shell = _build_final_cmd([str(executable), "poly", "-tclbatch", script.name,
         "-testplusarg", "UVM_VERBOSITY=UVM_NONE", "-testplusarg", "UVM_TESTNAME=poly_test_lib",
-        "-testplusarg", "UVM_TIMEOUT=20000000000000"], cwd=sim_dir,
+        "-testplusarg", "UVM_TIMEOUT=20000000000000"])
+    vcd = sim_dir / "frames.vcd"
+    vcd.unlink(missing_ok=True)
+    result = subprocess.run(command, cwd=sim_dir, shell=use_shell, env=_tool_env(None),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
     (sim_dir / "frames.log").write_text(result.stdout)
-    if result.returncode or "ERROR:" in result.stdout or not (sim_dir / "frames.vcd").is_file():
+    if result.returncode or "ERROR:" in result.stdout or not vcd.is_file():
         raise RuntimeError(f"XSim VCD replay failed: {sim_dir / 'frames.log'}")
-    return sim_dir / "frames.vcd"
+    return vcd
 
 
 def read_frames(path):

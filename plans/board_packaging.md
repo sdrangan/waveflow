@@ -1,404 +1,132 @@
-# Plan — board packaging: an example becomes IP, a bitstream, and a PynQ host
+# Plan — board packaging: an example becomes IP, a bitstream, and a PYNQ host
 
-**Status: upstream `main` at `9a09fb1e` is integrated through `44bcb1b1`.
-Fresh S1/S2 software/model checks passed. Broader software regression passed 3177
-tests, with 49 skipped and one independently reproduced upstream failure.
-The user-run S1 CMD build passed C/RTL simulation, BD validation, implementation
-and overlay identity review. All three physical-board cases passed with
-`[0, 11, 17]`; the returned acceptance JSON and payload/ABI hashes were verified.
-Current-source S1 CMD build and physical-board acceptance are complete.
-The fresh S2 CMD build passed C/RTL, BD, implementation and overlay review.
-All three returned S2 board records passed read-only review: 100 samples,
-five completed DMA transfers and zero maximum absolute error per case;
-manifest, bitstream, ABI and per-case vector hashes match.
-Current-source S1/S2 CMD builds and physical-board acceptance are complete.
-Earlier notebook outputs and overlays are preserved as historical evidence.
-Vitis/Vivado, software tests and board runs remain manual.
-Updated 2026-11-24.** This plan tracks the template-driven
-RFSoC4x2 board packaging extension. The implemented APIs, source map and manual
-commands are in [Board packaging development](../docs/guide/flows/board_packaging.md).
+**Status:** S0–S2 are implemented. The current cleanup passed the core and
+integration offline regressions, four real Vivado/Vitis clock checks and fresh
+S1/S2 overlay builds.
+Both new overlays passed physical-board runs and returned-record integrity review.
+An independent local clone plus the current source patch also passed 433 offline
+tests and both overlay builds in a separate virtual environment. Acceptance covers
+the current Linux workstation and RFSoC4x2; a committed-revision rebuild on another
+machine and actual Windows AMD-tool acceptance remain unrecorded.
+S3–S5 are planned application extensions.
 
-**Who this is written for.** Someone other than its author, with a board and a Vitis/Vivado
-install, working **one stage at a time**. Each stage below is one PR (many commits), lands green,
-and is independently useful. A stage that cannot be finished should be *cut at a rung boundary*
-(§3) rather than left half-wired.
-
-**Target board:** RFSoC 4x2 (RealDigital), `xczu48dr-ffvg1517-2-e`. **Host:** PYNQ.
-
----
+This plan records scope, acceptance and the next stages. The API reference,
+source map and commands are in
+[Board packaging development](../docs/guide/flows/board_packaging.md).
+The compatibility baseline is upstream `main` at `9a09fb1e`.
+Target: RealDigital RFSoC4x2, `xczu48dr-ffvg1517-2-e`, Vitis/Vivado 2025.1.
+Tests, notebooks, AMD-tool builds and board runs are invoked manually.
 
 ## 0. Progress and next actions
 
-### Current source and S1/S2 revalidation — 2026-11-24
+### Accepted baseline
 
-Fetched upstream again and confirmed `9a09fb1e` (PR #344) is still its current
-`main`. Local `main` matches it; `board_packaging` includes it through merge
-`44bcb1b1`. The existing board runtime integration remains compatible. Regression
-coverage checks the shared Vivado environment handling and complete PolyAccel
-schema-header generation under upstream's missing-dependency warning.
-
-The new software regression completed with **3177 passed, 49 skipped and one
-known upstream failure** in `test_there_are_workspaces_to_check` (two committed
-XSI workspaces, while the assertion requires at least three). All four updated
-notebook checks passed in an isolated checkout with hardware switches disabled;
-the live notebooks' outputs, kernels and manual switches were preserved. The
-JUnit report is `/tmp/waveflow-latest-s1-s2-tests.xml`. Hardware-marked tests were
-excluded, and the upstream workspace-count assertion was left unchanged.
-
-Fresh software runs on this source passed:
-
-- S1: the canonical register cases returned `[0, 11, 17]`. Result:
-  `examples/regmap/board_build/revalidation/software-uckhu9_0/host_sim.json`.
-- S2: upstream model/pysim checks passed at 32 and 64 bits. The board host model's
-  cubic, identity and constant cases each passed with 100 samples and maximum
-  absolute error `0.0`. Result:
-  `examples/stream_inband/board_build/revalidation/software-9g5twj5j/host_sim.json`.
-
-These are software results with `board_execution_verified=False`. The updated
-build notebooks display the source commit and retain their earlier outputs.
-
-The user subsequently completed the S1 CMD build in 406.8 seconds. Read-only
-review confirmed C simulation and RTL co-simulation each returned 11; BD
-validation passed at `0xA1000000` with a 64 KiB aperture. The collected overlay
-has source `44bcb1b1`, a configured PS PL0 frequency of 99.999985 MHz, WNS
-4.728 ns, hold slack 0.022 ns and no severe DRC. Payload hashes, embedded driver
-ABI, HWH IP identity and pinned board-resource hashes agree.
-
-The new S1 CMD overlay is
-`examples/regmap/board_build/overlays/overlay-mb3xu3ac/`. Its manifest SHA256 is
-`5446bfb1e1e81ef905db33fbad36a2b68fabb358227bbeacf0142d853e5c5870`.
-An unpacked handoff with the matching overlay, portable host and an unexecuted
-English `test_s1.ipynb` is prepared at
-`examples/regmap/board_build/test_s1_cmd_mb3xu3ac/`. Its board-test switch is
-disabled by default. No test, tool invocation or upload was performed during
-this review or handoff preparation.
-
-The returned acceptance JSON confirms a successful RFSoC4x2 run from this
-handoff: `passed=True`, outputs `[0, 11, 17]`, and
-`board_execution_verified=True`. The recorded board
-path is
-`/home/xilinx/jupyter_notebooks/Ruibin/waveflow_package/test_s1_cmd_mb3xu3ac/board-acceptance-s1-20261124T145433482404Z.json`.
-The original JSON is now returned under
-`examples/regmap/board_build/test_s1_cmd_mb3xu3ac/` and was reviewed read-only.
-All three input/expected/output tuples and completion statuses match: start is
-cleared, done/idle/ready are set, auto-restart and interrupt are cleared.
-Its overlay manifest, bitstream and ABI hashes match `overlay-mb3xu3ac`; both
-the source and staged overlay payloads match the manifest, and the generated
-driver's embedded ABI hash agrees. Runtime is Python 3.10.4 / PYNQ 3.1.1;
-completion was recorded at `2026-11-24T14:54:33.481776+00:00`.
-This completes current-source S1 CMD build, physical-board acceptance and
-acceptance-record review. The review did not execute the host or any tests.
-
-The user also completed the S2 CMD build from `44bcb1b1`. Read-only inspection
-confirmed eight C-simulation scenarios and the timing RTL co-simulation passed,
-with verified input frames of 6, 100 and 6 words and output frames of 1 and
-100 words. BD validation and implementation passed. The configured PS PL0
-frequency is 99.999985 MHz with a 100 MHz HLS target; WNS is 4.840 ns, hold slack
-is 0.011 ns and severe DRC count is zero. Poly and DMA AXI-Lite apertures are
-`0xA1000000` and `0xA1010000`. The HWH describes 32-bit simple DMA without SG
-or DRE, with MM2S/S2MM reaching the low 2 GiB PS DDR window.
-
-The current S2 delivery is
-`examples/stream_inband/board_build/overlays/overlay-56c683vl/`. Its manifest
-SHA256 is `859de225e4b0a39e180b7e39180bf98cf85e88a8bda510938fb20c4cf46ba15c`.
-Payload hashes, embedded driver ABI, HWH IP/address identities and board-resource
-hashes agree. The existing collected-driver model receipt matches this ABI and
-records all three 100-sample cases passing with zero maximum absolute error.
-
-The unpacked board handoff is
-`examples/stream_inband/board_build/test_s2_cmd_56c683vl/`: four overlay files,
-the portable host and DMA adapter, the current CMD build's three vector files,
-an English `test_poly.ipynb` and upload instructions. Setup pins manifest, host
-and vector hashes. The manually enabled test checks all three cases and the
-five completed DMA frame labels, directions and byte counts per case; a separate
-plot cell saves measured/reference curves and residuals. The notebook is
-unexecuted with `RUN_BOARD_TEST=False`. Preparation did not run any model,
-test, notebook, AMD tool or upload.
-
-The returned original JSON records confirm `passed=True` and
-`board_execution_verified=True` for all three S2 cases. The board
-acceptance directory is
-`/home/xilinx/jupyter_notebooks/Ruibin/waveflow_package/test_s2_cmd_56c683vl/board-results/20261124T152508374772Z-cf8b57eb`.
-Its three `board-acceptance-s2-<case>.json` records and `poly-results.png` are
-returned under the corresponding local `test_s2_cmd_56c683vl/board-results/`
-directory. Read-only review found:
-
-| Case | Samples | Maximum absolute error | Completed DMA transfers |
-| --- | --- | --- | --- |
-| Cubic | 100 | 0.0 | 5 |
-| Identity | 100 | 0.0 | 5 |
-| Constant | 100 | 0.0 | 5 |
-
-The saved samples agree with the matching vector references, including their
-reported error values and response words. Manifest, bitstream, ABI and vector
-hashes all match the current CMD overlay and staged files; source/staged overlay
-payloads and the driver's embedded ABI hash also agree. Completion statuses
-show start cleared, done/idle/ready set, auto-restart and interrupt cleared;
-`halted`, `error` and final `tx_id` are zero.
-
-Every case records the expected completed frame sequence: DATA header / MM2S /
-24 bytes, response header / S2MM / 4 bytes, sample input / MM2S / 400 bytes,
-sample result / S2MM / 400 bytes, and END header / MM2S / 24 bytes. All recorded
-buffer addresses are aligned and inside the template's low-2-GiB DDR aperture.
-Runtime is Python 3.10.4, NumPy 1.21.5 and PYNQ 3.1.1. The returned six-panel
-plot shows all measured curves overlapping their references and zero residuals.
-
-This completes current-source S2 CMD build, physical-board acceptance and
-acceptance-record review. Together with S1 above, the requested S1/S2
-revalidation after the upstream sync is complete for these CMD build paths.
-No tests or host programs were rerun to inspect the returned artifacts.
-Subsequent S3/S4/S5 implementation and their acceptance remain future work.
-
-The assistant has not launched Vitis/Vivado builds, board tests or pushes during
-this revalidation; the user performs hardware operations manually. The XSI
-workspace-count failure also exists on the November 16
-baseline; it is independent of the board extension and remains unchanged.
-
-### Earlier migration and validation history
-
-The minimal implementation was migrated onto upstream `main` at
-`4bb72aa9d2f90d6851aa9c4ee85ccdb588ff13c9`. That was the common base used for the
-migration audit. On 2026-11-16, the fork's remote `main` and local `main` were
-synchronized to upstream `54cb46e1f37c4d376167792b27734f8c90291f91` (PR #311).
-The local `board_packaging` branch includes it through merge commit `9e627b9b`.
-This merge is not pushed; only the explicitly requested fork `main` sync was
-published. The three migration commits
-(`1e0376ce`, `8ba53fd9`, `c3773dde`) are published on the fork's
-[`board_packaging` branch](https://github.com/Ruibin2000/waveflow/tree/board_packaging).
-The progress and developer documentation are follow-up changes on that branch.
-The runtime output is now reduced to BIT, HWH, `driver.py` and one schema-2
-`manifest.json`. XSA, reports and rebuild inputs remain in the build workspace;
-intermediate validation gates and receipts are retained. The portable hosts
-also accept existing schema-1 overlays.
-The source audit against that base found 2,837 upstream files identical in
-content and Git mode, 13 existing files changed for board integration or this
-documentation, 72 added board-related files, and no deleted upstream files.
-
-| Work | Implemented and checked | Remaining acceptance |
+| Stage | Verified evidence | Scope |
 | --- | --- | --- |
-| S0: target and clocks | Board/configuration checks plus four real Vivado/Vitis clock tests passed on 2026-11-17; retained clock contexts match current source | Applicable XSI gates and broader packaging acceptance remain separate |
-| S0: packaging pipeline | Offline conformance/failure tests and real S1/S2 notebook export, ABI, BD and implementation outputs checked | Dedicated tool-gate suite and remaining physical acceptance coverage |
-| S1: SimpFun | Current notebook build `run-g1ifa6_n` passed HLS C/RTL, export/ABI, BD, implementation and collected-driver checks | Accept the new `overlay-4u2wyf7o` on board and review returned JSON/hashes; CMD deferred |
-| S2: PolyAccel | Pre-update notebook build checked; returned notebook shows cubic, identity and constant board cases passed with zero maximum error | Rebuild current branch and accept the new overlay on board; review the three returned JSON records/hashes; CMD deferred |
-| S3: direct AXI master to DDR | Future stage | Design, implementation and all acceptance gates |
-| S4: mixed HLS/RTL IP | Future stage | Packaging route, implementation and all acceptance gates |
-| S5: RF converter path | Future stage | RFDC topology/clocks, implementation and instrument/loopback acceptance |
+| S0 clocks | Four real Vivado/Vitis clock checks passed in 138.41 s, zero skipped | After the catalog metadata repair; PS roundtrip, MMCM, rejected-request diagnostics and resolved HLS target |
+| S1 | C/RTL, BD, implementation and returned board JSON passed; outputs `[0, 11, 17]` | AXI-Lite control |
+| S2 direct-source example | 37 application tests passed in 2.43 s; complete overlay build and three returned board cases passed | PS DDR, simple DMA, 32-bit AXIS |
+| PR cleanup, core offline regression | 362 passed, 22 deselected in 4.86 s; manually run with Python 3.12.3 / pytest 9.1.1 | `tests/board`, application packaging and seven XSim-launcher cases; external-tool/board markers excluded |
+| PR cleanup, integration regression | 71 passed, 1 deselected in 0.68 s; JUnit has zero failures, errors or skips | DMA (6), notebooks (4), BuildConfig (13), Tcl target (13) and toolchain (35) |
+| Fresh source checkout | 433 offline tests passed with zero skips; S1/S2 complete builds passed in 405.6/550.5 s | Independent local Git clone plus current uncommitted sources, separate venv, no historical build products copied |
+| Broader software regression | 3177 passed, 49 skipped, one independently reproduced upstream workspace-count failure | Before the remaining PR cleanup |
 
-After output simplification, the core/application/configuration suite passed
-**390 offline tests**, with **23 tool-dependent cases deselected**. A further
-**29 notebook, documentation and MCP corpus checks passed**, including
-developer-guide snippet execution. Notebook defaults were checked in an isolated
-checkout so the user's saved S1 executions and manual switches remained intact.
-These exercise configuration, export/ABI/driver contracts, template generation,
-portable host protocols and manual notebooks.
-They do not establish Vitis, Vivado, XSI or physical-board acceptance. Broader
-build/toolchain checks also encountered the upstream workspace-census test
-expecting three XSI workspaces while the base contains two; it was reproduced
-on the unmodified base and remains outside this extension.
+The latest accepted S1 overlay is `overlay-tmdvivaz`; its manifest SHA256 is
+`694974081d1490f9079c55fb45a7009f4716caf3fdb3b722d1a50d3115ba2bf9`.
+The latest accepted S2 overlay is `overlay-6bgv3k3i`; its manifest SHA256 is
+`ca033a5acebdd9ad0ead3b3cc6421432759369fbc1127bb0d7eee6e92ad10496`.
+Both used PS PL0 configured at 99.999985 MHz and a 100 MHz HLS target.
+S1 setup/hold slack was 4.728/0.022 ns; S2 was 4.840/0.011 ns; severe DRC was zero.
 
-S1 and both S2 build paths previously passed user-run board tests **before the
-migration**. Those runs are historical context only. Their reports, overlays and
-acceptance records were not migrated, and their success does not accept the new
-branch. The old untracked board build directories have now been removed. The
-separate migration clone, note and backups are retained outside the repository;
-future verification starts from the committed sources and fresh outputs.
+S2 reads the repository's C++ body and testbench directly into each fresh synthesis
+snapshot. Its 545.3 s CMD build passed eight C scenarios, timing RTL co-simulation,
+export/ABI checks, BD validation and implementation. Cubic, identity and constant
+board cases each returned 100 correct samples, zero maximum error and five DMA
+transfers. Returned manifest, bitstream, ABI and vector hashes matched; response
+IDs, statuses, DDR apertures and plots were checked. The user also ran all 37
+application regressions, including stale-copy and direct-source checks.
 
-Since that cleanup, the S1 notebook was rebuilt manually at source commit
-`5a788856`, producing `run-vzfkcj1w/overlays/overlay-mp59jnfe`. Its C/RTL checks,
-export/driver ABI, BD and implementation receipts were checked locally. The
-clock readback is 99.999985 MHz, WNS is 4.728 ns, hold slack is 0.022 ns and
-severe DRC count is zero. The compact overlay has four delivery files.
+These records accept their original inputs. Generated receipts, overlays, board
+JSON and plots remain in ignored build directories. Detailed migration and run
+history is retained locally rather than included in this PR plan. A rebuild from
+a clean clone on another machine has not yet been recorded.
 
-On 2026-11-15, the user reported a successful RFSoC4x2 run of this notebook
-overlay: `passed=True`, outputs `[0, 11, 17]`, and
-`board_execution_verified=True`. The board saved
-`test_s1_notebook_vzfkcj1w/board-acceptance-20261115T164059914431Z.json`.
-That JSON has not yet been returned to the workstation, so matching its recorded
-manifest, bitstream and ABI hashes against the local overlay remains pending.
-The independently generated CMD overlay has not yet been accepted. The user
-explicitly deferred CMD testing on 2026-11-15 and chose to proceed with the S2
-notebook. Deferred CMD checks do not block that next notebook validation.
+### Current builds accepted on RFSoC4x2
 
-The S2 notebook build at source commit `36d54af3` produced
-`run-vmhut1lv/overlays/overlay-ffdh9xj3`. Its receipts and payload hashes were
-checked locally. Eight C-simulation scenarios passed; RTL co-simulation covered
-the `timing` scenario, including frame data and TLAST. The verified input frames
-have 6, 100 and 6 words; output frames have 1 and 100 words. All three collected
-driver/model cases passed with 100 samples, five host transfers and zero maximum
-absolute error. Clock readback is 99.999985 MHz, WNS is 4.840 ns, hold slack is
-0.011 ns and severe DRC count is zero.
+| Stage | New overlay | Full CMD build | Setup / hold slack | Severe DRC |
+| --- | --- | --- | --- | --- |
+| S1 | `overlay-tmdvivaz` | Passed in 403.5 s | 4.728 / 0.022 ns | 0 |
+| S2 | `overlay-6bgv3k3i` | Passed in 545.3 s | 4.840 / 0.011 ns | 0 |
 
-A local, unpacked board test directory is prepared at
-`examples/stream_inband/board_build/test_poly_notebook_vmhut1lv/`. It contains the
-four-file overlay, current portable host/DMA adapter, this run's three vector
-files and an English `test_poly.ipynb`. The board notebook checks the uploaded
-files before its manually enabled test cell. The original handoff defaults to
-`RUN_BOARD_TEST = False`; the returned copy preserves the user's enabled test
-cell and its execution outputs. Generated test material stays outside tracked
-source. No automatic push is made.
+Both contain the repaired catalog metadata and resolve PS PL0 to 99.999985 MHz
+with a 100 MHz HLS target. Receipt links, input snapshots, implementation files,
+driver ABI and collected payload hashes were reviewed. S1 C/RTL returned 11;
+S2 passed eight C scenarios and timing RTL, including the revised XSim launcher
+on Linux, with input frames 6/100/6 and output frames 1/100 words.
 
-The returned `test_poly.ipynb` now contains successful setup, physical-board test
-and plotting outputs, with no saved cell errors. Cubic, identity and constant
-each report 100 samples, `passed=True` and maximum absolute error `0.0`.
-The test cell asserts five completed transfers per case and prints
-`Board execution verified: True`. Its saved six-panel figure shows all three
-measured curves overlapping their references and zero residuals. The printed
-board acceptance directory is
-`test_poly_notebook_vmhut1lv/board-results/20261116T040509343248Z-af0c54ca`.
-The setup output's ABI hash matches the local overlay. Only the executed
-notebook has been returned; the three original acceptance JSON files are not
-present locally, so their recorded manifest, bitstream, ABI and vector hashes
-have not yet been independently checked against the workstation artifacts.
+Unpacked handoffs `test_s1_cmd_tmdvivaz` and `test_s2_cmd_6bgv3k3i` remain under
+their ignored application build roots. Their prepared English notebooks pin file
+identities and default to `RUN_BOARD_TEST=False`; no tests were run while preparing
+them. Collected overlays keep `board_execution_verified=False`; physical acceptance
+is recorded separately in returned board JSON. Previous records remain available.
 
-### Upstream synchronization — 2026-11-16
+Returned S1 JSON passed integrity review with outputs `[0, 11, 17]` and record
+`board-acceptance-s1-20261124T182905929552Z.json`. S2 cubic, identity and constant
+each passed with 100 samples, zero maximum error and five transfers; the result
+directory is `20261124T182955661248Z-a5e77e69`. All four records match the current
+manifest, bitstream and ABI hashes; S2 also matches the source vector hashes and
+reference samples. Completion/status fields, response IDs, transfer lengths and
+aligned DDR addresses within the declared HP0 apertures passed review. The returned
+plot agrees with the records. Board runtime was Python 3.10.4 / PYNQ 3.1.1, with
+NumPy 1.21.5 for S2. Executed notebooks were not returned; local copies remain the
+unexecuted templates. JSON records establish this round's board acceptance.
 
-The sync imports 184 upstream commits. Four text conflicts were resolved while
-keeping both the upstream behavior and the optional board extension:
+The separate fresh-checkout run preserved all 3674 pinned source files and used
+its own editable installation. Receipt and file-hash review passed for S1
+`overlay-5mrif03w` and S2 `overlay-ak8j0_60`; targets, register fields, addresses,
+timing and DRC match the board-accepted designs. The staged Tcl does not reference
+the original checkout. These new overlays have build acceptance only; physical
+acceptance above remains attached to its original overlay hashes.
 
-- `.gitignore`: retain upstream channel-manifest exceptions and secret ignores,
-  together with the board build ignore and pinned-resource exceptions.
-- `pyproject.toml`: retain upstream optional extras and `legacy/*.h` package data,
-  together with the three board package-data entries and board test markers.
-- `waveflow/toolchain/toolchain.py`: retain upstream calibrated-version reporting,
-  Vitis header discovery and `_tool_env`, together with the board Vivado runner.
-  The runner now uses `_tool_env` so Windows `MSYSTEM` cleanup also applies to
-  board validation and implementation launches.
-- `tests/toolchain/test_toolchain.py`: retain both suites and add two Vivado
-  environment regressions, covering inherited and explicitly extended environments.
+### PR cleanup and validation
 
-The core board/application/configuration/toolchain suite passed **399 tests**;
-the notebook, S1/S2 model/codegen, build, schema/stream, documentation and MCP
-integration checks passed **131 tests**. In total, **24 tool-dependent cases were
-deselected**. Notebook defaults were tested in an isolated merged-tree checkout;
-the original notebook outputs, kernels and manual switches were preserved.
-At the time of this sync, every changed path relative to upstream remained within
-the original 85-path board extension. The canonical SimpFun and PolyAccel sources, arithmetic body,
-scenarios and upstream `poly_build.py` match upstream exactly. No Vitis/Vivado
-build or board execution was launched during this sync. The earlier overlays
-and board results remain evidence for their recorded pre-sync source commits.
+- S2 XSim replay uses the discovered platform executable and upstream command and
+  environment helpers, retains its timeout, and rejects stale VCD output. Tcl
+  paths are normalized before validation. Tool-free Linux/Windows launcher cases
+  have been added; a real Windows AMD-tool build is not claimed.
+- The vendor `xitem.json` contributors are separate valid JSON objects. Its pinned
+  hash and catalog conformance test are updated. Device/pin/preset XML and license
+  files retain their original contents.
+- Unused imports are removed; pytest fixture re-exports remain explicit. This plan
+  keeps one progress summary and the stage roadmap.
 
-### Clock-profile cleanup — 2026-11-17
+The metadata repair changed the board-resource fingerprint, so fresh target,
+clock and build receipts were produced for the current inputs. Previous records
+continue to describe their original inputs. The user ran the core offline regression:
+all 362 selected tests passed, including catalog conformance, pinned resource
+hashes and the seven mocked launcher cases. The 22 deselected tests were excluded
+by the external-tool/board marker expression. The user then ran all four real
+clock checks successfully in 138.41 s; the JUnit record reports zero failures,
+errors or skips. Fresh S1/S2 builds, physical-board runs and returned-record review
+passed as recorded above. Mocked Windows commands do not establish an actual
+Windows build.
+The separate integration selection then passed all 71 selected cases in 0.68 s,
+with one external-tool case deselected. Together these two non-overlapping
+selections cover 433 passing offline tests after the cleanup.
 
-Initially removed the unused RF stream default profile and its declared BD recipe mapping.
-At that point, the board defaults contained `ps_control` (100 MHz), `pl_reference` (122.88 MHz),
-and `adc_reference` / `dac_reference` (both 491.52 MHz reference clocks).
-Custom PS PL0 and PL-reference/MMCM requests remain available through
-`ClockRequest`. Frequency-conformance tests now use an explicitly synthetic
-`test_hls` profile instead of adding an RF operating point to the board defaults.
-The core software checks passed **399 tests**, with **23 tool-dependent cases
-deselected**. S1/S2 continue to use their existing 100 MHz configuration; RFDC
-sampling rates and stream clocks remain part of the future RF design.
+### Next actions
 
-### Reference clocks and application requests — 2026-11-17
-
-The intermediate profile API above is replaced by a reference-only board model.
-`Board.reference_clocks` records PS (33.33333 MHz from the pinned preset), PL
-(122.88 MHz), ADC and DAC (both 491.52 MHz) references as `ReferenceClock` values,
-with no application output or HLS target. Board-owned generation routes bind
-PS PL0 to the PS reference and MMCM to the PL reference.
-
-Applications provide `ClockRequest(source, requested_hz, hls_target_hz,
-tolerance_ppm)`. `BuildConfig(clock_request=...)` performs tool-free validation
-for software checks. Before HLS, `synthesize_for_board()` invokes Vivado to check
-the route's input reference, generated frequency and allowed error. Packaging
-requires the resulting `ClockResolution`; it rejects unresolved, mismatched or
-stale requests. ADC/DAC internal PLL generation remains outside these two routes.
-S1/S2 keep a 100 MHz application default and expose `--clock-hz`, `--hls-clock-hz`
-and `--clock-tolerance-ppm`. Their manual notebooks expose the same settings and
-retain historical execution outputs. Core checks passed **406 tests** and the
-isolated notebook/model/codegen/documentation integration checks passed **131**,
-with **24 tool-dependent cases deselected** in total. Manual tool/board validation
-remains pending.
-
-### Verified clock hardware inventory — 2026-11-17
-
-Cross-checked RealDigital's V3I1 schematic (sheets 15-18), A6 manual (Figure 5
-and Appendix A), and the pinned PS preset. The declarations now live in
-`waveflow/board/rfsoc4x2.py`: 18 nominal reference/synchronization signals and
-11 external devices or internal PS PLLs. `ReferenceClock` includes physical
-source/output and consumers; `Board.clock_devices` includes input references and
-fixed, factory-ROM, PS-preset or runtime-SPI configuration requirements.
-
-The inventory covers the Si5395's 48 MHz crystal and PS/PL/PL-DDR/peripheral
-outputs, LMK's 10 MHz reference and 160 MHz VCXO, its PL/SYSREF/LMX outputs,
-both LMX2594s and the five internal PS PLLs. PS DDR remains a DPLL consumer;
-the preset's derived 1200 MHz setting is not an external reference. Programmable
-frequencies are documented defaults, not a claim about current board state.
-The LMK CLKIN0/1 discrepancy is documented, following schematic sheet 16.
-
-The two implemented generation recipes remain PS PL0 and PL-reference/MMCM.
-Inventory registration does not implement LMK/LMX programming, PL DDR or RFDC
-integration. Resolution fingerprints include the clock inventory hash. Core
-software validation passed **410 tests**, with **23 tool-dependent cases
-deselected**. Another **23 notebook/documentation checks** passed using temporary
-notebook copies with hardware switches off. Vendor board files and all user notebook outputs were preserved;
-no AMD tools, physical-board tests or pushes were run for this update.
-
-### S0 real clock validation passed — 2026-11-17
-
-The user manually ran `tests/board/test_vivado_clock_resolution.py` with the
-configured Vivado/Vitis 2025.1 executables. Inspection of the JUnit report
-confirmed **4 passed, 0 failed, 0 skipped**, in 139.749 seconds. All five retained
-clock manifests match the current board, reference, inventory and recipe context.
-
-| Check | Verified result |
-| --- | --- |
-| PS PL0 request and round trip | 100 MHz request produces 99.999985 MHz, 0.15 ppm error; round-trip error is zero; IOPLL, divisors 15 and 1 |
-| PL-reference MMCM | 122.88 MHz input produces exactly 245.76 MHz; multiplier 9.75, input divider 1, output divider 4.875; separate HLS target is 250 MHz |
-| Rejected PS request | 123.456 MHz request produces 115.384598 MHz and is rejected outside tolerance; diagnostic manifest retained |
-| Clock target passed to HLS | Vitis synthesizes the probe for `xczu48dr-ffvg1517-2-e` with a 10 ns target period |
-
-The local report is `/tmp/waveflow-s0-clock-results.xml`; temporary tool traces
-are under `/tmp/pytest-of-nyu/pytest-41/`. This accepts the updated clock
-configuration and HLS-target path. It does not establish full S0 packaging/XSI
-acceptance, external-chip programming, implementation timing or a physical-board
-clock measurement. No additional tool or board run was started during review.
-
-### Current S1 notebook build verified — 2026-11-17
-
-The user manually rebuilt `examples/regmap/board/build_simp_fun.ipynb` in
-`examples/regmap/board_build/notebook/run-g1ifa6_n`. Saved code cells executed
-in order (1-6), with no error outputs. Independent read-only inspection checked
-the synthesis snapshot/RTL/report hashes, C/RTL simulation evidence, BD inputs
-and receipts, implementation reports, and collected overlay/driver identities.
-The clock fingerprint matches the current board/reference/inventory/recipe.
-
-- Clock: PS PL0 through IOPLL, requested 100 MHz and calculated 99.999985 MHz
-  (0.15 ppm); separate HLS target is 100 MHz / 10 ns.
-- C simulation and RTL co-simulation each returned 11 for the default vector.
-- BD validation passed; SimpFun AXI-Lite aperture is `0xA1000000`, size 64 KiB.
-- Routed setup slack is 4.728 ns and hold slack is 0.022 ns. Timing and
-  unconstrained checks passed; severe DRC count is zero.
-- HWH addresses and XSA/BIT consistency passed. The collected driver's three
-  model cases independently returned `[0, 11, 17]`.
-
-The new delivery directory is
-`examples/regmap/board_build/notebook/run-g1ifa6_n/overlays/overlay-4u2wyf7o/`.
-Its delivery files are `simp_fun.bit`, `simp_fun.hwh`, `driver.py` and
-`manifest.json`; source provenance is merge commit `9e627b9b` plus the recorded
-input/clock hashes. `board_execution_verified` remains false. No additional
-AMD tool invocation or physical-board test was performed during this review;
-the user's notebook outputs were preserved.
-
-The user chose to rebuild the **S2 notebook first**, before starting new board
-acceptance. The next actions remain **manual**:
-
-1. Restart the S2 build notebook kernel and run its cells in order, with a fresh
-   build directory and PS PL0/HLS requests at 100 MHz. Review its new clock,
-   HLS/export/ABI, BD, implementation and collected-driver records. Preserve the
-   historical notebook outputs until the user replaces them through execution.
-2. After the S2 build review, perform board acceptance for the fresh S1 and S2
-   overlays. S1 `overlay-4u2wyf7o` must return `[0, 11, 17]`; S2 must pass cubic,
-   identity and constant cases. Return the JSON records, match manifest/bitstream/
-   ABI/vector identities, and check output errors and completed transfers.
-3. Preserve the previously returned S2 notebook and recover the older S1/S2 raw
-   acceptance records when available. Those records remain evidence for their
-   original builds. Keep generated overlays, reports and JSON outside tracked source.
-4. Track notebook acceptance and the explicitly deferred CMD validation
-   separately. The notebook CMD sections remain available for a later independent
-   build/test; do not run them during this notebook-only validation round.
-5. Proceed to later stages after reviewing the current acceptance evidence;
-   retain generic multi-IP/system packaging and RF work as follow-up scope.
+1. Core and integration offline regressions are complete: 433 passed across two
+   selections, with 23 external-tool/board cases deselected.
+2. Real clock checks, fresh S1/S2 builds, board runs and returned JSON review are
+   complete. Keep generated overlays, receipts, board records and plots ignored.
+3. Record Windows tool acceptance separately from mocked command coverage, and
+   record a committed-revision rebuild on another machine before claiming
+   portable end-to-end acceptance. Same-workstation fresh-checkout validation
+   is complete: a separate environment passed 433 offline tests and both builds
+   without copied historical build products.
+4. Submit the S0–S2 extension with its remaining validation limits stated. Implement
+   S3 afterward as a separate application stage.
 
 ---
 
@@ -424,6 +152,14 @@ and that only surfaces on a clean clone.
 `waveflow/build/board_steps.py` use the upstream `BuildDag`, artifact handling and
 `run_dag_cli`. The canonical SimpFun and PolyAccel models, handwritten arithmetic
 and upstream build entry points are unchanged by the migration.
+
+**Keep the existing Waveflow core integration small.** Changes to pre-existing
+`waveflow/` files are limited to optional board/clock validation in `BuildConfig`,
+the board-aware `tcl_target` branch, the shared `run_vivado` runner and its public
+export. New board-packaging functionality lives in dedicated modules. Test
+sources, conformance fixtures, example sources, Tcl templates, portable hosts and
+manual notebooks are included in the submission. Generated application builds,
+overlays, measurements and local review reports remain ignored.
 
 **Board and calibration Platform have separate jobs.** `waveflow/board/spec.py`
 defines the physical target, versioned vendor resources, reference clocks and
@@ -525,8 +261,10 @@ not be attempted before all five exist — there is nothing to generalize from u
 
 ## 5. Stage S0 — the board becomes a first-class object
 
-**Progress:** core implemented and covered by offline tests. Fresh Vitis/Vivado
-and applicable XSI acceptance remain pending for the migrated branch.
+**Progress:** core implemented; all four real clock checks passed again after the
+catalog repair (138.41 s, zero skipped), as did fresh S1/S2 overlay builds and
+returned board-record reviews. Dedicated S0 tool gates
+and applicable XSI acceptance remain separate checks.
 
 **No example. Framework only. Everything else depends on it.**
 
@@ -600,11 +338,10 @@ and `ExportIpStep` refuses a part mismatch in a unit test.
 ## 6. Stage S1 — `examples/regmap`: AXI-Lite only
 
 **Progress:** source-to-overlay DAG, template, portable host and manual notebook
-implemented; offline gates and the fresh notebook tool build passed. The user
-reported a passing notebook-overlay board run with outputs `0`, `11`, `17`.
-Review of the returned notebook acceptance JSON and independent CMD build/board
-acceptance remain pending. CMD validation is deferred by the user's request and
-does not block proceeding to S2 notebook validation.
+implemented. The baseline CMD build and returned physical-board records passed
+with outputs `[0, 11, 17]`. The repaired catalog's fresh CMD build also passed
+(403.5 s). `overlay-tmdvivaz` passed on the board with the same outputs, and its
+returned JSON passed integrity review (§0).
 
 The smallest possible closed loop, and the stage that carries most of the framework. Budget
 accordingly: S1 is not 1/5 of the work.
@@ -655,13 +392,11 @@ test is green.
 
 ## 7. Stage S2 — `examples/stream_inband`: streams via DMA
 
-**Progress:** current upstream protocol adapted without changing `poly.py` or its
-handwritten body; DMA/DDR template, portable host and manual notebook implemented.
-Offline gates and the fresh notebook HLS/export/ABI/BD/implementation checks
-passed. The returned RFSoC4x2 notebook shows cubic, identity and constant passing
-with 100 samples each, five asserted transfers per case and zero maximum error.
-Its saved plots agree with those results. Independent review of the three
-acceptance JSON files remains pending; CMD validation is explicitly deferred.
+**Progress:** the direct-source baseline passed all 37 application regressions,
+a complete CMD build and three returned physical-board cases. The current XSim
+launcher and catalog changes passed core offline checks and a fresh Linux CMD
+build (545.3 s). All three `overlay-6bgv3k3i` board cases and their returned-record
+integrity reviews passed (§0).
 
 **The design.** `PolyAccel` is `HostActivated` with `s_in` (`StreamIFSlave`), `m_out`
 (`StreamIFMaster`), and a regmap carrying `halted`, `error` and `tx_id` status.
@@ -699,11 +434,8 @@ vector.
 
 **Rough effort:** ~1 week.
 
-> **Ordering note.** S2 and S3 may be swapped. `shared_mem` has the *simpler host* (one
-> `pynq.allocate`, a base address at `0x10`, `ap_start` — no DMA IP, no TLAST). `stream_inband` has
-> the *more reusable* result, because S5 needs the same DMA path to load its shot buffer. Doing DMA
-> second, as written here, front-loads the risk; doing it third gets an easier win on the board
-> sooner. Either is defensible — pick one and record which in the PR.
+S2 establishes the DMA command/response transport that S3 can reuse. S3 adds a
+separate bulk-data path through the accelerator's own AXI memory master.
 
 ---
 
@@ -715,11 +447,11 @@ S2 already accesses PS DDR through DMA; S3 adds the accelerator's own AXI master
 **The design.** `HistAccel` is `HostActivated` with `s_in`, `m_out`, and `m_mem` (`MMIFMaster`),
 and a **deliberately empty** `VitisRegMap({})` whose only job is `ap_start`/`ap_done`.
 
-**8.1 The address register is the whole point.** `m_axi ... offset=slave` forces a control slave into
-existence carrying `m_mem`'s base at `0x10`, and the kernel therefore needs **two masters**: the CPU
-to write the base address, and something to pulse `ap_start`. `HostActivated` fills the reserved
-`0x00` slot in the slave that already existed. On hardware this becomes: `pynq.allocate` a buffer,
-write `buf.device_address` to `0x10`, pulse `ap_start`.
+**8.1 Use the exported pointer ABI.** `m_axi ... offset=slave` adds a base-pointer
+register to the control slave. Its actual generated name, offset and width come
+from the verified header/XML and explicit `pointer_bindings`; the host uses the
+generated driver's `set_pointer()` method. Allocate a contiguous DDR arena and
+keep its physical base distinct from the command's relative byte offsets.
 
 **8.2 Check for a second control slave.** Adding `s_axilite port=return bundle=control` absorbs
 `ap_start` but does **not** fill the reserved `0x00` — Vitis then emits a *second*, auto-named
@@ -731,6 +463,13 @@ port list that there is exactly one control interface** before building the BD.
 **8.3 Cache coherency is a real answer, not a footnote.** The PS caches. Either allocate from a
 coherent port, or invalidate/flush around the kernel run. A stale cache line looks like a wrong
 result, not like a cache problem — say which choice the example makes, in the example's README.
+
+**8.4 Commands still need transport.** Existing `HistAccel` consumes a `HistCmd`
+on `s_in` and returns `HistResp` on `m_out`. Programming the base and `ap_start`
+alone leaves it waiting for a command. Reuse S2's simple DMA for descriptors and
+responses; route the accelerator's own master through the memory SmartConnect
+to PS HP0 for samples, edges and counts. Start with the existing single PS PL0
+application domain at 100 MHz and explicit noncoherent cache maintenance.
 
 **Gates:** rungs 1–6. Rung 6 = the histogram computed on the board equals the pysim histogram.
 
@@ -885,11 +624,12 @@ Documented in the developer guide and recorded with generated overlay metadata:
   version bump as a real change with its own PR.
 - **Rung 5 is slow.** 20–40 min per bitstream, five examples. Bitstream builds should never be part
   of a default test run; `-m vivado` is opt-in, and CI (if any) runs rungs 1–2 only.
-- **Acceptance receipt review remains pending.** Fresh S1/S2 notebook board runs
-  show success, but the original JSON records still need hash review. Independent
-  CMD and clean-clone rebuild acceptance remain outstanding.
-- **DMA framing, allocation and cache maintenance** are exercised by the returned
-  S2 notebook's three board cases. The model adapter alone does not establish
+- **Acceptance is input-specific.** The current XSim/catalog cleanup passed
+  software, clock, overlay-build and physical-board checks with returned-record
+  integrity review, plus same-workstation fresh-checkout builds. Windows AMD-tool
+  acceptance and a committed-revision rebuild on another machine remain outstanding.
+- **DMA framing, allocation and cache maintenance** are exercised by the three
+  returned S2 board cases. The model adapter alone does not establish
   physical PS memory/cache behavior.
 - **ABI changes must be checked against the actual export.** This includes arrays
   in future IPs and enum/pointer representation; S2 coefficients are now in-band.

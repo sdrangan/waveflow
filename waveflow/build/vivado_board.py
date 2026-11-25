@@ -18,7 +18,6 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 
-from waveflow.build.build import BuildConfig
 from waveflow.build.hls_control import HlsControlSpec
 from waveflow.build.ip_export import (
     _board_target, _hash_tree, _identifier, _inside, _new_run, _period_matches,

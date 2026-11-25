@@ -2,7 +2,6 @@
 from dataclasses import FrozenInstanceError, replace
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import xml.etree.ElementTree as ET
 

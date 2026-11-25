@@ -25,8 +25,6 @@ from waveflow.build.board_steps import (
     BdValidateStep, BitstreamStep, CollectOverlayStep,
 )
 from waveflow.build.elaborate import elaborate
-from waveflow.build.hls_control import parse_control_abi
-from waveflow.build.host_driver import generate_host_driver
 from waveflow.build.hwcodegen_steps import HlsCodegenStep
 from waveflow.build.ip_export import (
     IpExportSpec, synthesize_for_board, _new_run, _run, _sha, _write_json,

@@ -133,6 +133,13 @@ kept out of the reference inventory. S2 uses PS DDR through its AXI interface;
 its application PL clock remains a separate request. PL DDR instead needs the
 200 MHz reference and a PL memory-controller design.
 
+The bundled `xitem.json` catalog metadata has one local repair: RealDigital and
+Xilinx are separate contributor objects. The vendor copy omitted their object
+separator and was not valid JSON. Device/pin/preset XML and vendor license files
+retain their original contents. All board resources, including this metadata,
+participate in the target fingerprint; a changed catalog requires fresh clock
+and build receipts. Existing overlays retain acceptance for their original inputs.
+
 Si5395 uses factory ROM configuration. LMK/LMX outputs require PS-side SPI setup
 (for example, PYNQ `xrfclk` with suitable TICS tables); the board file and a plain
 overlay download do not establish those settings. Inventory values do not
@@ -280,6 +287,12 @@ another stream or another clock domain requires corresponding topology work.
 | Portable host | `host/run_simp_fun.py` | `host/run_poly.py`, `host/dma.py` |
 | Manual notebook | [`build_simp_fun.ipynb`](../../../examples/regmap/board/build_simp_fun.ipynb) | [`build_poly.ipynb`](../../../examples/stream_inband/board/build_poly.ipynb) |
 
+S2 declares the repository's `poly_body_impl.tpp` and `poly_tb.cpp` as source
+artifacts and reads them directly into each fresh synthesis snapshot. Kernel
+boundary generation reuses `header_to_cpp()` and `kernel_to_cpp()`; its relative
+includes refer to that snapshot layout. Existing body/testbench copies under
+`board_build/` are ignored, and no manual source synchronization is required.
+
 The current S2 coefficients arrive in each DATA header, and AXI-Lite exposes only
 `halted`, `error` and `tx_id` status. DATA and END headers have six 32-bit words.
 The host arms S2MM before each output-producing transfer and sends DATA, samples
@@ -296,6 +309,12 @@ the kernel boundary around its handwritten C++ body and uses the upstream
 handwritten C++ testbench/scenarios. Follow that component's code-generation
 contract when adding arithmetic; changing Python reference behavior alone does
 not update a handwritten C++ body.
+
+S2's XSim replay selects the executable beside the discovered Vivado installation,
+including `xsim.bat` on Windows, and uses the upstream command/environment helpers.
+It retains a finite timeout and rejects missing or stale VCD output. Tcl path
+checks use forward slashes. Tool-free launcher tests cover both command forms;
+an actual Windows AMD-tool build remains a separate validation requirement.
 
 ## Adding another accelerator or board
 
@@ -380,6 +399,7 @@ Run the core offline gates without AMD tools or a board:
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest \
   tests/board tests/examples/test_board_packaging.py \
   tests/examples/test_board_dma.py tests/examples/test_board_build_notebooks.py \
+  tests/examples/test_board_rtl_frames.py \
   tests/build/test_build_config_platform.py tests/build/test_tcl_target.py \
   tests/toolchain/test_toolchain.py \
   -m 'not vitis and not vivado and not board and not xsi and not gem5'

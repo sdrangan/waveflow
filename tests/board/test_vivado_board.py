@@ -13,7 +13,7 @@ from waveflow.build.board_steps import BdGenStep, BdValidateStep, BitstreamStep,
 from waveflow.build.hls_control import control_spec_from_export
 from waveflow.build.host_driver import generate_host_driver
 from waveflow.build.ip_export import _sha, _hash_tree, _write_json
-from tests.board.test_control_steps import exported
+from tests.board.test_control_steps import exported as exported
 from tests.board.control_abi_helpers import intent
 from tests.board.vivado_helpers import minimal_design
 

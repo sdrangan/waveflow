@@ -17,7 +17,7 @@ from waveflow.build.board_steps import ExportIpStep
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.ip_export import IpExportSpec, export_ip, synthesize_for_board
 from tests.board.clock_helpers import resolved_config
-from tests.board.test_clock_resolution import fake_vivado
+from tests.board.test_clock_resolution import fake_vivado as fake_vivado
 
 
 SPEC = IpExportSpec(name="probe")

@@ -5,8 +5,7 @@ import shutil
 
 import pytest
 
-from waveflow.board import Board
-from waveflow.build.build import BuildConfig, BuildDag, SourceStep
+from waveflow.build.build import BuildDag, SourceStep
 from waveflow.build.board_steps import HlsControlSpecStep, HostDriverGenStep
 from waveflow.build.hls_control import control_spec_from_export
 from waveflow.build.ip_export import _board_target, _hash_tree, _sha

@@ -8,7 +8,6 @@ Use --force for a fresh complete build; the default target needs no AMD tools.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import shutil
 
@@ -18,7 +17,7 @@ from examples.board_support import model_driver, BOARD_CLOCK_ARGS, ps_clock_requ
 from examples.stream_inband.poly import PolyAccel
 from examples.stream_inband import scenarios as S
 from examples.stream_inband.poly_build import (
-    ScenariosStep, SourcesStep, ModelStep, PySimStep, CheckStep, HlsGenIncludeStep,
+    ScenariosStep, ModelStep, PySimStep, CheckStep, HlsGenIncludeStep,
 )
 from examples.stream_inband.board.design import poly_design
 from examples.stream_inband.board.host import run_poly as host
@@ -31,7 +30,7 @@ from waveflow.build.board_steps import (
     BdValidateStep, BitstreamStep, CollectOverlayStep,
 )
 from waveflow.build.elaborate import elaborate
-from waveflow.build.hwcodegen_steps import HlsCodegenStep
+from waveflow.build.hwgen import header_to_cpp, kernel_to_cpp
 from waveflow.build.ip_export import (
     IpExportSpec, synthesize_for_board, _new_run, _run, _sha, _write_json,
 )
@@ -111,15 +110,36 @@ class HostSimStep(BuildStep):
 
 
 @dataclass(kw_only=True)
+class KernelGenStep(BuildStep):
+    """Generate the kernel boundary; handwritten sources remain source artifacts."""
+
+    description = "Generate the current PolyAccel kernel boundary for the synthesis snapshot."
+    consumes = ["poly_source", "poly_body_impl"]
+    produces = {"poly_cpp": Path("gen/poly.cpp"), "poly_hpp": Path("gen/poly.hpp")}
+
+    def run(self, config, **_):
+        # The snapshot places the formal body at its root, beside gen/ and include/.
+        sources = {
+            "poly_cpp": kernel_to_cpp(PolyAccel),
+            "poly_hpp": header_to_cpp(PolyAccel, output_dir="gen", impl_dir="."),
+        }
+        paths = {name: config.root_dir / path for name, path in self.produces.items()}
+        for name, path in paths.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(sources[name], encoding="utf-8")
+        return paths
+
+
+@dataclass(kw_only=True)
 class SynthesizeStep(BuildStep):
     description = "Synthesize the current 32-bit kernel; check all C scenarios and timing RTL."
-    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "scenario_list",
+    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "poly_tb", "include_dir", "scenario_list",
                 "host_sim_result"]
     produces = {"hls_synthesis_receipt": None, "hls_verification": None}
 
     def run(self, config, **a):
         inputs = {"gen/poly.cpp": a["poly_cpp"], "gen/poly.hpp": a["poly_hpp"],
-                  "poly_body_impl.tpp": a["poly_body_impl"], "poly_tb.cpp": config.root_dir / "poly_tb.cpp"}
+                  "poly_body_impl.tpp": a["poly_body_impl"], "poly_tb.cpp": a["poly_tb"]}
         for prefix, directory in (("include", a["include_dir"]), ("data", config.root_dir / "data")):
             inputs.update({f"{prefix}/{p.relative_to(directory).as_posix()}": p
                            for p in directory.rglob("*") if p.is_file()})
@@ -131,7 +151,7 @@ class SynthesizeStep(BuildStep):
         for scenario in S.scenarios():
             for stage in ("csim", "cosim"):
                 (data / scenario / stage).mkdir(parents=True, exist_ok=True)
-        if any(c in str(data) for c in "{}\\\n\r"):
+        if any(c in data.as_posix() for c in "{}\\\n\r"):
             raise ValueError("unsupported Tcl path")
         script = run / "verify.tcl"
         script.write_text('if {[catch {\nopen_project hls\nopen_solution solution1\n'
@@ -175,6 +195,8 @@ def build_poly_board_dag():
     dag = BuildDag()
     dag.add(SourceStep(artifact="poly_source", path=HERE / "poly.py"))
     dag.add(SourceStep(artifact="scenarios_source", path=HERE / "scenarios.py"))
+    dag.add(SourceStep(artifact="poly_body_impl", path=HERE / "poly_body_impl.tpp"))
+    dag.add(SourceStep(artifact="poly_tb", path=HERE / "poly_tb.cpp"))
     dag.add(ScenariosStep(name="scenarios"))
     dag.add(ModelStep(name="py_model"))
     dag.add(CheckStep(name="check_model", stage="model", done_artifacts=("model_done",)))
@@ -183,9 +205,7 @@ def build_poly_board_dag():
     dag.add(VectorsStep(name="vectors"))
     dag.add(HostSimStep(name="host_sim"))
     dag.add(HlsGenIncludeStep(name="gen_include"))
-    dag.add(SourcesStep(name="sources"))
-    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel,
-                         source_artifact="kernel_sources", output_dir="gen", impl_dir="."))
+    dag.add(KernelGenStep(name="gen_kernel"))
     dag.add(SynthesizeStep(name="synthesize"))
     dag.add(ExportIpStep(name="export_ip", spec=IpExportSpec(name="poly"), output_dir="exports"))
     dag.add(HlsControlSpecStep(name="control_abi", regmap=board_regmap(), output_dir="control"))
