@@ -22,10 +22,11 @@ from waveflow.mcp.knowledge import (
 from waveflow.mcp.knowledge.corpus import TOC_DIR, parse_front_matter
 from waveflow.mcp.knowledge.roots import repo_root
 
-#: The docs TOC as of 2026-10-25 (vecunit added; 2026-10-22: vecunit_cg and vecunit_mf added; 2026-10-18: stream_kernel_mm added, sharing stream_kernel's directory; 2026-10-17: block_eq added; 2026-10-16: stream_kernel added; 2026-10-06: ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
+#: The docs TOC as of 2026-11-27 (aoa_detect added; 2026-10-25: vecunit added; 2026-10-22: vecunit_cg and vecunit_mf added; 2026-10-18: stream_kernel_mm added, sharing stream_kernel's directory; 2026-10-17: block_eq added; 2026-10-16: stream_kernel added; 2026-10-06: ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
 #: deliberate two-line change rather than something that happens by accident,
 #: and so the count in the plan stays honest.
 TOC_EXAMPLES = {
+    "aoa_detect",
     "basic_vec",
     "block_eq",
     "bram_access",

@@ -53,29 +53,32 @@ The core path, in order: each one is the next rung of the [Flow Overview](../gui
     computed on demand for a multi-user MIMO scheduler, where the accelerator's delay is the
     scheduling delay. Its first design, a bit-exact fixed-point CG detector, is
     [The 2024 CG detector](mimo_cg/detector.md).
+15. [Emitter detection and AoA](aoa_detect/index.md) -- under construction: C channels watched
+    for emitters, each searching or tracking, with every channel's jobs dispatched at once onto
+    shared hardware, so the detection delay depends on queueing and contention.
 
 ## Libraries and domains
 
-15. [Waveflow's FFT, at full rate](ssr_fft/index.md) -- a full-rate streaming FFT from free-running
+16. [Waveflow's FFT, at full rate](ssr_fft/index.md) -- a full-rate streaming FFT from free-running
     modules.
-16. [Wrapping vendor IP: the Vitis FFT](vitis_fft/index.md) -- a vendor block as a module,
+17. [Wrapping vendor IP: the Vitis FFT](vitis_fft/index.md) -- a vendor block as a module,
     calibrated as a black box.
-17. [RF loopback](rf_loopback/index.md) -- the RF data converter boundary.
-18. [Playing a stored waveform](rf_shot_tx/index.md) -- a waveform played out of memory at the
+18. [RF loopback](rf_loopback/index.md) -- the RF data converter boundary.
+19. [Playing a stored waveform](rf_shot_tx/index.md) -- a waveform played out of memory at the
     converter's rate.
-19. [Capturing without losing anything](rf_shot_rx/index.md) -- a capture into two memory regions,
+20. [Capturing without losing anything](rf_shot_rx/index.md) -- a capture into two memory regions,
     with every loss reported.
-20. [Measuring a delay with an address](rf_shot_loopback/index.md) -- the two buffers closed through
+21. [Measuring a delay with an address](rf_shot_loopback/index.md) -- the two buffers closed through
     one converter, a delay read as an address difference.
-21. [Micro-scheduler on a CPU](cpu_sched/index.md) -- software on a calibrated processor beside
+22. [Micro-scheduler on a CPU](cpu_sched/index.md) -- software on a calibrated processor beside
     hardware.
-22. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
+23. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
     harness, measured at RTL against its bounds, and the stage that binds found from a trace.
-23. [Toy vector programs](vecunit/index.md) -- three kernels of a few instructions each for the
+24. [Toy vector programs](vecunit/index.md) -- three kernels of a few instructions each for the
     programmable vector unit, checked by the assembler and bit-exact with a NumPy golden.
-24. [CG as a vector program](vecunit_cg/index.md) -- an algorithm as three programs for a
+25. [CG as a vector program](vecunit_cg/index.md) -- an algorithm as three programs for a
     programmable unit, ordered so the unit fuses it, against a dedicated kernel.
-25. [A matched filter as a vector program](vecunit_mf/index.md) -- a streaming kernel on the same
+26. [A matched filter as a vector program](vecunit_mf/index.md) -- a streaming kernel on the same
     unit, broadcast and conjugate operands, measured against its input floor.
 
 ## Legacy
