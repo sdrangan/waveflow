@@ -2,7 +2,7 @@
 title: The architecture
 parent: Emitter detection and AoA
 nav_order: 3
-summary: "The architecture. A capture and power detector takes every channel's samples at line rate, writes them into a ring of block slots in a true dual-port BRAM through its own port, sums each channel's energy as they pass, and notifies a hardware controller on a credit stream when a channel's energy crosses its threshold (absent, active and pending states; a drop, never a stall, when no credit is free). The controller keeps a table per channel, dispatches arrival jobs to a pool of systolic units (Gram matrix and direction scan, Q̂ kept inside the unit) and departure jobs to a pool of vector units (power in the tracked direction), runs the final tests, answers the detector, and sends the A53 a summary every P blocks. Every job reads its channel's block over the crossbar from the ring's other port and checks the slot's header last, so a block overwritten during its read is reported late, never used."
+summary: "The architecture. A capture and power detector takes every channel's samples at line rate, writes them into a ring of block slots in a true dual-port BRAM through its own port, sums each channel's energy as they pass, and notifies a hardware controller on a credit stream when a channel's energy crosses its threshold (absent, active and pending states; a drop, never a stall, when no credit is free). The controller keeps a table per channel, dispatches arrival jobs to a pool of systolic units (Gram matrix and direction scan, Q̂ kept inside the unit) and departure jobs to a pool of vector units (power in the tracked direction), runs the final tests, emits a result message for every decision (the decision time ends there), answers the detector, and sends the A53 a summary every P blocks. Every job reads its channel's block over the crossbar from the ring's other port and checks the slot's header last, so a block overwritten during its read is reported late, never used."
 ---
 
 # The architecture
@@ -216,9 +216,28 @@ controller.
 
 Every notification is answered exactly once, so a channel is never left `pending`.
 
-**Every $P$ blocks**, it writes a **summary record** for the A53 (each channel's state, $\hat{\theta}$ and
-$\hat{\gamma}$, and the counters since the last record) into a host-readable queue and raises **one
-interrupt**. $P$ sets how stale the host's view is against how often it is interrupted.
+### The result message
+
+**On every decision**, an arrival detected or a departure declared, the controller emits a **result
+message** on its results output:
+
+| Field | What |
+|---|---|
+| `channel` | $j$ |
+| `block` | the block the decision came from |
+| `decision` | arrival or departure |
+| `theta` | $\hat{\ell}$, the direction grid index (arrival only) |
+| `gamma` | $\hat{\gamma}$ (arrival only) |
+
+A search that finds nothing, or a departure check that finds the emitter still there, changes no state
+and emits nothing. The **decision time** is measured from the arrival of the block to this message
+([what is measured](problem.md#what-is-measured)).
+
+The result messages go to a host-readable queue that the A53 drains without an interrupt per message.
+**Every $P$ blocks** the controller also writes a **summary record** (each channel's state,
+$\hat{\theta}$ and $\hat{\gamma}$, and the counters since the last record) and raises **one interrupt**,
+so the host reads the results and the summary together. $P$ sets how stale the host's view is against
+how often it is interrupted; it does not enter the decision time.
 
 ### The thresholds it uses
 
@@ -270,14 +289,14 @@ block n complete ─► detector: channel j past its threshold, credit free ─�
    ─► controller: arrival → systolic pool / departure → vector pool
    ─► a free unit reads slot n's channel-j block over the crossbar, computes, reads the header
    ─► result ─► controller: the test → state message to the detector, credit returned
-   ─► the next summary to the A53 carries the change
+   ─► on a decision: a result message (the decision time ends here); the next summary interrupts the A53
 ```
 
-The **detection delay** of an emitter that starts in block $n_0$ runs from block $n_0$'s start to the
-controller's decision. It is the sum of: waiting for the block to complete; any blocks whose
-notification was dropped, the channel was `pending`, or the read was late; waiting for a free unit;
-the read, contended at port A; the computation; and the result's return. The host learns of it at the
-next summary; whether the delay is measured to the decision or to the summary is open.
+The **decision time** runs from block $n$'s arrival (its last sample written) to the result message:
+waiting for a free unit, the read contended at port A, the computation, the result's return through
+the arbiter, and the controller's test. An emitter's **detection delay**, from its onset, adds the
+blocks that passed before the decision: blocks before its energy crossed the threshold, and any whose
+notification was dropped, whose channel was `pending`, or whose read was late.
 
 ## Extensions
 
@@ -294,5 +313,4 @@ next summary; whether the delay is measured to the decision or to the summary is
 - The notification order when credits are short.
 - The sizes: the credit pool, the ring's depth $R$, the number of units of each type, the systolic
   array's shape, and the summary period $P$.
-- Where the delay is measured to: the controller's decision or the host's summary.
 - Whether the thresholds become per channel.

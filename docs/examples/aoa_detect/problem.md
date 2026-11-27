@@ -2,7 +2,7 @@
 title: The problem
 parent: Emitter detection and AoA
 nav_order: 1
-summary: "The problem statement. C channels, n_rx antennas, a block of B samples per channel arriving every B/fs seconds for every channel at once. In each channel an emitter is absent (covariance I) or present at a fixed angle and SNR (I + γ u uᴴ), switching on and off as a two-state Markov process. The receiver detects each emitter, estimates its AoA and SNR, and declares when it stops. What is measured: the detection and stop delays, the detection probability within a delay bound, false alarms, the AoA and SNR errors, blocks skipped under overload, and resources. What can be designed: block size, thresholds, the direction grid, the shared hardware and memory, where each stage runs, and the policies."
+summary: "The problem statement. C channels, n_rx antennas, a block of B samples per channel arriving every B/fs seconds for every channel at once. In each channel an emitter is absent (covariance I) or present at a fixed angle and SNR (I + γ u uᴴ), switching on and off as a two-state Markov process. The receiver detects each emitter, estimates its AoA and SNR, and declares when it stops. What is measured: from a result message for every decision, the decision time (from the block's arrival to the message), missed detections (including those later than a delay bound), false alarms, and the angular error. What can be designed: block size, thresholds, the direction grid, the shared hardware and memory, where each stage runs, and the policies."
 ---
 
 # The problem
@@ -77,27 +77,41 @@ results reach the host is the interface (page to come).
 
 ## What is measured
 
-For each emitter, with onset at the start of block $n_0$ and end at the start of block $n_1$:
+**A result message for every decision.** Each time the system decides that an emitter has arrived in a
+channel, or that it has departed, it emits a **result message**: the channel, the block the decision
+came from, the decision (arrival or departure), and, for an arrival, $\hat{\theta}$ and $\hat{\gamma}$
+([The architecture](arch.md#the-result-message)). Everything below is measured from these messages
+against the emitters' true on/off times and angles.
 
-- **Detection delay:** from the onset to the moment its AoA and SNR estimates are available to the
-  host. This includes waiting for blocks to complete, queueing for shared hardware, and the
-  computation.
-- **Stop delay:** from the end to the moment the host is told it has stopped.
-- **Detection probability within a delay bound** $D_{max}$: the fraction of emitters detected, with
-  the AoA within a tolerance, no later than $D_{max}$ after their onset. **This is the headline
-  metric.**
-- **False alarms:** detections declared in a channel holding no emitter, per channel per second.
-- **AoA and SNR errors** of the detections.
-- **Blocks skipped** under overload (by the late-block policy, below), per channel.
-- **Resources:** DSPs, LUTs, BRAM, and the CPU's load.
+**Decision time.** For each decision, from the **arrival of the block** it came from (the instant
+$t_n$ at which block $n$ is complete) to the **result message**. This is the response time of the
+hardware: waiting for a free unit, the read contended at the memory, the computation and the return.
+Its distribution, mean and tail, is the timing metric.
+
+**Accuracy**, by matching each emitter's on-period to the decisions in its channel:
+
+- **Missed detection:** an emitter for which no arrival decision is made while it is on, or none within
+  a delay bound $D_{max}$ of its onset. The delay bound makes timing part of detection: an arrival
+  decided too late counts as missed.
+- **False alarm:** an arrival decision in a channel with no emitter on at that block, per channel per
+  second. A departure decided while the emitter is still on (an **early stop**) is counted the same
+  way.
+- **Angular error:** $|\hat{\theta} - \theta|$ at each correct arrival decision; also the SNR error
+  $\hat{\gamma} - \gamma$.
+
+**Also recorded:** each emitter's **detection delay** from its onset to its arrival decision (the
+decision time plus every block that passed before a decision: blocks before the gate fired, dropped
+notifications, `pending` blocks and late reads), and the same for its departure; notifications
+dropped and reads late per channel; resources (DSPs, LUTs, BRAM).
 
 Two kinds of quantity come out of these, and they need different simulations:
 
-- **Accuracy per block** (false alarms, detection per block, the AoA and SNR errors) follows from the
-  thresholds, $B$ and the direction grid. The **untimed model** computes it.
-- **Delay**, and every quantity it changes (detection within $D_{max}$, skipped blocks, the stop
-  delay), depends on when each job runs on the shared hardware: queueing behind other channels' jobs
-  and contention for the memory. **Only a timed simulation** gives it.
+- **Accuracy per block** (false alarms, detection per block, the angular and SNR errors) follows from
+  the thresholds, $B$ and the direction grid. The **untimed model** computes it.
+- **Decision time**, and every quantity it changes (missed detections against $D_{max}$, the
+  detection delay, dropped notifications and late reads), depends on when each job runs on the shared
+  hardware: queueing behind other channels' jobs and contention for the memory. **Only a timed
+  simulation** gives it.
 
 ## What can be designed
 

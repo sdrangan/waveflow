@@ -106,7 +106,7 @@ def arch_overview() -> Svg:
 
     # --- host --------------------------------------------------------------------------------
     block(s, 400, 80, 280, 74, "Host (A53)",
-          ["sets thresholds, reads counters", "one summary + IRQ every P blocks"],
+          ["sets thresholds; reads results,", "counters; one IRQ every P blocks"],
           "#ffffff", INK2, INK)
 
     # --- capture + power detector -----------------------------------------------------------
@@ -141,7 +141,7 @@ def arch_overview() -> Svg:
            "final tests: a.4 detect, b.2 stop",
            "answers each notification:",
            "    state message + credit",
-           "summary to host every P blocks"],
+           "a result message per decision"],
           VIOLET_T, VIOLET, VIOLET)
     # detector <-> controller
     s.arrow([(332, 250), (398, 250)], color=VIOLET, sw=2)
@@ -153,8 +153,8 @@ def arch_overview() -> Svg:
     # host links
     s.arrow([(400, 117), (200, 117), (200, 198)], color=INK2, dash="3 4")
     s.label(290, 110, "registers: thresholds, counters", color=INK2)
-    s.arrow([(600, 198), (600, 156)], color=INK2, dash="3 4")
-    s.label(600, 182, "summary", color=INK2)
+    s.arrow([(520, 198), (520, 156)], color=INK2, dash="3 4")
+    s.label(520, 182, "results, summary", color=INK2)
 
     # --- dispatchers, pools, arbiter ----------------------------------------------------------
     s.rect(740, 222, 120, 54, fill="#ffffff", stroke=INK2)
