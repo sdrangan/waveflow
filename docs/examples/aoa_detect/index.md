@@ -8,9 +8,9 @@ summary: "Under construction. A multi-antenna receiver watches C channels for em
 ---
 # Emitter detection and AoA
 
-**Status: under construction.** These pages state the problem and the algorithm. The interface
-between the host, the sample capture and the accelerator, and the accelerator itself, are not yet
-designed, and nothing here is built.
+**Status: under construction.** These pages state the problem and the algorithm, and the
+architecture is being written: its front end is described, its downstream blocks are not yet
+designed. Nothing here is built.
 
 A receiver with $n_{rx}$ antennas watches $C$ frequency channels. In each channel an emitter appears
 from time to time, stays at a fixed angle of arrival (AoA) for a while, then stops. The receiver must
@@ -37,7 +37,6 @@ against RTL simulation alone.
 |---|---|
 | [The problem](problem.md) | The signal model, the emitters' on/off process, what is measured, and what can be designed. |
 | [The algorithm](algo.md) | The per-channel search / track state machine, each stage's maths and cost, and its thresholds. |
-| The interface | *Not written yet*: how the host, the sample capture and the accelerator exchange blocks, jobs and results. |
-| The accelerator | *Not written yet*: the architecture is still to be decided. |
+| [The architecture](arch.md) | *Being written.* Done: the front end, a capture and power detector that never stalls, writing a ring of blocks in a dual-port BRAM and notifying downstream on a credit stream. To come: the downstream search and track blocks. |
 
 The first sketch of the idea is `examples/aoa_detect/idea.md`.
