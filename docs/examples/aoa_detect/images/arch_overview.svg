@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="800" viewBox="0 0 1300 800">
+<defs><marker id="ah2a78d6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/></marker><marker id="ah4a3aa7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a3aa7"/></marker><marker id="ah52514e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker></defs>
+<rect width="1300" height="800" fill="#fcfcfb"/>
+<text x="24" y="34" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="20" font-weight="bold" text-anchor="start" fill="#0b0b0b">Emitter detection and AoA: the architecture</text>
+<text x="24" y="56" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">the sample path never stalls; every read of the samples goes through the ring's port A, where the jobs compete</text>
+<rect x="400" y="80" width="280" height="74" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="414" y="104" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14.5" font-weight="bold" text-anchor="start" fill="#0b0b0b">Host (A53)</text>
+<text x="414" y="126.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">sets thresholds, reads counters</text>
+<text x="414" y="142.8" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">one summary + IRQ every P blocks</text>
+<rect x="70" y="200" width="260" height="190" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="84" y="224" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14.5" font-weight="bold" text-anchor="start" fill="#1c5cab">Capture + power detector</text>
+<text x="84" y="246.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">writes every sample to the ring</text>
+<text x="84" y="262.8" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">C energy sums, in the same pass</text>
+<text x="84" y="279.6" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">per channel: absent / active /</text>
+<text x="84" y="296.4" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">    pending</text>
+<text x="84" y="313.2" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">notify past a threshold;</text>
+<text x="84" y="330.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">no credit: drop, never wait</text>
+<path d="M 14 300 L 68 300" fill="none" stroke="#2a78d6" stroke-width="2.4" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<text x="14" y="284" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#1c5cab">samples</text>
+<text x="14" y="322" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">B·C·nrx</text>
+<text x="14" y="337" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">a block</text>
+<rect x="70" y="520" width="260" height="150" rx="8" fill="#fbf0de" stroke="#a8660b" stroke-width="1.5"/>
+<text x="84" y="544" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14.5" font-weight="bold" text-anchor="start" fill="#a8660b">Ring: R slots, dual-port BRAM</text>
+<text x="84" y="566.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">slot[channel][sample][antenna]</text>
+<text x="84" y="582.8" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">header (block index) written first,</text>
+<text x="84" y="599.6" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">checked last by each reader:</text>
+<text x="84" y="616.4" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">overwritten while read → late</text>
+<path d="M 200 392 L 200 518" fill="none" stroke="#2a78d6" stroke-width="2.4" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<rect x="138.3" y="449" width="123.39999999999999" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="200.0" y="462" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#1c5cab">port B: write only</text>
+<rect x="400" y="200" width="280" height="230" rx="8" fill="#e9e6f7" stroke="#4a3aa7" stroke-width="1.5"/>
+<text x="414" y="224" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14.5" font-weight="bold" text-anchor="start" fill="#4a3aa7">Controller (hardware)</text>
+<text x="414" y="246.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">per channel: state, ℓ̂ (θ̂), γ̂,</text>
+<text x="414" y="262.8" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">    last block</text>
+<text x="414" y="279.6" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">dispatches jobs to free units</text>
+<text x="414" y="296.4" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">final tests: a.4 detect, b.2 stop</text>
+<text x="414" y="313.2" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">answers each notification:</text>
+<text x="414" y="330.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">    state message + credit</text>
+<text x="414" y="346.79999999999995" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">summary to host every P blocks</text>
+<path d="M 332 250 L 398 250" fill="none" stroke="#4a3aa7" stroke-width="2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="319.05" y="227" width="91.89999999999999" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="365.0" y="240" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#4a3aa7">notifications</text>
+<rect x="312.75" y="257" width="104.5" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="365.0" y="270" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="10.5" font-weight="normal" text-anchor="middle" fill="#52514e">(credit stream)</text>
+<path d="M 398 350 L 332 350" fill="none" stroke="#4a3aa7" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="315.9" y="327" width="98.2" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="365.0" y="340" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#4a3aa7">state messages</text>
+<rect x="331.65" y="357" width="66.69999999999999" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="365.0" y="370" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="10.5" font-weight="normal" text-anchor="middle" fill="#52514e">(a queue)</text>
+<path d="M 400 117 L 200 117 L 200 198" fill="none" stroke="#52514e" stroke-width="1.8" stroke-dasharray="3 4" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="187.35000000000002" y="97" width="205.29999999999998" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="290.0" y="110" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">registers: thresholds, counters</text>
+<path d="M 600 198 L 600 156" fill="none" stroke="#52514e" stroke-width="1.8" stroke-dasharray="3 4" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="572.95" y="169" width="54.1" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="600.0" y="182" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">summary</text>
+<rect x="740" y="222" width="120" height="54" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="800" y="245" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="#0b0b0b">StreamDispatch</text>
+<text x="800" y="264" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">first free</text>
+<rect x="740" y="478" width="120" height="54" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="800" y="501" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="#0b0b0b">StreamDispatch</text>
+<text x="800" y="520" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">first free</text>
+<path d="M 682 249 L 738 249" fill="none" stroke="#4a3aa7" stroke-width="2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="682.95" y="227" width="54.1" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="710.0" y="240" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="10.5" font-weight="normal" text-anchor="middle" fill="#4a3aa7">arrival</text>
+<path d="M 682 400 L 710 400 L 710 505 L 738 505" fill="none" stroke="#4a3aa7" stroke-width="2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="676.65" y="442" width="66.69999999999999" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="710.0" y="455" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="10.5" font-weight="normal" text-anchor="middle" fill="#4a3aa7">departure</text>
+<rect x="900" y="176" width="250" height="150" rx="12" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="912" y="196" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="start" fill="#52514e">systolic pool</text>
+<rect x="912" y="206" width="226" height="48" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="924" y="226" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1c5cab">Systolic unit 0</text>
+<text x="924" y="244" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">a.2 Gram + a.3 scan, Q̂ inside</text>
+<rect x="912" y="262" width="226" height="48" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="924" y="282" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1c5cab">Systolic unit k</text>
+<text x="924" y="300" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">a.2 Gram + a.3 scan, Q̂ inside</text>
+<path d="M 862 249 L 880 249 L 880 230 L 910 230" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 880 249 L 880 286 L 910 286" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="900" y="432" width="250" height="150" rx="12" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="912" y="452" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="start" fill="#52514e">vector pool</text>
+<rect x="912" y="462" width="226" height="48" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="924" y="482" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1c5cab">Vector unit 0</text>
+<text x="924" y="500" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">b.2: ‖uᴴX‖², nrx MACs a cycle</text>
+<rect x="912" y="518" width="226" height="48" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="924" y="538" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1c5cab">Vector unit m</text>
+<text x="924" y="556" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">b.2: ‖uᴴX‖², nrx MACs a cycle</text>
+<path d="M 862 505 L 880 505 L 880 486 L 910 486" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 880 505 L 880 542 L 910 542" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 1190 688 L 1190 316 L 1152 316" fill="none" stroke="#2a78d6" stroke-width="1.8" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<rect x="1169.25" y="627" width="41.5" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="1190.0" y="640" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#1c5cab">reads</text>
+<rect x="1186" y="146" width="100" height="48" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="1236" y="166" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#0b0b0b">StreamArbiter</text>
+<text x="1236" y="184" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">results</text>
+<path d="M 1140 230 L 1236 230 L 1236 196" fill="none" stroke="#fcfcfb" stroke-width="7.8"/>
+<path d="M 1140 230 L 1236 230 L 1236 196" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 1140 286 L 1236 286 L 1236 196" fill="none" stroke="#fcfcfb" stroke-width="7.8"/>
+<path d="M 1140 286 L 1236 286 L 1236 196" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 1140 486 L 1236 486 L 1236 196" fill="none" stroke="#fcfcfb" stroke-width="7.8"/>
+<path d="M 1140 486 L 1236 486 L 1236 196" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 1140 542 L 1236 542 L 1236 196" fill="none" stroke="#fcfcfb" stroke-width="7.8"/>
+<path d="M 1140 542 L 1236 542 L 1236 196" fill="none" stroke="#4a3aa7" stroke-width="1.8" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<path d="M 1184 168 L 640 168 L 640 198" fill="none" stroke="#4a3aa7" stroke-width="2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<rect x="795.3" y="148" width="249.4" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="920.0" y="161" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#4a3aa7">results: ℓ* and p, or p_b; a late flag</text>
+<rect x="400" y="690" width="810" height="42" rx="8" fill="#f0efec" stroke="#52514e" stroke-width="1.5"/>
+<text x="805" y="716" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#0b0b0b">AXI crossbar: every job reads its channel's block here, in competition</text>
+<path d="M 398 711 L 365 711 L 365 600 L 332 600" fill="none" stroke="#2a78d6" stroke-width="2.4" stroke-linejoin="round"/>
+<rect x="341.1" y="642" width="47.8" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="365.0" y="655" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#1c5cab">port A</text>
+<path d="M 1025 688 L 1025 568" fill="none" stroke="#2a78d6" stroke-width="1.8" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<rect x="1004.25" y="619" width="41.5" height="18" rx="4" fill="#fcfcfb" stroke="#fcfcfb" stroke-width="0"/>
+<text x="1025.0" y="632" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#1c5cab">reads</text>
+<path d="M 24 770 L 64 770" fill="none" stroke="#2a78d6" stroke-width="2.4" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<text x="72" y="774" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">samples</text>
+<path d="M 160 770 L 200 770" fill="none" stroke="#4a3aa7" stroke-width="2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<text x="208" y="774" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">jobs, results, notifications</text>
+<path d="M 400 770 L 440 770" fill="none" stroke="#4a3aa7" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<text x="448" y="774" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">state messages</text>
+<path d="M 570 770 L 610 770" fill="none" stroke="#52514e" stroke-width="1.8" stroke-dasharray="3 4" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="618" y="774" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">host, memory-mapped</text>
+</svg>
