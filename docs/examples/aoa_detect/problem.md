@@ -2,7 +2,7 @@
 title: The problem
 parent: Emitter detection and AoA
 nav_order: 1
-summary: "The problem statement. C channels, n_rx antennas, a block of B samples per channel arriving every B/fs seconds for every channel at once. In each channel an emitter is absent (covariance I) or present at a fixed angle and SNR (I + γ u uᴴ), switching on and off as a two-state Markov process. The receiver detects each emitter, estimates its AoA and SNR, and declares when it stops. What is measured: from a result message for every decision, the decision time (from the block's arrival to the message), missed detections (including those later than a delay bound), false alarms, and the angular error. What can be designed: block size, thresholds, the direction grid, the shared hardware and memory, where each stage runs, and the policies."
+summary: "The problem statement. C channels, n_rx antennas, a block of B samples per channel arriving every B/fs seconds for every channel at once. In each channel an emitter is absent (covariance I) or present at a fixed angle and SNR (I + γ u uᴴ), switching on and off as a two-state Markov process. The receiver detects each emitter, estimates its AoA and SNR, and declares when it stops. What is measured, kept as separate metrics for now: from a result message for every decision, the decision time (from the block's arrival to the message), missed detections, false alarms, early stops, and the angular error. What can be designed: block size, thresholds, the direction grid, the shared hardware and memory, where each stage runs, and the policies."
 ---
 
 # The problem
@@ -90,14 +90,16 @@ Its distribution, mean and tail, is the timing metric.
 
 **Accuracy**, by matching each emitter's on-period to the decisions in its channel:
 
-- **Missed detection:** an emitter for which no arrival decision is made while it is on, or none within
-  a delay bound $D_{max}$ of its onset. The delay bound makes timing part of detection: an arrival
-  decided too late counts as missed.
+- **Missed detection:** an emitter for which no arrival decision is made while it is on.
 - **False alarm:** an arrival decision in a channel with no emitter on at that block, per channel per
-  second. A departure decided while the emitter is still on (an **early stop**) is counted the same
-  way.
+  second.
+- **Early stop:** a departure decision while the emitter is still on, per channel per second.
 - **Angular error:** $|\hat{\theta} - \theta|$ at each correct arrival decision; also the SNR error
   $\hat{\gamma} - \gamma$.
+
+**The metrics are kept separate for now.** How to combine them into one objective for optimization (for
+example, missed detections counting an arrival later than a delay bound $D_{max}$ as missed) is decided
+once simulations show how they trade.
 
 **Also recorded:** each emitter's **detection delay** from its onset to its arrival decision (the
 decision time plus every block that passed before a decision: blocks before the gate fired, dropped
@@ -108,8 +110,8 @@ Two kinds of quantity come out of these, and they need different simulations:
 
 - **Accuracy per block** (false alarms, detection per block, the angular and SNR errors) follows from
   the thresholds, $B$ and the direction grid. The **untimed model** computes it.
-- **Decision time**, and every quantity it changes (missed detections against $D_{max}$, the
-  detection delay, dropped notifications and late reads), depends on when each job runs on the shared
+- **Decision time**, and every quantity it changes (the detection delay, dropped notifications
+  and late reads), depends on when each job runs on the shared
   hardware: queueing behind other channels' jobs and contention for the memory. **Only a timed
   simulation** gives it.
 
@@ -143,5 +145,5 @@ search load, which adds queueing delay and, under overload, skipped blocks.
   that the systolic unit is loaded but not saturated on average.
 - **The emitter process:** $p_{on}$, $p_{off}$, the SNR range, $\theta_{max}$, and how often bursts
   occur.
-- **$D_{max}$** and the AoA tolerance.
+- **How to combine the metrics** into one objective (a delay bound $D_{max}$, an AoA tolerance, weights), after the first simulations.
 - **Fixed point:** the sample, covariance and scan formats.
