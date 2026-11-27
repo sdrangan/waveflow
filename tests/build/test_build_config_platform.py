@@ -13,6 +13,7 @@ import pytest
 
 from waveflow.build.build import BuildConfig
 from waveflow.calib.platform import PLATFORM_MANIFEST, PlatformMismatchError
+from waveflow.board import Board, ClockRequest
 
 
 class TestPlatformResolution:
@@ -67,6 +68,24 @@ class TestPlatformResolution:
             cfg = BuildConfig(root_dir=tmp_path, platform="plat", part="other", clk_freq=100e6,
                               platforms_root=root, allow_platform_mismatch=True)
         assert cfg.platform_info.part == "xc7z020clg484-1"
+
+    @pytest.mark.parametrize("allow_mismatch", [False, True])
+    @pytest.mark.parametrize("part,freq", [
+        ("xc7z020clg484-1", 250e6),
+        ("xczu48dr-ffvg1517-2-e", 100e6),
+        ("xczu48dr-ffvg1517-2-e", 245.76e6),
+    ])
+    def test_board_refuses_mismatched_calibration(self, tmp_path, allow_mismatch, part, freq):
+        root = tmp_path / "platforms"
+        BuildConfig(platform="other_target", part=part, clk_freq=freq, platforms_root=root)
+        original = (root / "other_target" / PLATFORM_MANIFEST).read_bytes()
+        with pytest.raises(PlatformMismatchError, match="board.*rfsoc4x2"):
+            BuildConfig(
+                board=Board.rfsoc4x2(), clock_request=ClockRequest("pl_ref_mmcm", 245.76e6, 250e6),
+                platform="other_target", platforms_root=root,
+                allow_platform_mismatch=allow_mismatch,
+            )
+        assert (root / "other_target" / PLATFORM_MANIFEST).read_bytes() == original
 
     def test_platforms_root_defaults_to_calib_platforms(self, tmp_path):
         # no platform selected -> platforms_root still normalised to the tracked-library default.

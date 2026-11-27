@@ -1,11 +1,12 @@
-"""tests/build/test_tcl_target.py — the csynth TCL pins the selected platform's part/clock.
+"""The csynth TCL pins the selected board or calibration platform's part/clock.
 
-render_tcl historically hardcoded xc7z020clg484-1 / period 10.  Now it takes part/period, driven from
-the build's resolved platform via tcl_target — so the RTL a calibration measures is synthesised for the
-exact part/clock the platform's fit is valid for.  The default must stay byte-identical (no platform =
-no change to any existing example).
+Board builds must reach the Tcl even without a calibration platform, using the HLS target instead
+of the physical clock. Without a board, existing platform resolution and historical defaults remain
+unchanged.
 """
 from __future__ import annotations
+
+import pytest
 
 from waveflow.build.build import BuildConfig
 from waveflow.build.composite_gen import (
@@ -14,9 +15,40 @@ from waveflow.build.composite_gen import (
     render_tcl,
     tcl_target,
 )
+from waveflow.board import Board, ClockRequest
 
 
 class TestTclTarget:
+    @pytest.mark.parametrize("clock_request,period_ns", [(ClockRequest("pl_ref_mmcm", 245.76e6, 250e6), 4.0),
+                                                   (ClockRequest("ps_pl0", 100e6, 100e6), 10.0)])
+    @pytest.mark.parametrize("with_platform", [False, True])
+    def test_board_drives_generated_tcl(self, tmp_path, clock_request, period_ns, with_platform):
+        cfg = BuildConfig(
+            root_dir=tmp_path,
+            board=Board.rfsoc4x2(),
+            clock_request=clock_request,
+            platform="board_test" if with_platform else None,
+            platforms_root=tmp_path / "platforms",
+        )
+        part, period = tcl_target(cfg)
+        assert (part, period) == ("xczu48dr-ffvg1517-2-e", period_ns)
+        tcl = render_tcl("board_test", part=part, period_ns=period)
+        assert "set part {xczu48dr-ffvg1517-2-e}" in tcl
+        assert "set_part $part" in tcl
+        assert f"create_clock -period {period_ns:g}\n" in tcl
+
+    def test_board_target_survives_platform_without_target_metadata(self, tmp_path):
+        # An older/incomplete calibration manifest must not send the board to legacy defaults.
+        root = tmp_path / "platforms"
+        BuildConfig(platform="unseeded", platforms_root=root)
+        cfg = BuildConfig(
+            board=Board.rfsoc4x2(), clock_request=ClockRequest("pl_ref_mmcm", 245.76e6, 250e6),
+            platform="unseeded", platforms_root=root,
+        )
+        assert cfg.platform_info.part is None
+        assert cfg.platform_info.clk_freq is None
+        assert tcl_target(cfg) == ("xczu48dr-ffvg1517-2-e", 4.0)
+
     def test_no_platform_is_the_default(self, tmp_path):
         cfg = BuildConfig(root_dir=tmp_path)
         assert tcl_target(cfg) == (DEFAULT_PART, DEFAULT_PERIOD_NS)

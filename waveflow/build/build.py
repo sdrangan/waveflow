@@ -37,6 +37,7 @@ BuildDag
 """
 from __future__ import annotations
 
+import math
 import time
 import traceback
 from abc import ABC, abstractmethod
@@ -47,6 +48,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from waveflow import events
+from waveflow.board import Board, ClockRequest, ClockResolution
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,16 @@ class BuildConfig:
         FPGA part (the ``set_part`` string, e.g. ``"xc7z020clg484-1"``) this build targets.
     clk_freq : float | None
         Synthesis clock frequency in Hz (its period drives HLS scheduling → the cycle counts).
+    board : Board | None
+        Physical FPGA target and its available reference clocks/generation routes.
+    clock_request : ClockRequest | None
+        Application-owned output frequency, HLS target and tolerance. Construction validates
+        the route and derives the HLS target without launching Vivado. Board synthesis resolves
+        the request before HLS; an unresolved request is never hardware clock evidence.
+    resolved_clock : ClockResolution | None
+        Result of ``board.resolve_clock()``. If a request is also supplied, it must match.
+        Construction checks board/recipe identity and acceptance but never launches Vivado.
+        ``clk_freq`` uses the requested HLS target, not the physical readback.
     platforms_root : Path | str | None
         The build's **primary** platform library — the write target, and the first root searched.
         Defaults to ``calib/platforms`` (a project-local library).  When a selected platform is not
@@ -87,7 +99,8 @@ class BuildConfig:
         ``pip``-installed build resolves ``zynq7020_bfm_100mhz`` with no checkout.
     allow_platform_mismatch : bool
         When the selected platform's stored part/clock differ from this build's, warn instead of
-        raising (default ``False`` = raise).
+        raising (default ``False`` = raise). Board builds always reject a mismatched calibration
+        platform, even when this flag is ``True``.
     """
 
     root_dir: Path | str | None = None
@@ -98,19 +111,68 @@ class BuildConfig:
     clk_freq: float | None = None
     platforms_root: Path | str | None = None
     allow_platform_mismatch: bool = False
+    board: Board | None = None
+    clock_request: ClockRequest | None = None
+    resolved_clock: ClockResolution | None = None
 
     def __post_init__(self) -> None:
         self.root_dir = Path.cwd() if self.root_dir is None else Path(self.root_dir)
         self.platforms_root = (
             Path("calib/platforms") if self.platforms_root is None else Path(self.platforms_root))
+        if self.board is None and (self.clock_request is not None or self.resolved_clock is not None):
+            raise ValueError("clock_request/resolved_clock requires a board")
+        if self.board is not None:
+            if self.clock_request is None and self.resolved_clock is None:
+                raise ValueError("a board build requires clock_request or resolved_clock")
+            if self.resolved_clock is not None:
+                if not isinstance(self.resolved_clock, ClockResolution):
+                    raise TypeError("resolved_clock must be a ClockResolution")
+                self.resolved_clock.require_compatible(self.board)
+                request = self.resolved_clock.request
+                if self.clock_request is not None and self.clock_request != request:
+                    raise ValueError("clock_request differs from resolved_clock request")
+            else:
+                request = self.clock_request
+            if not isinstance(request, ClockRequest):
+                raise TypeError("clock_request must be a ClockRequest")
+            self.board.clock_source(request.source)
+            clock_name = request.source
+            if request.hls_target_hz is None:
+                raise ValueError("clock request has no HLS target")
+            if self.part is not None and self.part != self.board.part:
+                raise ValueError(
+                    f"explicit part {self.part!r} does not match board {self.board.name!r} "
+                    f"part {self.board.part!r}"
+                )
+            if self.clk_freq is not None and not math.isclose(
+                self.clk_freq, request.hls_target_hz, rel_tol=1e-12, abs_tol=0.0
+            ):
+                raise ValueError(
+                    f"explicit clk_freq {self.clk_freq!r} does not match clock request "
+                    f"{clock_name!r} HLS target {request.hls_target_hz!r}"
+                )
+            self.part = self.board.part
+            self.clk_freq = request.hls_target_hz
         #: The resolved :class:`~waveflow.calib.platform.Platform` (created-or-confirmed), or ``None``
         #: when no ``platform`` was selected.
         self.platform_info = None
         if self.platform is not None:
-            from waveflow.calib.platform import Platform, platform_fallback_path
-            self.platform_info = Platform.resolve(
-                self.platforms_root, self.platform, part=self.part, clk_freq=self.clk_freq,
-                allow_mismatch=self.allow_platform_mismatch, fallbacks=platform_fallback_path())
+            from waveflow.calib.platform import Platform, PlatformMismatchError, platform_fallback_path
+            try:
+                self.platform_info = Platform.resolve(
+                    self.platforms_root, self.platform, part=self.part, clk_freq=self.clk_freq,
+                    allow_mismatch=self.allow_platform_mismatch and self.board is None,
+                    fallbacks=platform_fallback_path())
+            except PlatformMismatchError as exc:
+                if self.board is None:
+                    raise
+                raise PlatformMismatchError(
+                    f"calibration platform {self.platform!r} does not match board "
+                    f"{self.board.name!r}, clock source {clock_name!r} "
+                    f"({self.part}, HLS target {self.clk_freq:g} Hz). "
+                    "Select a matching calibration platform; allow_platform_mismatch "
+                    "cannot override a board target."
+                ) from exc
 
     def vitis_version_tuple(self) -> tuple[int, int] | None:
         """Parse ``vitis_version`` into a ``(major, minor)`` integer tuple.

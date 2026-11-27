@@ -1,0 +1,12 @@
+{
+  "tool_version": "2025.1",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "hls_period_ns": 10,
+  "vlnv": "waveflow:hls:array_probe:1.0",
+  "generated": "2026-09-30",
+  "hashes": {
+    "array_probe.cpp": "194a4c88c629ba84169ede658c2554dcd73e376f3c6af8932446adf4073f6f64",
+    "control.h": "2f9098d930914dc34815ba1775d14997169f6ba88a0cda652ce70d6145ea7d99",
+    "component.xml": "54318a825913dfb64b8f10ab836a9b567ec4c323e1e1f77ff77cb40bc02429f2"
+  }
+}

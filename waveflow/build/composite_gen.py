@@ -3057,7 +3057,9 @@ def tcl_target(config) -> tuple[str, float]:
 
     This is the single-source link: a build that selected a :class:`~waveflow.calib.platform.Platform`
     synthesises for *its* part/clock (so the RTL the calibration measures is the RTL the platform's fit
-    is valid for); a build with no platform falls back to the historical default."""
+    is valid for); a build with no board or platform falls back to the historical default."""
+    if getattr(config, "board", None) is not None:
+        return config.part, 1e9 / config.clk_freq
     info = getattr(config, "platform_info", None) if config is not None else None
     if info is None:
         return DEFAULT_PART, DEFAULT_PERIOD_NS

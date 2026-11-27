@@ -455,6 +455,122 @@ def test_run_vitis_hls_rejects_tclargs_before_launching(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match=r"no --tclargs.*env="):
         toolchain.run_vitis_hls(tmp_path / "run.tcl", args=["csim"])
 
+# S0a Vivado runner tests.
+
+
+def test_run_vivado_uses_batch_mode_local_logs_args_env_and_version(monkeypatch, tmp_path):
+    tcl = tmp_path / "scripts" / "board.tcl"
+    tcl.parent.mkdir()
+    tcl.write_text("exit 0\n", encoding="utf-8")
+    work = tmp_path / "vivado-work"
+    expected = subprocess.CompletedProcess([], 0, "board ok\n", "")
+
+    monkeypatch.setattr(
+        toolchain,
+        "find_vivado_path",
+        lambda top_dir=None: "/tools/Vivado/2025.1/bin/vivado",
+    )
+    monkeypatch.setattr(toolchain, "tool_version", lambda exe, flag: "2025.1")
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("WAVEFLOW_PARENT", "kept")
+
+    def fake_run(final_cmd, cwd=None, shell=None, check=None, text=None,
+                 capture_output=None, env=None):
+        assert final_cmd == [
+            "/tools/Vivado/2025.1/bin/vivado",
+            "-mode", "batch",
+            "-journal", str(work.resolve() / "vivado.jou"),
+            "-log", str(work.resolve() / "vivado.log"),
+            "-source", str(tcl.resolve()),
+            "-tclargs", "alpha", "2",
+        ]
+        assert cwd == work.resolve()
+        assert shell is False
+        assert check is True
+        assert text is True
+        assert capture_output is True
+        assert env["WAVEFLOW_PARENT"] == "kept"
+        assert env["WAVEFLOW_CHILD"] == "set"
+        return expected
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = toolchain.run_vivado(
+        tcl,
+        work,
+        args=["alpha", 2],
+        env={"WAVEFLOW_CHILD": "set"},
+        required_version="2025.1",
+    )
+    assert out is expected
+    assert work.is_dir()
+
+
+def test_run_vivado_rejects_missing_tool(monkeypatch, tmp_path):
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: None)
+    with pytest.raises(RuntimeError, match="WAVEFLOW_VIVADO_PATH"):
+        toolchain.run_vivado(tmp_path / "run.tcl", tmp_path)
+
+
+def test_run_vivado_rejects_exact_version_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: "/vivado")
+    monkeypatch.setattr(toolchain, "tool_version", lambda exe, flag: "2025.2")
+    with pytest.raises(RuntimeError, match="requires 2025.1, found 2025.2"):
+        toolchain.run_vivado(tmp_path / "run.tcl", tmp_path, required_version="2025.1")
+
+
+def test_run_vivado_rejects_failure_sentinel_on_zero_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: "/vivado")
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    result = subprocess.CompletedProcess([], 0, "", "WAVEFLOW_ERROR: missing board\n")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(RuntimeError, match="missing board"):
+        toolchain.run_vivado(tmp_path / "run.tcl", tmp_path)
+
+
+@pytest.mark.parametrize("extra_env", [None, {"STAGE": "bd_validate"}])
+def test_run_vivado_launches_without_msystem(monkeypatch, tmp_path, extra_env):
+    """Board Vivado launches use upstream's AMD environment cleanup as well."""
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setenv("WAVEFLOW_PARENT", "kept")
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: "/tools/vivado.bat")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    toolchain.run_vivado(tmp_path / "run.tcl", work_dir=tmp_path, env=extra_env)
+
+    assert seen["env"] is not None and "MSYSTEM" not in seen["env"]
+    assert seen["env"]["WAVEFLOW_PARENT"] == "kept"
+    if extra_env is not None:
+        assert seen["env"]["STAGE"] == "bd_validate"
+
+
+@pytest.mark.parametrize("extra_env", [None, {"STAGE": "bd_validate"}, {"VIV": "/caller/vivado"}])
+def test_run_vivado_preserves_upstream_environment(linux_without_vivado_on_path, monkeypatch,
+                                                  tmp_path, extra_env):
+    """Board launches inherit upstream's detected Vivado and caller override precedence."""
+    root = linux_without_vivado_on_path
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs["env"]
+        assert cmd[0] == str(root / "bin/vivado")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setenv("WAVEFLOW_PARENT", "kept")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    toolchain.run_vivado(tmp_path / "board.tcl", tmp_path, env=extra_env)
+
+    assert seen["env"]["VIV"] == (extra_env or {}).get("VIV", str(root))
+    assert seen["env"]["WAVEFLOW_PARENT"] == "kept"
+    for key, value in (extra_env or {}).items():
+        assert seen["env"][key] == value
+
 
 def _vitis_install(root, version, *, headers_in_vitis):
     """A fake Vitis install under *root*: ``Vitis/<version>/bin/vitis-run`` (``vitis-run.bat`` on

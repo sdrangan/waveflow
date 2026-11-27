@@ -412,6 +412,13 @@ examples/ssr_fft/system/
 # Personal Claude Code instructions (venv path, toolchain version, OS): per machine, never shared.
 CLAUDE.local.md
 
+# Board packaging source resources and parser conformance fixtures.
+board_build/
+!waveflow/board/boards/**/*.xml
+!waveflow/board/boards/**/*.json
+!tests/board/fixtures/control_abi/*/component.xml
+!tests/board/fixtures/control_abi/*/provenance.json
+
 # Local secrets: the agent runs' API credential (plans/dse_cg.md step 7); never committed
 /.secrets/
 # examples/ring_stub (plans/shared_kernel.md Stage 1): the bodies are src/; the rest is build output.

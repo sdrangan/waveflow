@@ -73,3 +73,8 @@ Built: the packaging and a validated block design, both opt-in steps on every sy
 gated on markov (`--through block_design`). Next, from `plans/board_packaging.md`: the processor and
 its interconnect in the block design, the board's part, and the bitstream run with host software
 driving it.
+
+The RFSoC4x2 S1/S2 applications provide a template-driven HLS-IP-to-overlay path,
+including PS connections and portable PYNQ hosts. Its APIs, template contracts,
+extension procedure and manual build commands are described in
+[Board packaging development](board_packaging.md).

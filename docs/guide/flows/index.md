@@ -23,5 +23,7 @@ through the flow; these pages are the reference for the modules themselves:
   object becomes in an RTL simulation.
 - [Parameterization](parametrization.md) -- build parameters, and what a value changes.
 - [Toward the board](bitstream_ipi.md) -- a verified system packaged as IP and wired in a block design.
+- [Board packaging development](board_packaging.md) -- the template-driven RFSoC4x2 HLS export,
+  ABI/driver, BD and overlay extension, with S1/S2 developer entry points.
 
 The older host-launched flow is under [Legacy flows](../legacy/index.md).
