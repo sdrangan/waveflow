@@ -40,6 +40,7 @@ against RTL simulation alone.
 | [The architecture](arch.md) | The capture and power detector, the ring of blocks in a dual-port BRAM, the hardware controller, and the pools of systolic and vector units, with a diagram. |
 | [The workload](workload.md) | How a test drives the receiver: emitters placed on the ground in a sector with free-space path loss, switched on and off by a Gilbert–Elliott process with bursts, the samples and their truth log, and the scenarios. |
 | [The parameters](param.md) | Every parameter with a proposed value and whether it is explored: algorithm, number formats, memory and queues, credits, units, policies, and the load they imply. |
+| [The timing](timing.md) | The cycle model of every block for the timed simulation and where each number comes from (calibrated, measured elsewhere, analytic); the half-rate read port that shapes the design; the decision time with no contention. |
 
 ## Code
 
@@ -49,6 +50,7 @@ In `examples/aoa_detect/`, so far the untimed half:
   truth log) and the input-gain trade-off;
 - `golden.py`: the bit-exact golden, a class whose fields are every programmable parameter;
 - `score.py`: the accuracy metrics, result messages against the truth log;
+- `schemas.py`: every message, as a `DataList`;
 - `array.py`: the URA's steering vector and the sector element, shared by both.
 
 Tests in `tests/examples/test_aoa_detect.py`. The first sketch of the idea is `idea.md` in the same
