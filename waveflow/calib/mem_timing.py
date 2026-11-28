@@ -104,7 +104,50 @@ def stored_mem_timing(store, mem, *, workload: str | None = None):
     return recs[-1] if recs else None
 
 
-__all__ = ["MEM_TIMING_KIND", "fit_mem_timing", "mem_timing_record", "stored_mem_timing"]
+def load_mem_timing(calib_dir, mem) -> tuple[dict, dict | None] | None:
+    """What a memory-mapped memory slave loads before a run: the newest timing record of *mem* in
+    ``<calib_dir>/modules/`` (its payload) and its turnaround (``{kind: {"cycles", ...}}``, or ``None``
+    when none is filed), both looked up by *mem*'s identity; ``None`` when *calib_dir* is ``None``,
+    holds no module store, or has no timing record for it.
+
+    The one loading path: :class:`~waveflow.hw.memory.MemoryMod` asks it for itself, and
+    :class:`~waveflow.hw.mm_bram.MemSlaveBramWindow` for the memory whose RTL slot is its own
+    (``mm_bram.window_memory``)."""
+    from pathlib import Path
+
+    if calib_dir is None or not (Path(calib_dir) / "modules").is_dir():
+        return None
+    from waveflow.calib.record_store import ModuleStore
+
+    store = ModuleStore(calib_dir)
+    rec, turn = stored_mem_timing(store, mem), stored_mem_turnaround(store, mem)
+    if rec is None:
+        return None
+    return rec.payload, (turn.payload["turnaround"] if turn is not None else None)
+
+
+def apply_mem_timing(slave, timing: dict, turnaround: dict | None) -> None:
+    """Declare on *slave* (an ``MMIFSlave``) what a timing record says of the RTL behind it: with
+    ``serialize``, one transaction at a time, reads and writes alike, on one channel held for the
+    transfer -- and busy a few cycles after each before the next can start (*turnaround*), when
+    measured.  A record without ``serialize`` changes nothing on the port."""
+    if timing.get("serialize"):
+        slave.serialize_transactions = True
+        slave.write_channel = slave.read_channel
+        if turnaround is not None:
+            slave.turnaround = {k: max(0.0, float(v["cycles"])) for k, v in turnaround.items()}
+
+
+def access_cycles(timing: dict, nwords: int, kind: str) -> float:
+    """The cycles a ``"read"`` or ``"write"`` of *nwords* words costs at the memory, by *timing* (a
+    :data:`MEM_TIMING_KIND` payload): ``init + per_word * nwords``."""
+    k = timing[kind]
+    return float(k["init"]) + int(nwords) * float(k["per_word"])
+
+
+__all__ = ["MEM_TIMING_KIND", "MEM_TURNAROUND_KIND", "access_cycles", "apply_mem_timing",
+           "back_to_back_rows", "fit_mem_timing", "fit_turnaround", "load_mem_timing",
+           "mem_timing_record", "mem_turnaround_record", "stored_mem_timing", "stored_mem_turnaround"]
 
 
 def back_to_back_rows(write_bursts, read_bursts, clk_period: float) -> list[tuple]:

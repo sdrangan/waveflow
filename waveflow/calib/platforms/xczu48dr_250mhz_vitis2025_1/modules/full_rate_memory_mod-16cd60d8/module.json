@@ -1,0 +1,7 @@
+{
+  "key": "full_rate_memory_mod-16cd60d8",
+  "cls_name": "FullRateMemoryMod",
+  "cls_module": "waveflow.hw.memory",
+  "params": {},
+  "signature": "16cd60d81efc32ad2c564bf65498ed6b0bd04327e1b52398e49dda36d21188af"
+}

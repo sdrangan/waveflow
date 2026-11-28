@@ -707,40 +707,22 @@ class MemoryMod(HwModule):
     def _apply_stored_timing(self) -> None:
         """Load this memory's calibrated timing (:attr:`calib_dir`), once, before the run: by the
         memory's identity as built, so nothing a run changes can move where it is looked up."""
-        self._mem_timing = None
-        if self.calib_dir is None:
-            return
-        from pathlib import Path
+        from waveflow.calib.mem_timing import apply_mem_timing, load_mem_timing
 
-        if not (Path(self.calib_dir) / "modules").is_dir():
-            return
-        from waveflow.calib.mem_timing import stored_mem_timing
-        from waveflow.calib.record_store import ModuleStore
-
-        from waveflow.calib.mem_timing import stored_mem_turnaround
-
-        # Both looked up before the port changes: the identity is the memory as built.
-        store = ModuleStore(self.calib_dir)
-        rec, turn = stored_mem_timing(store, self), stored_mem_turnaround(store, self)
-        if rec is None:
-            return
-        self._mem_timing = rec.payload
-        if rec.payload.get("serialize"):
-            # One transaction at a time, reads and writes alike: one channel, held for the transfer
-            # -- and busy a few cycles after each before the next can start, when measured.
-            self.s_mm.serialize_transactions = True
-            self.s_mm.write_channel = self.s_mm.read_channel
-            if turn is not None:
-                self.s_mm.turnaround = {k: max(0.0, float(v["cycles"]))
-                                        for k, v in turn.payload["turnaround"].items()}
+        # Looked up before the port changes: the identity is the memory as built.
+        found = load_mem_timing(self.calib_dir, self)
+        self._mem_timing = None if found is None else found[0]
+        if found is not None:
+            apply_mem_timing(self.s_mm, *found)
 
     def _access_delay(self, nwords: int, kind: str | None = None) -> float:
         """Modeled RAM access time (seconds) for an *nwords*-word transfer -- a ``"read"`` or a
         ``"write"``, from the calibrated record when there is one."""
+        from waveflow.calib.mem_timing import access_cycles
+
         t = getattr(self, "_mem_timing", None)
         if t is not None and kind is not None:
-            k = t[kind]
-            return (float(k["init"]) + nwords * float(k["per_word"])) / self.clk.freq
+            return access_cycles(t, nwords, kind) / self.clk.freq
         return (self.latency_init + nwords * self.latency_per_word) / self.clk.freq
 
     def _on_write(self, words: Any, local_addr: int) -> ProcessGen[None]:

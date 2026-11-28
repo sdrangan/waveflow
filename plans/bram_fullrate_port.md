@@ -385,3 +385,101 @@ Gate: `tests/build/test_mm_bram_timing_vitis.py` (`-m vitis`), 14 tests: the pip
 alone and behind the crossbar at both widths with no path from the memory to the read data; each of
 the ten runs routed, at one 4 ns clock, its memory in block RAM. The four p1 and four pipe runs were
 run again after the header edits (their cache keys include the source text).
+
+### Stage 4 (2026-11-28): the window's pysim timing, calibrated
+
+**Decided after Stage 3** (option b): the window is calibrated through `MemoryMod` / `FullRateMemoryMod`
+-- the same front, leaf and BRAM RTL, port B tied idle, which port A does not see -- and a
+`MemSlaveBramWindow` loads the record of the memory with its leaf and width. `system_top` is not
+extended for windows here (`plans/bram_window_port_b.md` will add an XSI gate on the window itself).
+
+**One source, one loading path.** `waveflow.hw.mm_bram.window_memory(leaf, width)` is the memory a
+window's record belongs to: `MemoryMod` (`mm_bram_port`) or `FullRateMemoryMod` (`mm_bram_port_pipe`),
+1,024 words at 250 MHz -- neither moves the RTL's cycles, both are in a memory's identity, so they are
+fixed once. The fixture harnesses it and the window looks its record up by it.
+`waveflow.calib.mem_timing.load_mem_timing` / `apply_mem_timing` / `access_cycles` are the loading,
+shared by `MemoryMod._apply_stored_timing` (refactored onto them) and the window's. The window
+(`calib_dir`) prices the record's cycles on its own clock, serializes its port and takes the
+turnaround; without a record its bus side costs nothing, as before. Its run-time state (`mem`,
+`errors`, `_mem_timing`) is out of its identity; its store holds a word wider than 64 bits as `(n, k)`
+chunks, the documented wide-word convention (`docs/guide/build/bfm.md#wide-words`) -- its own store
+was a 1-D `uint64` array, so a 128-bit window could not hold its data before.
+
+**Wide words in the scripted master.** The harness's C++ `AxiMmMaster` drove and sampled one `uint64`
+a beat; it now carries `k = ceil(W/64)` chunks a beat (unchanged at 64 bits and below, the only widths
+any existing design uses), and `MmScript` (both twins) records a wide read as `(n, k)` bursts.
+
+**The harness fits** (`waveflow/calib/fixtures/bram_window.py`; xsim 2025.1, 4 ns): a calibration
+script (the memory filled, every length 1-32 and 38, 64, 128, 256 alone, reads and writes started
+together at 4, 16, 64, 256) on a memory loading nothing, fitted by `MemCalibStep`; then a test script
+on the memory loading the fit. Exact at both widths (residuals below 1e-14):
+
+| leaf | read: `init + per_word * n` beyond the bus's cycle a word | write | `serialize` |
+|---|---|---|---|
+| `mm_bram_port` | 1 + 1 n (two cycles a word in all) | 1 + 0 n | yes |
+| `mm_bram_port_pipe` | 2 + 0 n (one cycle a word) | 1 + 0 n | yes |
+
+With the fit loaded, every op of the test script ends within a cycle of RTL (each start and end 1
+cycle off -- where the two masters count from -- and every duration equal). Records, provenance
+`vitis 2025.1`, 4 ns: `modules/memory_mod-4e0817ac` (128 bits), `memory_mod-d2d1b1e0` (512),
+`full_rate_memory_mod-16cd60d8` (128), `full_rate_memory_mod-1b8bb7e9` (512), each `timing/records.jsonl`
+holding the timing and the turnaround.
+
+**The contention gate** (`waveflow/calib/fixtures/bram_window_contention.py`): *n* `MemRStream` readers
+(128 bits, 16-beat bursts, csynth'd by Vitis HLS 2025.1 for `xczu48dr` at 4 ns -- its command schema
+generated at 128 bits in the fixture's own root rather than widening `mem_stream.WORD_BW_SUPPORTED`,
+which would rewrite every example's headers) each reading the same 1,024-word block over the
+generated crossbar, all starting at cycle 3,000 after a `MemWStream` inside the cut has filled the
+memory. (A scripted host could not fill it: with a host, the flow gives the scenario to the host
+alone, and the readers' drivers found no bundles. And the fill is one 1,024-word burst: the pysim
+`MemWStream` takes one burst a command, so four 256-word bursts wrote 256 words in pysim and 1,024 at
+RTL.) First comparison: pysim 5.2-5.4% fast at every count -- the front's turnaround, which the
+harness's master (no request ahead) cannot show (ledger row 22). From the one-reader traces:
+
+- **the turnaround**: 1.0 cycle on 63 of 63 back-to-back bursts, for both leaves at both widths --
+  the front takes the next AR the cycle after a burst's last beat; filed (`fit_window_turnaround`);
+- **the crossbar at 250 MHz** (read off the handshake lines, `crossbar_latency`): a request reaches
+  the front 2 cycles after the reader presents it, all before it contends (`latency_init = 2`,
+  `latency_travel = 2`); a read beat reaches the reader 1 cycle after the front sends it
+  (`latency_read_return = 1`, 64 of 64 bursts); the same at 128 and 512 bits. No record type exists
+  for these: the numbers are in `crossbar.md`, with a record type proposed there, and in
+  `bram_window_contention.XBAR_SETTINGS`.
+
+| readers | RTL: each block's read time (cycles) | pysim, memory and window alike | worst |
+|---|---|---|---|
+| 1, `mm_bram_port` | 2,193 | 2,188 | -0.23% |
+| 1, `mm_bram_port_pipe` | 1,233 | 1,228 | -0.41% |
+| 2 | 2,430, 2,449 | 2,425, 2,445 | -0.21% |
+| 3 | 3,627, 3,646, 3,665 | 3,622, 3,642, 3,662 | -0.14% |
+| 4 | 4,824, 4,843, 4,862, 4,881 | 4,819, 4,839, 4,859, 4,879 | -0.10% |
+
+(One-reader rows at 128 bits; 512 bits gives the same cycles. The rows of 2-4 readers are the
+full-rate leaf at 128 bits.) Every reader's data equals pysim's. The window in the memory's place
+reads in exactly the memory's times.
+
+**Gates**, xsim 2025.1: `tests/build/test_bram_window_calib_xsi.py` (12: each leaf and width fits
+exactly, checks within a cycle, and is what the platform holds -- run into a store of its own, never
+the platform's); `tests/build/test_bram_window_contention_xsi.py` (13: data equal, each block within
+2% for the memory and for the window at 2, 3, 4 readers, each leaf and width's turnaround and the
+crossbar's latency); fast tests in `tests/hw/test_mm_bram.py` (the window loads its memory's record,
+costs nothing without one, holds wide words, reads as its memory does). `WANT_XSI_GATES` 301 -> 326.
+
+**Resources** (`resource/records.jsonl` beside each timing record, `vivado_impl`): each window
+memory's own slot -- 1,024 words, the identity's size, so the 512-bit ones are not Stage 3's 16 KB runs
+-- placed and routed inside the ring with port B in use (`bram_window.implement_window`, `--resources`;
+Vivado 2025.1, `xczu48dr`, 4 ns), the closure verdict in the record:
+
+| memory | bits | WNS (ns) | WHS (ns) | LUT | FF | BRAM36 |
+|---|---|---|---|---|---|---|
+| `MemoryMod` (`mm_bram_port`) | 128 | +1.878 | +0.047 | 141 | 38 | 4 |
+| `MemoryMod` | 512 | +1.007 | +0.046 | 343 | 39 | 14.5 |
+| `FullRateMemoryMod` (`mm_bram_port_pipe`) | 128 | +1.818 | +0.047 | 402 | 423 | 4 |
+| `FullRateMemoryMod` | 512 | +1.106 | +0.047 | 1,381 | 1,598 | 14.5 |
+
+(At 512 bits a true dual-port RAMB36 is 36 bits wide a port, so 1,024 words take the same 14.5 as 256.)
+The window's own identity holds no records: its records are its memory's, by design (above).
+
+**Regressions after the BFM changes**: the 8 mm gates of Stage 0 with the 10 of Stage 2, mm_fir's 10
+and markov's memory-alone gate (a 64-bit `MmScript`, its cycles exact): 27 passed. Fast:
+`tests/build`, `hw`, `simulation`, `calib`, `docs`: 3,174 passed, 47 skipped, 1 failed (the
+environmental `test_there_are_workspaces_to_check`).

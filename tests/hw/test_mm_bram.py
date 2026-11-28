@@ -10,6 +10,7 @@ the claim, not the count.)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -133,6 +134,61 @@ def test_the_window_names_its_leaf_and_each_leaf_is_its_own_identity():
     assert keys["mm_bram_port"] != keys["mm_bram_port_pipe"]
     with pytest.raises(ValueError, match="bram_leaf"):
         win("mm_bram_port_p1")
+
+
+# --- the bus side's timing: the record of the memory whose slot is the window's (Stage 4) ----------
+
+PLATFORM = Path(__file__).resolve().parents[2] / "waveflow" / "calib" / "platforms" / \
+    "xczu48dr_250mhz_vitis2025_1"
+
+
+@pytest.mark.parametrize("leaf", ["mm_bram_port", "mm_bram_port_pipe"])
+@pytest.mark.parametrize("dw", [128, 512])
+def test_the_window_loads_the_record_of_its_memory(leaf, dw):
+    """One source: the window looks up ``window_memory(leaf, dw)``'s record on the platform, through
+    the path the memory loads it by, and declares what it says on its port."""
+    from waveflow.calib.mem_timing import load_mem_timing
+    from waveflow.hw.mm_bram import window_memory
+
+    timing, _turn = load_mem_timing(PLATFORM, window_memory(leaf, dw))
+    w = MemSlaveBramWindow(name="ring", sim=Simulation(), mem_dwidth=dw, nelem=256,
+                           window=256 * dw // 8, bram_leaf=leaf, calib_dir=PLATFORM)
+    w.pre_sim()
+    assert w._mem_timing == timing and timing["serialize"]
+    assert w.s_mem.serialize_transactions and w.s_mem.write_channel is w.s_mem.read_channel
+    # Measured (xsim 2025.1): reads cost 1 + 1 a word (mm_bram_port) or 2 + 0 (the pipelined leaf)
+    # beyond the bus's own cycle a word, writes 1 + 0.
+    want = {"mm_bram_port": (1, 1), "mm_bram_port_pipe": (2, 0)}[leaf]
+    assert (round(timing["read"]["init"]), round(timing["read"]["per_word"])) == want
+    assert (round(timing["write"]["init"]), round(timing["write"]["per_word"])) == (1, 0)
+    # Its own clock prices the record's cycles: 8 words at 100 MHz.
+    assert w._access_delay(8, "read") == pytest.approx((want[0] + 8 * want[1]) / w.clk.freq)
+
+
+def test_without_a_record_the_window_costs_nothing():
+    w = MemSlaveBramWindow(name="w", sim=Simulation(), mem_dwidth=128, nelem=8, window=4096,
+                           calib_dir=None)
+    w.pre_sim()
+    assert w._mem_timing is None and not w.s_mem.serialize_transactions
+    assert w._access_delay(64, "read") == 0.0
+
+
+def test_a_wide_window_holds_whole_words_on_both_ports():
+    w = MemSlaveBramWindow(name="w", sim=Simulation(), mem_dwidth=128, nelem=8, window=4096)
+    v = (0x1234 << 64) | 0xABCD
+    w.port_b_write(3, v)
+    assert w.port_b_read(3) == v
+    assert w.s_mem.peek_read(1, 3 * 16).tolist() == [[0xABCD, 0x1234]]
+
+
+def test_in_pysim_the_window_reads_as_its_memory_does():
+    """Two readers contending over the crossbar for a 1,024-word block each: with the window in the
+    memory's place, loading the memory's record, every block's read time is the memory's."""
+    from waveflow.calib.fixtures.bram_window_contention import contention_system, pysim_read_times
+
+    mem = pysim_read_times(contention_system(2, store_dir=PLATFORM))
+    win = pysim_read_times(contention_system(2, store_dir=PLATFORM, window=True))
+    assert win == mem and len(mem) == 2 and min(mem) > 1024
 
 
 def test_serialize_transactions_is_what_orders_them():

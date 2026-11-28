@@ -43,12 +43,26 @@ def timing_dir(trace_dir) -> Path:
     return d.parent / f"{d.name}_timing"
 
 
+def chunks_of(bitwidth: int) -> int:
+    """64-bit chunks a bus word of *bitwidth* bits is held as: 1 up to 64 bits."""
+    return 1 if int(bitwidth) <= 64 else -(-int(bitwidth) // 64)
+
+
 def script_op(kind: int, addr: int, nwords: int, not_before: int = 0, data=None) -> np.ndarray:
-    """One op of a script: ``[kind, addr, nwords, not_before, data...]``."""
+    """One op of a script: ``[kind, addr, nwords, not_before, data...]``.  A write's *data* is
+    *nwords* words; a word wider than 64 bits is a row of 64-bit chunks, lowest first (*data* an
+    ``(nwords, k)`` array), and the op carries the chunks flat, word by word -- what the C++ twin
+    drives a beat at a time, and the layout a wide read's data comes back in."""
     head = [int(kind), int(addr), int(nwords), int(not_before)]
-    body = [] if kind == READ else [int(w) for w in np.asarray(data, dtype=np.uint64)]
-    if kind == WRITE and len(body) != nwords:
-        raise ValueError(f"a write of {nwords} words carries {len(body)}")
+    body: list[int] = []
+    if kind == WRITE:
+        arr = np.asarray(data, dtype=np.uint64)
+        if arr.ndim == 2:
+            if arr.shape[0] != nwords:
+                raise ValueError(f"a write of {nwords} words carries {arr.shape[0]}")
+        elif arr.size != nwords:
+            raise ValueError(f"a write of {nwords} words carries {arr.size}")
+        body = [int(w) for w in arr.reshape(-1)]
     return np.asarray(head + body, dtype=np.uint64)
 
 
@@ -99,6 +113,7 @@ class MmScript(HwModule):
 
     def _channel(self, kind: int) -> ProcessGen[None]:
         per = float(self.clk.period)
+        k = chunks_of(self.bitwidth)
         for i, op in enumerate(self.ops):
             if int(op[0]) != kind:
                 continue
@@ -107,9 +122,12 @@ class MmScript(HwModule):
                 yield self.timeout(nb * per - self.env.now)
             t0 = self.env.now
             if kind == WRITE:
-                yield from self.m.write(np.asarray(op[4:4 + n], dtype=np.uint64), addr)
+                words = np.asarray(op[4:4 + n * k], dtype=np.uint64)
+                yield from self.m.write(words if k == 1 else words.reshape(n, k), addr)
             else:
-                self.rdata[i] = np.asarray((yield from self.m.read(n, addr)), dtype=np.uint64)
+                # a Words array: (n,) up to 64 bits, (n, k) chunks above (docs/guide/build/bfm.md)
+                words = np.asarray((yield from self.m.read(n, addr)), dtype=np.uint64)
+                self.rdata[i] = words.reshape(n) if k == 1 else words.reshape(n, k)
             self.times[i] = (t0 / per, self.env.now / per)
             self.ndone += 1
             if self.stall_pct:
@@ -131,7 +149,10 @@ class MmScript(HwModule):
         if not self.trace_dir:
             return
         d = Path(self.trace_dir)
-        write_burst_bundle([r for r in self.rdata if r is not None], d / "rdata")
+        # A wide word's read data as the convention's (n, k) bursts, k chunks a beat
+        # (docs/guide/build/bfm.md, "Ports wider than 64 bits"); k = 1 is the bundle as it always was.
+        write_burst_bundle([r for r in self.rdata if r is not None], d / "rdata",
+                           word_chunks=chunks_of(self.bitwidth))
         write_burst_bundle([np.asarray([round(a), round(b)], dtype=np.uint64) for a, b in self.times],
                            timing_dir(d))
 
@@ -142,4 +163,4 @@ class MmScript(HwModule):
         return BfmModel("MmScript", ports=("m",), extra_args=(str(int(self.bitwidth) // 8),))
 
 
-__all__ = ["MmScript", "READ", "WRITE", "script_op", "timing_dir"]
+__all__ = ["MmScript", "READ", "WRITE", "chunks_of", "script_op", "timing_dir"]

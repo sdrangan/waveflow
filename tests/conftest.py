@@ -286,7 +286,11 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: the leaf alone, mm_bram_port_pipe and mm_bram_port as its control, every word and the exact cycles
 #: (4); order across leaves behind one front at RD_OUTST = 2 (2) (tests/build/test_mm_bram_pipe_xsi.py);
 #: ordering guarantee 1 with the new leaf, both topologies (2) (tests/build/test_mm_bram_order_xsi.py).
-WANT_XSI_GATES = 301
+#: 301 + 25 -> 326 on 2026-11-28 (plans/bram_fullrate_port.md, Stage 4): the window memories calibrated in
+#: their harness and checked, each leaf at 128 and 512 bits (12, tests/build/test_bram_window_calib_xsi.py);
+#: 2, 3 and 4 readers contending for one window, data and read times within 2%, memory and window (9),
+#: and each leaf and width's turnaround (4) (tests/build/test_bram_window_contention_xsi.py).
+WANT_XSI_GATES = 326
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

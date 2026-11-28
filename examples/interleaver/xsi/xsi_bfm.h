@@ -883,6 +883,8 @@ public:
                 bool overlap_rw = false)
         : d_(d), bpw_(bytes_per_word), id_(id), overlap_(overlap_rw) {
         size_ = 0; while ((1 << size_) < bpw_) ++size_;
+        k_ = bpw_ <= 8 ? 1 : (bpw_ + 7) / 8;
+        rbuf_.assign((size_t)k_, 0); zbuf_.assign((size_t)k_, 0);
         auto P = [&](const char* s) { return d.port((prefix + s).c_str()); };
         auto O = [&](const char* s) { return d.port_opt((prefix + s).c_str()); };
         P_awaddr = P("_AWADDR"); P_awlen = P("_AWLEN"); P_awvalid = P("_AWVALID"); P_awready = P("_AWREADY");
@@ -901,12 +903,21 @@ public:
         for (const char* z : zero) { int p = O(z); if (p >= 0) zero_.push_back(p); }
     }
 
-    /// Queue a write burst of `words` at byte address `addr`.  Returns the op's index.
+    /// Queue a write burst of `words` at byte address `addr`.  Returns the op's index.  A bus word
+    /// wider than 64 bits is `chunks()` 64-bit chunks, lowest first: `words` holds that many a beat,
+    /// and a read's `rdata` comes back the same way (one a beat up to 64 bits, as always).
     size_t write(uint64_t addr, std::vector<uint64_t> words, long not_before = 0) {
-        check_len(words.size());
+        if (words.size() % (size_t)k_) {
+            std::fprintf(stderr, "FATAL: AxiMmMaster write of %zu chunks, not a whole number of "
+                                 "%d-chunk words\n", words.size(), k_);
+            std::exit(3);
+        }
+        check_len(words.size() / (size_t)k_);
         Op o; o.write = true; o.addr = addr; o.wdata = std::move(words); o.not_before = not_before;
         ops_.push_back(std::move(o)); return ops_.size() - 1;
     }
+    /// 64-bit chunks a bus word: 1 up to 64 bits.
+    int chunks() const { return k_; }
     /// Queue a read burst of `nwords` at byte address `addr`.  Returns the op's index.
     size_t read(uint64_t addr, uint32_t nwords, long not_before = 0) {
         check_len(nwords);
@@ -934,7 +945,8 @@ public:
         awready_ = d_.get1(P_awready); wready_ = d_.get1(P_wready);
         bvalid_ = d_.get1(P_bvalid);   bresp_ = (P_bresp >= 0) ? (uint32_t)(d_.getW(P_bresp) & 3) : 0;
         arready_ = d_.get1(P_arready); rvalid_ = d_.get1(P_rvalid);
-        rdata_ = d_.getW(P_rdata);     rlast_ = d_.get1(P_rlast);
+        d_.getChunks(P_rdata, rbuf_.data(), k_);
+        rlast_ = d_.get1(P_rlast);
         rresp_ = (P_rresp >= 0) ? (uint32_t)(d_.getW(P_rresp) & 3) : 0;
         aw_beat_ = h_awvalid_ && awready_;
         w_beat_  = h_wvalid_ && wready_;
@@ -952,7 +964,7 @@ public:
                 if (aw_beat_) h_awvalid_ = 0;
                 if (w_beat_) {
                     ++wbeat_;
-                    if (wbeat_ >= o.wdata.size()) h_wvalid_ = 0;
+                    if (wbeat_ >= beats(o)) h_wvalid_ = 0;
                 }
                 if (b_beat_) {
                     if (h_awvalid_ || h_wvalid_) bad("B before the burst was fully sent");
@@ -962,10 +974,10 @@ public:
                 if (ar_beat_) h_arvalid_ = 0;
                 if (r_beat_) {
                     if (h_arvalid_) bad("R before AR was accepted");
-                    o.rdata.push_back(rdata_);
+                    o.rdata.insert(o.rdata.end(), rbuf_.begin(), rbuf_.end());
                     if (rresp_ > o.resp) o.resp = rresp_;
                     if (rlast_) {
-                        if (o.rdata.size() != o.nwords) bad("RLAST on the wrong beat");
+                        if (o.rdata.size() != (size_t)o.nwords * (size_t)k_) bad("RLAST on the wrong beat");
                         finish(o);
                     }
                 }
@@ -981,10 +993,11 @@ public:
         const Op* wo = overlap_ ? (wact_ ? &ops_[wop_] : nullptr) : ((o && o->write) ? o : nullptr);
         const Op* ro = overlap_ ? (ract_ ? &ops_[rop_] : nullptr) : ((o && !o->write) ? o : nullptr);
         d_.putW(P_awaddr, wo ? wo->addr : 0);
-        d_.putW(P_awlen, wo ? wo->wdata.size() - 1 : 0);
+        d_.putW(P_awlen, wo ? beats(*wo) - 1 : 0);
         d_.put1(P_awvalid, h_awvalid_);
-        d_.putW(P_wdata, (wo && wbeat_ < wo->wdata.size()) ? wo->wdata[wbeat_] : 0);
-        d_.put1(P_wlast, (wo && wbeat_ + 1 == wo->wdata.size()) ? 1u : 0u);
+        d_.putChunks(P_wdata, (wo && wbeat_ < beats(*wo)) ? &wo->wdata[wbeat_ * (size_t)k_]
+                                                           : zbuf_.data(), k_);
+        d_.put1(P_wlast, (wo && wbeat_ + 1 == beats(*wo)) ? 1u : 0u);
         d_.put1(P_wvalid, h_wvalid_);
         const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
         const Op* so = overlap_ ? wo : o;      // the default model drives WSTRB from any active op
@@ -1042,7 +1055,7 @@ private:
         if (wact_) {
             Op& o = ops_[wop_];
             if (aw_beat_) h_awvalid_ = 0;
-            if (w_beat_) { ++wbeat_; if (wbeat_ >= o.wdata.size()) h_wvalid_ = 0; }
+            if (w_beat_) { ++wbeat_; if (wbeat_ >= beats(o)) h_wvalid_ = 0; }
             if (b_beat_) {
                 if (h_awvalid_ || h_wvalid_) bad("B before the burst was fully sent");
                 o.resp = bresp_; o.t_end = cycle_; wact_ = false;
@@ -1053,10 +1066,10 @@ private:
             if (ar_beat_) h_arvalid_ = 0;
             if (r_beat_) {
                 if (h_arvalid_) bad("R before AR was accepted");
-                o.rdata.push_back(rdata_);
+                o.rdata.insert(o.rdata.end(), rbuf_.begin(), rbuf_.end());
                 if (rresp_ > o.resp) o.resp = rresp_;
                 if (rlast_) {
-                    if (o.rdata.size() != o.nwords) bad("RLAST on the wrong beat");
+                    if (o.rdata.size() != (size_t)o.nwords * (size_t)k_) bad("RLAST on the wrong beat");
                     o.t_end = cycle_; ract_ = false;
                 }
             }
@@ -1077,8 +1090,13 @@ private:
         }
     }
 
+    /// Beats of a write: its words over the chunks a word.
+    size_t beats(const Op& o) const { return o.wdata.size() / (size_t)k_; }
+
     Dut& d_;
     int bpw_, size_;
+    int k_ = 1;                          ///< 64-bit chunks a bus word (see write())
+    std::vector<uint64_t> rbuf_, zbuf_;  ///< the R beat sampled; zeros for WDATA when idle
     uint32_t id_;
     bool overlap_;
     std::vector<Op> ops_;
@@ -1096,7 +1114,6 @@ private:
     uint32_t d_bready_ = 1, d_rready_ = 1;   ///< as driven (the Stage 5 policy may hold them low)
     uint32_t awready_ = 0, wready_ = 0, bvalid_ = 0, bresp_ = 0, arready_ = 0, rvalid_ = 0,
              rlast_ = 0, rresp_ = 0;
-    uint64_t rdata_ = 0;
     bool aw_beat_ = false, w_beat_ = false, b_beat_ = false, ar_beat_ = false, r_beat_ = false;
 };
 
@@ -1141,13 +1158,15 @@ public:
     void post_sim() override {
         if (trace_dir.empty()) return;
         {
+            // k = chunks() uint64 a beat, bounds in beats: the wide-word bundle convention (k = 1:
+            // the bundle as it always was).
             std::vector<uint64_t> words, bounds;
             for (size_t i = 0; i < nops(); ++i) {
                 if (op(i).write) continue;
                 words.insert(words.end(), op(i).rdata.begin(), op(i).rdata.end());
-                bounds.push_back(words.size());
+                bounds.push_back(words.size() / (size_t)chunks());
             }
-            BurstBundle::write(trace_dir + "/rdata", words, bounds);
+            BurstBundle::write(trace_dir + "/rdata", words, bounds, 0, 0, chunks());
         }
         {
             std::vector<uint64_t> words, bounds;
