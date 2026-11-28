@@ -189,8 +189,25 @@ class BramViewP1(BramView):
     module = "mm_bram_port_p1"
 
 
+@dataclass(frozen=True)
+class BramViewPipe(BramView):
+    """A BRAM window whose leaf is ``mm_bram_port_pipe.v``: a read word every cycle **and** a registered
+    response (the memory's output register, then a response register), so it closes timing -- the
+    synthesizable full-rate window (``plans/bram_fullrate_port.md``).  Its answer comes ``LAT + 1``
+    cycles after a request, so the front keeps that many reads outstanding (:attr:`rd_outst`, the
+    front's ``RD_OUTST``); everything else is :class:`BramView`'s."""
+
+    module = "mm_bram_port_pipe"
+
+    @property
+    def rd_outst(self) -> int:
+        """``LAT + 1``: the BRAM's output register and the response register."""
+        return bram_read_latency() + 1
+
+
 #: The BRAM window of each memory leaf a memory class may name (``MemoryMod.BRAM_LEAF``).
-BRAM_VIEWS: dict[str, type[BramView]] = {"mm_bram_port": BramView, "mm_bram_port_p1": BramViewP1}
+BRAM_VIEWS: dict[str, type[BramView]] = {"mm_bram_port": BramView, "mm_bram_port_p1": BramViewP1,
+                                         "mm_bram_port_pipe": BramViewPipe}
 
 
 def bram_read_latency() -> int:
@@ -207,7 +224,7 @@ def bram_read_latency() -> int:
 LEAF_DEPS: dict[str, tuple[str, ...]] = {
     "mm_sync_fifo": (), "axi_slave_front": (), "mm_queue_in": ("mm_sync_fifo",),
     "mm_queue_out": ("mm_sync_fifo",), "mm_regbank": (), "mm_bram_port": (), "bram_t2p": (),
-    "mm_credit_in": (), "mm_bram_port_p1": (),
+    "mm_credit_in": (), "mm_bram_port_p1": (), "mm_bram_port_pipe": (),
 }
 
 
@@ -260,13 +277,19 @@ def order_fifo_inst(n: str) -> str:
 def order_fifo_params(views) -> dict[str, int] | None:
     """The order FIFO's ``mm_sync_fifo`` parameters for an adaptor holding *views*, or ``None`` when it
     needs none (``RD_OUTST = 1``: a select latched at the request is enough).  Each entry is the view
-    index and a hole bit; the depth holds every outstanding read (a power of two, as the FIFO needs)."""
+    index and a hole bit.
+
+    The depth is ``RD_OUTST + 1`` rounded up to a power of two (the FIFO's own rule), not
+    ``RD_OUTST``: with ``RD_OUTST`` reads outstanding the front issues the next in the same cycle it
+    takes a response, and ``mm_sync_fifo`` refuses a push while full even when it pops in that cycle.
+    At ``DEPTH = RD_OUTST`` that push was dropped, the FIFO fell behind the front, and a read of the
+    hole was never answered (``tests/build/test_mm_bram_pipe_xsi.py``, the first run)."""
     rd = rd_outst_of(views)
     if rd == 1:
         return None
     sb = adaptor_law(len(views)) - VIEW_LAW
     depth = 2
-    while depth < rd:
+    while depth < rd + 1:
         depth *= 2
     return {"W": max(sb, 1) + 1, "DEPTH": depth}
 

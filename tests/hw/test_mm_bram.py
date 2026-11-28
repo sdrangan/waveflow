@@ -116,6 +116,25 @@ def test_window_bounds_and_readback():
         MemSlaveBramWindow(name="c", sim=sim, nelem=1024)
 
 
+def test_the_window_names_its_leaf_and_each_leaf_is_its_own_identity():
+    """``bram_leaf`` (plans/bram_fullrate_port.md): a build input, so a fresh copy (a harness) keeps it
+    and the two leaves -- different hardware, different timing -- key differently."""
+    from waveflow.calib.phases import module_identity
+    from waveflow.hw.hw_module import build_params
+
+    def win(leaf=None):
+        kw = {} if leaf is None else {"bram_leaf": leaf}
+        return MemSlaveBramWindow(name="w", sim=Simulation(), mem_dwidth=DW, nelem=8, clk=CLK, **kw)
+
+    assert win().bram_leaf == "mm_bram_port"
+    assert build_params(win("mm_bram_port_pipe"))["bram_leaf"] == "mm_bram_port_pipe"
+    keys = {leaf: module_identity(win(leaf)).key for leaf in ("mm_bram_port", "mm_bram_port_pipe")}
+    assert keys["mm_bram_port"] == module_identity(win()).key
+    assert keys["mm_bram_port"] != keys["mm_bram_port_pipe"]
+    with pytest.raises(ValueError, match="bram_leaf"):
+        win("mm_bram_port_p1")
+
+
 def test_serialize_transactions_is_what_orders_them():
     """The same one-adaptor system with the flag cleared lets the doorbell overtake again -- the flag,
     not the half-duplex channel alone, is what holds the slave for the whole transfer."""

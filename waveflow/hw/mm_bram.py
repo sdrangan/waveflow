@@ -29,6 +29,12 @@ from waveflow.hw.memif import MMIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen
 
 
+#: The RTL leaves a BRAM window's port A may be (``MemSlaveBramWindow.bram_leaf``): ``mm_bram_port``
+#: reads a word every two cycles (one read in flight, ``LAT + 1``); ``mm_bram_port_pipe`` a word every
+#: cycle with a registered response, timing-closed (``plans/bram_fullrate_port.md``).
+BRAM_WINDOW_LEAVES: tuple[str, ...] = ("mm_bram_port", "mm_bram_port_pipe")
+
+
 @dataclass
 class MemSlaveBramWindow(HwModule):
     """A BRAM of ``nelem`` words: port A on the bus (:attr:`s_mem`), port B for the kernel."""
@@ -38,11 +44,19 @@ class MemSlaveBramWindow(HwModule):
 
     mem_dwidth: HwParam[int] = 64
     nelem: HwParam[int] = 512
+    #: Port A's RTL leaf, one of :data:`BRAM_WINDOW_LEAVES` (its ``BramView`` in
+    #: ``waveflow.build.mm_adaptor_gen.BRAM_VIEWS``).  A build input (``build_fields``): the two leaves
+    #: are different hardware with different timing, so each has its own identity and its own records.
+    bram_leaf: str = "mm_bram_port"
+    build_fields: ClassVar[tuple[str, ...]] = ("bram_leaf",)
     window: int = 4096
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.bram_leaf not in BRAM_WINDOW_LEAVES:
+            raise ValueError(f"{type(self).__name__}: bram_leaf must be one of {BRAM_WINDOW_LEAVES}, "
+                             f"got {self.bram_leaf!r}")
         dw, n = int(self.mem_dwidth), int(self.nelem)
         self._bpw = dw // 8
         if n < 1 or n & (n - 1):
@@ -94,4 +108,4 @@ class MemSlaveBramWindow(HwModule):
         return out
 
 
-__all__ = ["MemSlaveBramWindow"]
+__all__ = ["BRAM_WINDOW_LEAVES", "MemSlaveBramWindow"]

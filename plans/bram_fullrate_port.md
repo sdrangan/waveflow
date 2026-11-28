@@ -251,3 +251,47 @@ after. New fast tests of the `RD_OUTST > 1` rendering in `test_mm_adaptor_gen.py
 The one failure is `test_xsi_workspace_copies.py::test_there_are_workspaces_to_check`, which wants at
 least three example `xsi/` directories holding a BFM copy; those are build outputs, and this fresh
 worktree has two (`interleaver`, `mem_copy`). Not this change's.
+
+### Stage 2 (2026-11-28): `mm_bram_port_pipe.v`, its view, the window's leaf, `FullRateMemoryMod`
+
+**The leaf** (`waveflow/build/rtl/mm_bram_port_pipe.v`): port A of `bram_t2p`, the request bus of
+`mm_bram_port.v`. A read's way out is the BRAM's output register, then the response register, which is
+entry 0 of a shift-register response FIFO: `rsp_rdata` / `rsp_err` leave from flops. The FIFO is
+`DEPTH = LAT + 2 = 3`: the BRAM's output holds a word one cycle only, so a read is accepted only when the
+FIFO could take every read in flight, `(held + on bram_dout) < DEPTH`, from registers alone; in the
+steady state one word is held and one is on `bram_dout`, so the third place is what accepts the next
+read without a path from `rsp_ready` (at `DEPTH` 2 it would accept one every other cycle). Writes are
+done at the request handshake; out-of-memory reads answer 0 with `rsp_err`; `LAT` other than 1 is an
+`$error`, as in p1. The header has the cycle diagram.
+
+**The Python side.** `BramViewPipe` (`mm_adaptor_gen.py`, in `BRAM_VIEWS` and `LEAF_DEPS`):
+`rd_outst = LAT + 1 = 2`, so a slot holding one sets the front's `RD_OUTST(2)` (and, behind a decoder,
+brings the order FIFO). `MemSlaveBramWindow.bram_leaf` (`"mm_bram_port"`, the default, or
+`"mm_bram_port_pipe"`, checked against `BRAM_WINDOW_LEAVES`): a plain `str` named in `build_fields`, as
+`StreamArbiter.policy` is, because an `HwParam` is coerced to `int`; it enters the module's identity,
+so the two leaves key differently (tested). `FullRateMemoryMod` (`memory.py`, `BRAM_LEAF =
+"mm_bram_port_pipe"`) for a memory with no kernel port; `system_top` renders its slot with the new leaf
+and `RD_OUTST(2)` (tested). p1's header points at the new leaf. The C++ BFM's `AxiMmMaster::Op` gained
+`burst` (`AxBURST`, default INCR, as `size` is a knob), copied to the two committed example
+workspaces.
+
+**Found on the way: the order FIFO was one entry short.** The order gate's first run hung in the hole
+phase. `mm_sync_fifo` refuses a push while full even when it pops in the same cycle, and at `RD_OUTST`
+outstanding the front issues in the cycle it takes a response; at `DEPTH = RD_OUTST = 2` that push was
+dropped, the FIFO fell behind the front and emptied early, and `hole_rsp = !empty && hole` stopped
+answering a read still owed (window reads survived only because the stale select still named the
+window). Fixed in the generator, not the shared FIFO: `DEPTH = RD_OUTST + 1` rounded up to a power of
+two (4). One hypothesis, confirmed by the next run.
+
+**Gates** (xsim 2025.1, every number recorded in the tests):
+
+| Gate | Result |
+|---|---|
+| the leaf alone (`test_mm_bram_pipe_xsi.py`), `mm_bram_port_pipe` | 29 reads, 1,398 words, every one checked; a lone N-beat read exactly **N + 3** cycles (address presented to RLAST, inclusive) for N = 1, 2, 16, 64, 256: 4, 5, 19, 67, 259 |
+| the same, `mm_bram_port` (the control) | the same words; exactly **2N + 2**: 4, 6, 34, 130, 514 |
+| both: back-to-back, RREADY stalls, AW/AR alternation, FIXED, SLVERR | 16-beat reads back to back every 19 cycles (34 old: this master issues an AR only after RLAST, and the front serves one transaction at a time); the queued writes and reads finish strictly W R W R ...; FIXED and out-of-memory reads cost what INCR in-memory ones do; a write outside the memory does not alias |
+| order across leaves (queue out + pipelined window + queue in + the hole, one front, `RD_OUTST(2)`) | 20 reads, 227 words: alternating queue / window reads under 40% stalls, 17 hole beats under 60% (all SLVERR 0), and six bursts run across a window boundary (illegal on a bus, the one way to have reads outstanding at two leaves), each beat from its own leaf |
+| ordering guarantee 1 with the new leaf (`test_mm_bram_order_xsi.py`, `one_front_pipe` / `per_view_pipe`) | identical to the old leaf to the cycle: nothing stale behind one front (data 263, doorbell 267), 63 stale across two |
+| regressions after the BFM change | the 6 older mm gates and mm_fir's 10: 26 passed with the new ones |
+
+`WANT_XSI_GATES` 293 -> 301 (the leaf alone 4, order 2, guarantee 1 with the new leaf 2).

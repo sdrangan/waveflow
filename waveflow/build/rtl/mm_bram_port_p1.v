@@ -9,7 +9,8 @@
 // For a memory that is simulated, not synthesized: the response path is the BRAM's output straight
 // to the AXI read channel, which a timing-closed design would register.  Selected by a memory class
 // that names this leaf (``PipelinedMemoryMod``, ``BramViewP1``); every existing memory keeps
-// mm_bram_port.v.
+// mm_bram_port.v.  The synthesizable full-rate window is mm_bram_port_pipe.v (a registered response,
+// reads pipelined behind a front with RD_OUTST = 2; plans/bram_fullrate_port.md).
 //
 // Holding a response: the leaf issues no new memory access while one is pending (req_ready low for
 // both reads and writes), so the BRAM's output register, enabled only by an access, keeps the word

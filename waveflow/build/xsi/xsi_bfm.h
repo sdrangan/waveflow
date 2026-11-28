@@ -870,6 +870,7 @@ public:
         long not_before = 0;              ///< earliest cycle the address phase may be presented
         uint64_t wstrb = ~(uint64_t)0;    ///< WSTRB on every beat (masked to the bus); a fault knob
         int size = -1;                    ///< AxSIZE override; -1 = the bus width.  A fault knob.
+        int burst = -1;                   ///< AxBURST override; -1 = INCR (1), 0 = FIXED, 2 = WRAP
         long t_start = -1, t_end = -1;    ///< cycles (see class comment)
         uint32_t resp = 0;                ///< BRESP, or the worst RRESP over the burst
         std::vector<uint64_t> rdata;      ///< read result
@@ -1007,8 +1008,9 @@ public:
             if (P_awsize >= 0) d_.putW(P_awsize, sz);
             if (P_arsize >= 0) d_.putW(P_arsize, sz);
         }
-        if (P_awburst >= 0) d_.putW(P_awburst, 1);   // INCR
-        if (P_arburst >= 0) d_.putW(P_arburst, 1);
+        // INCR unless the op says otherwise (Op::burst)
+        if (P_awburst >= 0) d_.putW(P_awburst, (wo && wo->burst >= 0) ? (uint64_t)wo->burst : 1u);
+        if (P_arburst >= 0) d_.putW(P_arburst, (ro && ro->burst >= 0) ? (uint64_t)ro->burst : 1u);
         if (P_awcache >= 0) d_.putW(P_awcache, 3);   // normal non-cacheable bufferable (AXI default)
         if (P_arcache >= 0) d_.putW(P_arcache, 3);
         for (int p : zero_) d_.putW(p, 0);

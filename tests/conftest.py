@@ -282,7 +282,11 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 289 + 4 -> 293 on 2026-11-22 (plans/dse_matrix_sched.md 7a, E1): the B1 CG engine -- the worker alone,
 #: the split alone, the pool at 2 and 4 workers, X bit-exact and cycles against pysim
 #: (tests/examples/test_cg_pool.py).
-WANT_XSI_GATES = 293
+#: 293 + 8 -> 301 on 2026-11-28 (plans/bram_fullrate_port.md, Stage 2): the full-rate BRAM window --
+#: the leaf alone, mm_bram_port_pipe and mm_bram_port as its control, every word and the exact cycles
+#: (4); order across leaves behind one front at RD_OUTST = 2 (2) (tests/build/test_mm_bram_pipe_xsi.py);
+#: ordering guarantee 1 with the new leaf, both topologies (2) (tests/build/test_mm_bram_order_xsi.py).
+WANT_XSI_GATES = 301
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

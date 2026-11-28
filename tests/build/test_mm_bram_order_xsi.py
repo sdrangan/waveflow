@@ -34,6 +34,7 @@ from waveflow.build.axi_xbar import (
 )
 from waveflow.build.mm_adaptor_gen import (
     BramView,
+    BramViewPipe,
     QueueView,
     leaf_sources,
     mi_wire_signals,
@@ -59,6 +60,12 @@ XBARS = {
                               data_width=64, addr_width=32, id_width=1),
 }
 VIEWS = [QueueView("bell", "in", axis="k_bell", depth=16), BramView("win", kport="kb", baw=BAW)]
+#: The same gate with the full-rate leaf (``plans/bram_fullrate_port.md``): its writes are done at the
+#: request handshake too, and behind one front its RD_OUTST = 2 brings the decoder's order FIFO.
+VIEWS_PIPE = [VIEWS[0], BramViewPipe("win", kport="kb", baw=BAW)]
+#: Each run: (topology, the window's views).  The first two are the gate as first recorded.
+RUNS = {"one_front": ("one_front", VIEWS), "per_view": ("per_view", VIEWS),
+        "one_front_pipe": ("one_front", VIEWS_PIPE), "per_view_pipe": ("per_view", VIEWS_PIPE)}
 
 #: The test "kernel": wait for a doorbell word N on k_bell, then read BRAM port B at N-1, N-2, ..., 0
 #: and emit each word on k_out.  Two cycles per word (address, then data -- the memory's latency is 1).
@@ -101,7 +108,8 @@ endmodule
 """
 
 
-def render_top(top: str, topology: str) -> str:
+def render_top(top: str, topology: str, views=None) -> str:
+    views = VIEWS if views is None else views
     xbar = XBARS[topology]
     dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
@@ -117,11 +125,11 @@ def render_top(top: str, topology: str) -> str:
              f"  wire [{dw - 1}:0] kb_din, kb_dout;"]
     body.append(render_xbar_instance(xbar, "u_xbar", ["s0_axi", "s1_axi"], mi))
     if topology == "one_front":
-        body.append(render_adaptor_slot("ad", VIEWS, mi[0], dw, aw, idw))
+        body.append(render_adaptor_slot("ad", views, mi[0], dw, aw, idw))
         body += [f"  assign {mi[1]}_{name} = 0;" for name, _w, m2s in mi_wire_signals(dw, aw, idw)
                  if not m2s]
     else:
-        for view, p in zip(VIEWS, mi):
+        for view, p in zip(views, mi):
             body.append(render_view_slot(view, p, dw, aw, idw))
     body.append("""  bram_reader #(.DW(64)) u_reader (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
@@ -173,24 +181,30 @@ def _parse(out: str) -> dict[str, int]:
     return {k: int(v) for k, v in (kv.split("=") for kv in line.split()[1:])}
 
 
-@pytest.fixture(scope="module", params=["one_front", "per_view"])
+@pytest.fixture(scope="module", params=list(RUNS))
 def order_run(request):
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado (create_ip + xsim)")
-    topology = request.param
+    run = request.param
+    topology, views = RUNS[run]
     ip = generate_axi_xbar(XBARS[topology], WORK / "ip")
-    ws = XsiWorkspace(WORK / f"bram_order_{topology}", top="bo_top")
+    ws = XsiWorkspace(WORK / f"bram_order_{run}", top="bo_top")
     tb = TB.replace("__DLL__", ws.design_dll).replace("__NW__", str(NW))
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + ["bram_reader.v", "bo_top.v"],
                include_dirs=ip.include_dirs, tb_name="bram_order_tb", tb_cpp=tb,
-               extra_files={"bo_top.v": render_top("bo_top", topology), "bram_reader.v": READER_V})
-    return topology, _parse(ws.run())
+               extra_files={"bo_top.v": render_top("bo_top", topology, views),
+                            "bram_reader.v": READER_V})
+    return run, _parse(ws.run())
 
 
 @pytest.mark.xsi
 def test_doorbell_ordering(order_run):
-    topology, r = order_run
-    print(topology, r)
+    run, r = order_run
+    topology = RUNS[run][0]
+    print(run, r)
+    if run.endswith("_pipe"):                   # the window's front keeps two reads outstanding
+        top = render_top("t", topology, RUNS[run][1])
+        assert "RD_OUTST(2)" in top and ("u_ad_order" in top) == (topology == "one_front")
     assert r["got"] == NW, r
     if topology == "one_front":
         # Guarantee 1: the doorbell could not be served before the burst's B, so nothing is stale.
@@ -200,7 +214,7 @@ def test_doorbell_ordering(order_run):
         # The negative control: two fronts, no ordering -- the reader MUST find unwritten words.
         assert r["stale"] > 0, f"per view: expected the doorbell to overtake the data ({r})"
         assert r["bell_end"] < r["data_end"], r
-    assert r == EXPECTED[topology], f"{topology}: moved: {r}"
+    assert r == EXPECTED[run], f"{run}: moved: {r}"
 
 
 #: Recorded 2026-10-02.  one_front: the burst completes at 263, the doorbell -- issued at cycle 3 but
@@ -211,3 +225,8 @@ EXPECTED: dict[str, dict[str, int]] = {
     "one_front": {"got": 256, "stale": 0, "data_end": 263, "bell_end": 267, "first_read": 269},
     "per_view": {"got": 256, "stale": 63, "data_end": 263, "bell_end": 12, "first_read": 14},
 }
+#: The full-rate leaf, recorded 2026-11-28 (xsim 2025.1): the same to the cycle.  Its writes are done
+#: at the request handshake, as mm_bram_port's are, and the test reads only through port B, so the
+#: order and the timing are the old leaf's.
+EXPECTED["one_front_pipe"] = dict(EXPECTED["one_front"])
+EXPECTED["per_view_pipe"] = dict(EXPECTED["per_view"])

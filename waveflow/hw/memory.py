@@ -811,3 +811,19 @@ class PipelinedMemoryMod(MemoryMod):
 
     #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).
     BRAM_LEAF: ClassVar[str] = "mm_bram_port_p1"
+
+
+@dataclass
+class FullRateMemoryMod(MemoryMod):
+    """A :class:`MemoryMod` whose RTL slave reads a word every cycle **and closes timing**: its BRAM
+    window is ``mm_bram_port_pipe.v`` -- the memory's output register, then a response register, its
+    reads pipelined behind a front that keeps two outstanding (``plans/bram_fullrate_port.md``).
+
+    The synthesizable sibling of :class:`PipelinedMemoryMod`, whose leaf takes the memory's output
+    straight to the read channel and is for a memory that is simulated.  Its own class, so its identity
+    and its timing record (``waveflow.calib.mem_timing``, measured in its harness like any memory's) are
+    its own; pysim needs nothing else.
+    """
+
+    #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).
+    BRAM_LEAF: ClassVar[str] = "mm_bram_port_pipe"

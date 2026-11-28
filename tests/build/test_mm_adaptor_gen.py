@@ -112,10 +112,10 @@ def test_the_order_fifo_replaces_the_latched_select_above_one_outstanding_read()
     views = [QueueView("qin", "in", axis="k_in"), QueueView("qout", "out", axis="k_out"),
              _needs(2)("win", "out", axis="k_w")]                  # three views: a hole at 3
     assert order_fifo_params(views[:2]) is None
-    assert order_fifo_params(views) == {"W": 3, "DEPTH": 2}          # 2 select bits + the hole bit
+    assert order_fifo_params(views) == {"W": 3, "DEPTH": 4}          # 2 select bits + the hole bit
     v = render_adaptor_slot("ad", views, "mi0_axi", 64, 32, 1)
     assert "axi_slave_front #(.DW(64), .AW(32), .IDW(1), .LAW(14), .RD_OUTST(2)) u_ad_front" in v
-    assert "mm_sync_fifo #(.W(3), .DEPTH(2)) u_ad_order (" in v
+    assert "mm_sync_fifo #(.W(3), .DEPTH(4)) u_ad_order (" in v
     assert ".push(ad_req_valid && ad_req_ready && !ad_req_we), .din({ad_hole, ad_sel})," in v
     assert ".pop(ad_rsp_valid && ad_rsp_ready), .dout({ad_ohole, ad_rsel})," in v
     assert "wire ad_hole_rsp = !ad_oempty && ad_ohole;" in v
@@ -123,6 +123,60 @@ def test_the_order_fifo_replaces_the_latched_select_above_one_outstanding_read()
     assert "assign win_rsp_ready = ad_rsp_ready && !ad_hole_rsp && (ad_rsel == 2);" in v
     # one view behind the front: the select is a constant bit, the FIFO one bit wider than it
     one = render_adaptor_slot("a1", views[2:], "mi0_axi", 64, 32, 1)
-    assert "mm_sync_fifo #(.W(2), .DEPTH(2)) u_a1_order (" in one
-    # deeper: a power of two that holds every outstanding read
+    assert "mm_sync_fifo #(.W(2), .DEPTH(4)) u_a1_order (" in one
+    # RD_OUTST + 1 (a push in the cycle a full FIFO pops), rounded up to a power of two
     assert order_fifo_params([_needs(3)("t", "out", axis="k")]) == {"W": 2, "DEPTH": 4}
+    assert order_fifo_params([_needs(4)("t", "out", axis="k")]) == {"W": 2, "DEPTH": 8}
+
+
+# --- the full-rate leaf (plans/bram_fullrate_port.md, Stage 2) -------------------------------------
+
+def test_the_pipelined_window_asks_its_front_for_lat_plus_one_reads():
+    from waveflow.build.mm_adaptor_gen import (
+        BRAM_VIEWS,
+        LEAF_DEPS,
+        BramViewPipe,
+        bram_read_latency,
+        leaf_module_sources,
+        rd_outst_of,
+        render_view_slot,
+    )
+    v = BramViewPipe("win", kport="kb", baw=8)
+    assert BRAM_VIEWS["mm_bram_port_pipe"] is BramViewPipe and "mm_bram_port_pipe" in LEAF_DEPS
+    assert v.rd_outst == bram_read_latency() + 1 == 2 and rd_outst_of([v]) == 2
+    assert [p.name for p in leaf_module_sources("mm_bram_port_pipe")] == ["mm_bram_port_pipe.v"]
+    txt = render_view_slot(v, "mi0_axi", 128, 32, 1)
+    assert "axi_slave_front #(.DW(128), .AW(32), .IDW(1), .LAW(12), .RD_OUTST(2)) u_win_front" in txt
+    assert "mm_bram_port_pipe #(.DW(128), .LAW(12), .BAW(8), .LAT(1)) u_win (" in txt
+    assert "bram_t2p #(.DW(128), .AW(8)) u_win_mem" in txt
+
+
+def test_every_window_leaf_and_memory_leaf_has_a_view():
+    from waveflow.build.mm_adaptor_gen import BRAM_VIEWS
+    from waveflow.hw.memory import FullRateMemoryMod, MemoryMod, PipelinedMemoryMod
+    from waveflow.hw.mm_bram import BRAM_WINDOW_LEAVES
+
+    assert set(BRAM_WINDOW_LEAVES) <= set(BRAM_VIEWS)
+    for cls in (MemoryMod, PipelinedMemoryMod, FullRateMemoryMod):
+        assert getattr(cls, "BRAM_LEAF", "mm_bram_port") in BRAM_VIEWS
+    assert FullRateMemoryMod.BRAM_LEAF == "mm_bram_port_pipe"
+
+
+def test_a_full_rate_memory_renders_its_slot_with_two_reads_outstanding():
+    """A memory alone in its harness (the system top ``memory_harness`` builds): the pipelined leaf,
+    its front at RD_OUTST = 2, and the inventory saying so."""
+    from waveflow.build.system_top import SystemTopSpec
+    from waveflow.hw.clock import Clock
+    from waveflow.hw.harness import memory_harness
+    from waveflow.hw.memory import AddrUnit, FullRateMemoryMod
+    from waveflow.simulation.mm_tb import READ, script_op
+
+    def make(sim):
+        return FullRateMemoryMod(name="mem", sim=sim, word_size=64, inline=False, nwords_tot=1 << 10,
+                                 clk=Clock(freq=250e6), addr_unit=AddrUnit.byte)
+
+    spec = SystemTopSpec.from_system(memory_harness(make, [script_op(READ, 0, 4, 10)]))
+    v = spec.render_verilog()
+    assert "mm_bram_port_pipe #(" in v and ".RD_OUTST(2)" in v
+    inv = {i.module: i.params for i in spec.instances()}
+    assert inv["mm_bram_port_pipe"]["BAW"] == 10 and inv["axi_slave_front"]["RD_OUTST"] == 2
