@@ -295,3 +295,56 @@ two (4). One hypothesis, confirmed by the next run.
 | regressions after the BFM change | the 6 older mm gates and mm_fir's 10: 26 passed with the new ones |
 
 `WANT_XSI_GATES` 293 -> 301 (the leaf alone 4, order 2, guarantee 1 with the new leaf 2).
+
+### Stage 3 (2026-11-28): timing closure at 4 ns
+
+**What was implemented.** An adaptor with one window -- `axi_slave_front` and the leaf on port A of a
+`bram_t2p`, rendered by `render_view_slot` as a system top renders it -- with a **16 KB** window (one
+channel's block of the emitter example's ring: 1,024 words at 128 bits, 256 at 512). Vivado 2025.1,
+`xczu48dr-ffvg1517-2-e`, a 4 ns clock, out of context: `synth_design`, `opt_design`, `place_design`,
+`phys_opt_design`, `route_design`.
+
+**Inside a ring of registers** (new: `waveflow.build.rtl_ooc.registered_wrapper` /
+`impl_registered_ooc`): every AXI pin and every pin of the memory's port B (the kernel's, brought out so
+the memory is the true dual-port a shared window is) goes through one flop, and the adaptor keeps its
+hierarchy (`KEEP_HIERARCHY`, so no ring flop is absorbed into it). Out of context a path from or to a
+bare port is not timed at all, so without the ring p1's BRAM-to-RDATA path would close by never being
+looked at; in the ring it is what a neighbour that registers its inputs sees. The figures are the
+adaptor's own (the ring excluded); each run about 3 minutes, cached by the RTL's content.
+
+| leaf | bits | WNS (ns) | WHS (ns) | LUT | FF | BRAM36 | BRAM output reg. used | -> RDATA (ns) | BRAM -> RDATA (ns) | -> BRAM (ns) | worst path |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `mm_bram_port` | 128 | +1.878 | +0.047 | 141 | 38 | 4 | 4 of 4 | +2.368 | +3.046 | +1.878 | ring RREADY -> BRAM enable |
+| `mm_bram_port_p1` | 128 | +2.013 | +0.045 | 130 | 29 | 4 | 0 of 4 | +2.359 | +2.359 | +2.013 | leaf `pend_q` -> BRAM enable |
+| `mm_bram_port_pipe` | 128 | **+1.818** | +0.047 | 402 | 423 | 4 | 0 of 4 | +2.962 | none | +1.818 | front state -> BRAM enable |
+| `mm_bram_port` | 512 | +1.219 | +0.046 | 343 | 41 | 14.5 | 15 of 15 | +2.342 | +2.476 | +1.219 | front `bad_q` -> BRAM enable |
+| `mm_bram_port_p1` | 512 | +0.994 | +0.047 | 334 | 31 | 14.5 | 0 of 15 | +1.628 | +1.628 | +0.994 | front `addr_q` -> BRAM address |
+| `mm_bram_port_pipe` | 512 | **+1.052** | +0.047 | 1,379 | 1,596 | 14.5 | 0 of 15 | +1.335 | none | +1.092 | FIFO count (replicated) -> FIFO head |
+
+(The first run, from scratch, gave the same WNS, WHS, LUT and FF: the flow is deterministic here.)
+
+**The gate** (`tests/build/test_mm_bram_timing_vitis.py`, `-m vitis`, 8 tests): the new leaf closes
+setup and hold at both widths, and **no timing path runs from the memory to the read data's flops**
+("none" above: its response is registered by construction); every configuration routes with its memory
+in block RAM. Fast tests of the ring and its TCL: `tests/build/test_rtl_ooc_ring.py`.
+
+**Findings.**
+
+- **The new leaf closes**: +1.818 ns at 128 bits, +1.052 at 512. Its critical paths are the request
+  into the memory (128) and, at 512, the response FIFO's count fanning out to 3 x 512 data flops
+  (Vivado replicated it).
+- **p1 closes too, in this measurement**: +2.013 / +0.994, its BRAM-to-RDATA path +2.359 / +1.628. Its
+  header's "a timing-closed design would register that path" is not borne out at 250 MHz on this part
+  when the read data's next stop is a flop. What the ring does not show is a path that continues
+  combinationally past the adaptor -- into a crossbar's R channel with no register slice, say -- where
+  p1's BRAM clock-to-out would be part of a longer path and the new leaf's would not.
+- **`mm_bram_port`'s response register is inside the BRAM**: synthesis moved its `rsp_rdata` into
+  each RAMB36's optional output register (DOB_REG on all of them; RTL port A maps to the primitive's
+  port B), which is why it shows 38 FFs and why its BRAM-to-RDATA path starts at a register (+3.046).
+- **The cost of full rate**: the new leaf's 3-entry fabric FIFO is about 3 x DW flops and a mux per
+  bit -- 402 LUT / 423 FF at 128 bits and 1,379 / 1,596 at 512, against ~135 / ~35 and ~340 / ~35 for
+  the other two. A cheaper full-rate leaf would use the BRAM's own output register as the response
+  register (as synthesis did for `mm_bram_port`) with a smaller skid buffer; not built.
+- **The front with `RD_OUTST = 2`** is about the size it is at 1: 65 LUT / 29 FF against 63-64 / 28 at
+  128 bits, 84 / 28 against 59-76 / 30-31 at 512 (the front's own LUTs vary with what placement packs
+  beside the leaf).
