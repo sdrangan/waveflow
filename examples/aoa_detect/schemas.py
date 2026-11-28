@@ -16,9 +16,10 @@ DepartureResult vector -> controller     the stored departure statistic, or a la
 ResultMsg       controller -> host       a decision: an arrival detected or a departure declared
 =============== ======================== =================================================================
 
-``ArrivalResult`` and ``DepartureResult`` share one stream (the arbiter merges both pools), so both begin
-with the same tag (``docs/guide/schema/python/tagged_union.md``); a reader decodes :class:`ResultTag`
-first, then the rest by :data:`RESULT_SCHEMA`.
+Each pool has its own arbiter, so ``ArrivalResult`` and ``DepartureResult`` arrive on separate streams.
+Both still begin with the same tag (``docs/guide/schema/python/tagged_union.md``), which costs nothing
+and lets one log or one reader take both: decode :class:`ResultTag` first, then the rest by
+:data:`RESULT_SCHEMA`.
 """
 from __future__ import annotations
 
