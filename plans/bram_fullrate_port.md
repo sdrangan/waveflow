@@ -169,3 +169,33 @@ the same commit.
   kernel writes the ring through port B, so it needs this next; it is its own plan.
 - A wider read port (256 bits) for the window: the same leaf at a wider `DW`; measured in Stage 3 at 512
   bits for the capture side, but not wired into the example here.
+
+## Record
+
+### Stage 0 (2026-11-28): the baseline
+
+On the lab machine (Ubuntu 24.04, 8 cores), branch `lab/bram-fullrate` from `origin/main` `d5500d76`,
+the venv's Python 3.12; Vivado xsim 2025.1, system g++ 13.3.
+
+| Run | Passed | Skipped | Time |
+|---|---|---|---|
+| `tests/hw/test_mm_bram.py` | 3 | 0 | |
+| `tests/hw/test_mm_adaptor.py` | 4 | 0 | |
+| `tests/build/test_mm_adaptor_gen.py` | 7 | 0 | |
+| the three together | 14 | 0 | 0.27 s |
+| `-m xsi` `test_mm_bram_order_xsi.py`, `test_mm_queue_xsi.py`, `test_mm_regbank_xsi.py` | 6 | 0 | 142 s (each file's fixture ~35 s: xvlog / xelab) |
+| `-m xsi` `test_mm_queue_memw_xsi.py` | 2 | 0 | 36 s |
+
+The two `test_mm_queue_memw_xsi.py` gates first skipped (no csynth of `examples/interleaver`'s
+`mem_w_stream` in a fresh worktree, which is gitignored output). Built out of band as the test's
+docstring says: `mem_stream_gen.generate()`, then `mem_w_stream.tcl` (Vitis HLS 2025.1, the example's own
+`xc7z020clg484-1` at 10 ns, 14 s), then `render_rtl_f` (the post-csynth hook that writes the source
+stamp). Both then passed.
+
+The cycle numbers the gates pin, all xsim 2025.1, unchanged from their recorded values:
+
+- ordering, one front: `got 256, stale 0, data_end 263, bell_end 267, first_read 269`; per view:
+  `got 256, stale 63, data_end 263, bell_end 12, first_read 14`;
+- queue (durations / ends): `w4 612` / `695`, the sink's `first 601, last 787`;
+- register bank: `c2 87`, the packets at `p1 104, p2 109`;
+- MemWStream into the queue: `first 25, p1 32, p2 103, p3 128`.
