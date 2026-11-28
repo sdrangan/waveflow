@@ -6,11 +6,16 @@
 // issues the next read in the cycle a response is taken, a burst streams one beat a cycle where
 // mm_bram_port takes two (LAT + 1).
 //
-// For a memory that is simulated, not synthesized: the response path is the BRAM's output straight
-// to the AXI read channel, which a timing-closed design would register.  Selected by a memory class
-// that names this leaf (``PipelinedMemoryMod``, ``BramViewP1``); every existing memory keeps
-// mm_bram_port.v.  The synthesizable full-rate window is mm_bram_port_pipe.v (a registered response,
-// reads pipelined behind a front with RD_OUTST = 2; plans/bram_fullrate_port.md).
+// Its response path is the BRAM's output straight to the AXI read channel, unregistered.  It was
+// written for a memory that is simulated, not synthesized, on the expectation that the path would not
+// close timing.  Measured, it closes (plans/bram_fullrate_port.md, Stage 3: Vivado 2025.1, xczu48dr
+// at 4 ns, a 16 KB window, placed and routed inside a ring of registers): WNS +2.013 ns at 128 bits
+// and +0.994 at 512 with the window alone (its BRAM-to-RDATA path +2.359 / +1.628), +1.035 / +0.319
+// behind a 4-master axi_crossbar, whose read channel registers the data (the BRAM to the crossbar's
+// first flop +1.917 / +1.850).  mm_bram_port_pipe.v registers the response (a flop between the BRAM
+// and the read data: behind the crossbar +1.077 / +0.520) for about 3 x DW more flip-flops.  Selected
+// by a memory class that names this leaf (``PipelinedMemoryMod``, ``BramViewP1``); every existing
+// memory keeps mm_bram_port.v.
 //
 // Holding a response: the leaf issues no new memory access while one is pending (req_ready low for
 // both reads and writes), so the BRAM's output register, enabled only by an access, keeps the word

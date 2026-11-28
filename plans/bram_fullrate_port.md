@@ -348,3 +348,40 @@ in block RAM. Fast tests of the ring and its TCL: `tests/build/test_rtl_ooc_ring
 - **The front with `RD_OUTST = 2`** is about the size it is at 1: 65 LUT / 29 FF against 63-64 / 28 at
   128 bits, 84 / 28 against 59-76 / 30-31 at 512 (the front's own LUTs vary with what placement packs
   beside the leaf).
+
+### Stage 3b (2026-11-28): behind the crossbar, and p1's header corrected
+
+Asked for after Stage 3: p1 and the pipelined leaf **behind the real `axi_crossbar`**, since the ring
+sits behind it. The window's slot as `system_top` wires a memory on the crossbar: four masters' SI
+ports (`s0_axi`..`s3_axi`, ID width 2), the generated crossbar (SAMD, its MI0 the window, MI1 a stub),
+the front, the leaf and the memory; inside the same ring of registers, Vivado 2025.1, `xczu48dr` at
+4 ns. The crossbar is read as its RTL with **its own out-of-context XDC disabled**: the IP ships one
+that creates a 100 ns clock on its `aclk`, which would have timed its paths at 100 ns; the clock is
+created again after synthesis and every run records the clocks it was timed at (one, `ap_clk` at 4 ns,
+asserted by the gate). New path groups: from the BRAM to the first flop on port A's side (any flop
+but port B's ring flops), and from the BRAM into the crossbar.
+
+| where | leaf | bits | WNS (ns) | WHS (ns) | LUT | FF | BRAM -> first flop (ns) | -> masters' RDATA (ns) | BRAM -> crossbar (ns) | worst path |
+|---|---|---|---|---|---|---|---|---|---|---|
+| crossbar | `mm_bram_port_p1` | 128 | +1.035 | +0.042 | 1,103 | 545 | +1.917 | +1.808 | +1.917 | inside the crossbar (write router FIFO) |
+| crossbar | `mm_bram_port_pipe` | 128 | +1.077 | +0.042 | 1,368 | 935 | +2.260 | +1.812 | none | crossbar write router -> BRAM enable |
+| crossbar | `mm_bram_port_p1` | 512 | +0.319 | +0.042 | 3,426 | 1,323 | +1.850 | +0.319 | +1.850 | crossbar AR state -> SI1 RDATA |
+| crossbar | `mm_bram_port_pipe` | 512 | +0.520 | +0.043 | 4,524 | 2,895 | +1.781 | +0.520 | none | crossbar AR state -> SI3 RDATA |
+
+(LUT and FF are the adaptor's and the crossbar's together.)
+
+- **p1 closes behind the crossbar too**, at both widths. The crossbar registers the read data on its
+  way in (p1's BRAM output ends at a crossbar flop, +1.917 / +1.850 ns), so p1's unregistered response
+  never meets the crossbar's own logic. At 512 bits the worst path of both designs is inside the
+  crossbar -- its read-channel mux into the masters' read data (+0.319, +0.520) -- not the leaf.
+- **The pipelined leaf still has no timing path from the memory to the read data or into the
+  crossbar** (asserted); its margin over p1 behind the crossbar is small (+0.04 ns at 128 bits, +0.2
+  at 512) and it costs about 3 x DW flip-flops more.
+- **Corrected**, as decided: p1's header (`mm_bram_port_p1.v`) no longer says "for a memory that is
+  simulated, not synthesized"; it says what was measured, as do `PipelinedMemoryMod`'s,
+  `BramViewP1`'s and `FullRateMemoryMod`'s docstrings and the pipelined leaf's header. Both leaves stay.
+
+Gate: `tests/build/test_mm_bram_timing_vitis.py` (`-m vitis`), 14 tests: the pipelined leaf closes
+alone and behind the crossbar at both widths with no path from the memory to the read data; each of
+the ten runs routed, at one 4 ns clock, its memory in block RAM. The four p1 and four pipe runs were
+run again after the header edits (their cache keys include the source text).

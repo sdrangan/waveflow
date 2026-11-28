@@ -802,11 +802,14 @@ class PipelinedMemoryMod(MemoryMod):
     ``mm_bram_port_p1.v`` (the memory's output register is the read response) where a
     :class:`MemoryMod`'s is ``mm_bram_port.v`` (a read word every ``LAT + 1`` cycles).
 
-    For a memory that is simulated, not synthesized -- a modelled memory in a system whose other
-    parts are built -- since that response path would not close timing as it stands.  Its own class,
-    so its identity and its timing record (``waveflow.calib.mem_timing``, measured in its harness
-    like any memory's) are its own, and every :class:`MemoryMod` keys as before.  pysim needs nothing
-    else: the stored timing is what makes it read faster.
+    Written for a memory that is simulated, not synthesized, on the expectation that its unregistered
+    response path (the BRAM's output to the read channel) would not close timing.  Measured, it closes
+    at 4 ns on ``xczu48dr`` (Vivado 2025.1, ``plans/bram_fullrate_port.md`` Stage 3): WNS +2.013 ns at
+    128 bits and +0.994 at 512 alone, +1.035 / +0.319 behind a 4-master ``axi_crossbar``.
+    :class:`FullRateMemoryMod` registers the response, for about 3 x the word width more flip-flops.
+    Its own class, so its identity and its timing record (``waveflow.calib.mem_timing``, measured in
+    its harness like any memory's) are its own, and every :class:`MemoryMod` keys as before.  pysim
+    needs nothing else: the stored timing is what makes it read faster.
     """
 
     #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).
@@ -815,14 +818,16 @@ class PipelinedMemoryMod(MemoryMod):
 
 @dataclass
 class FullRateMemoryMod(MemoryMod):
-    """A :class:`MemoryMod` whose RTL slave reads a word every cycle **and closes timing**: its BRAM
-    window is ``mm_bram_port_pipe.v`` -- the memory's output register, then a response register, its
-    reads pipelined behind a front that keeps two outstanding (``plans/bram_fullrate_port.md``).
+    """A :class:`MemoryMod` whose RTL slave reads a word every cycle with a **registered response**: its
+    BRAM window is ``mm_bram_port_pipe.v`` -- the memory's output register, then a response register,
+    its reads pipelined behind a front that keeps two outstanding (``plans/bram_fullrate_port.md``).
 
-    The synthesizable sibling of :class:`PipelinedMemoryMod`, whose leaf takes the memory's output
-    straight to the read channel and is for a memory that is simulated.  Its own class, so its identity
-    and its timing record (``waveflow.calib.mem_timing``, measured in its harness like any memory's) are
-    its own; pysim needs nothing else.
+    The sibling of :class:`PipelinedMemoryMod`, whose leaf takes the memory's output straight to the
+    read channel.  Both close at 4 ns on ``xczu48dr`` (Vivado 2025.1): this one at +1.818 ns (128 bits)
+    / +1.052 (512) alone and +1.077 / +0.520 behind a 4-master ``axi_crossbar``, with no timing path from
+    the memory to the read data, for about 3 x the word width more flip-flops.  Its own class, so its
+    identity and its timing record (``waveflow.calib.mem_timing``, measured in its harness like any
+    memory's) are its own; pysim needs nothing else.
     """
 
     #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).

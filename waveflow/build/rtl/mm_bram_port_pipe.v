@@ -10,8 +10,9 @@
 //   * the BRAM's output register (bram_t2p, READ_LATENCY 1): the word, the cycle after the request;
 //   * the response register -- entry 0 of the response FIFO below -- so the path from the memory to
 //     the AXI read data starts at a flop: bram_dout ends at a flop here, and rsp_rdata leaves from one.
-//     mm_bram_port_p1.v takes the BRAM's output straight to the read channel, which is why it is for a
-//     memory that is simulated, not synthesized.
+//     mm_bram_port_p1.v takes the BRAM's output straight to the read channel; it closes at 4 ns too
+//     where the read data's next stop is a flop (its header has the numbers), and this leaf is the
+//     one with no timing path from the memory to the read data at all.
 //
 // A 4-beat INCR burst, the slot straight on an AXI port, behind axi_slave_front with RD_OUTST = 2
 // (what this leaf needs: its answer comes 2 cycles after a request) and RREADY high:

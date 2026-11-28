@@ -319,6 +319,8 @@ class OocImpl:
     #: The block RAMs after route and how many use their optional output register on each port:
     #: ``{"cells", "doa_reg", "dob_reg"}`` -- a fabric register synthesis moved into the RAM shows here.
     bram_out_regs: dict = field(default_factory=dict)
+    #: Every clock of the routed design, ``{name: period_ns}``: the one asked for, and no other.
+    clocks: dict = field(default_factory=dict)
     tool: str = ""
     seconds: float = 0.0
 
@@ -339,7 +341,23 @@ RING_PATHS: dict[str, str] = {
 }
 
 
-def ring_tcl(top: str, sources: list[str], *, part: str, paths: dict[str, str]) -> str:
+def ring_tcl(top: str, sources: list[str], *, part: str, paths: dict[str, str],
+             ips: list[str] = (), clock: str = "ap_clk", period_ns: float | None = None) -> str:
+    """The ring run's script.  *ips*: ``.xci`` files read as part of the design (their RTL synthesized
+    with it, not as a checkpoint) with **their own XDC disabled** -- an IP's out-of-context constraints
+    create a clock of their own on its clock pin (the generated crossbar's: 100 ns), which would time
+    its paths at that period -- and the clock created again after synthesis.  Every clock the routed
+    design has is printed (``WF_CLOCKS``), so a run can show it was timed at the one it asked for."""
+    ip_lines = []
+    for x in ips:
+        ip_lines += [f"read_ip {{{x}}}",
+                     f"set_property generate_synth_checkpoint false [get_files {{{x}}}]",
+                     f"generate_target all [get_files {{{x}}}]",
+                     f"set wf_ipx [get_files -quiet -of_objects [get_files {{{x}}}] -filter "
+                     "{FILE_TYPE == XDC}]",
+                     "if {[llength $wf_ipx]} { set_property is_enabled false $wf_ipx }"]
+    again = ([f"create_clock -period {period_ns:g} -name {clock} [get_ports {clock}]"]
+             if ips and period_ns is not None else [])
     lines = [
         "proc wf_slack {tag} {",
         "  set s [get_timing_paths -quiet -max_paths 1 -nworst 1 -setup]",
@@ -352,10 +370,13 @@ def ring_tcl(top: str, sources: list[str], *, part: str, paths: dict[str, str]) 
         '  if {[llength $h]} { puts "WF_WHS_$tag [get_property SLACK $h]" }',
         "}",
         f"create_project -in_memory -part {part}",
+        "set_property target_language Verilog [current_project]",
         *[f"read_verilog {{{s}}}" for s in sources],
+        *ip_lines,
         "read_xdc clocks.xdc",
         "set t0 [clock milliseconds]",
         f"synth_design -top {top} -part {part} -mode out_of_context",
+        *again,
         "report_utilization -hierarchical -hierarchical_depth 3 -file util_synth.rpt",
         "wf_slack synth",
         "opt_design",
@@ -366,6 +387,10 @@ def ring_tcl(top: str, sources: list[str], *, part: str, paths: dict[str, str]) 
         "report_utilization -hierarchical -hierarchical_depth 3 -file util_impl.rpt",
         "report_timing_summary -max_paths 10 -file timing_impl.rpt",
         "wf_slack impl",
+        # foreach, not lmap: lmap hands get_property the clocks' names, not the objects
+        "set wf_clks {}",
+        'foreach c [get_clocks] { lappend wf_clks "[get_property NAME $c]:[get_property PERIOD $c]" }',
+        'puts "WF_CLOCKS [join $wf_clks ,]"',
     ]
     for name, flt in paths.items():
         lines += [f"set p [get_timing_paths -quiet -max_paths 1 -nworst 1 -setup {flt}]",
@@ -386,25 +411,30 @@ def ring_tcl(top: str, sources: list[str], *, part: str, paths: dict[str, str]) 
 
 
 def impl_registered_ooc(dut: str, sources, *, part: str, period_ns: float, out_dir: str | Path,
-                        paths: dict[str, str] | None = None, vivado: str | None = None,
+                        paths: dict[str, str] | None = None, ips=(), vivado: str | None = None,
                         force: bool = False) -> OocImpl:
     """Synthesize, place and route module *dut* (from *sources*, its own file first) inside
     :func:`registered_wrapper`'s ring, out of context on *part* at *period_ns*.  Cached under
     ``out_dir/<key>_<part>_<period>ns_ring/result.json``, the key the DUT's
-    :func:`~waveflow.calib.module_key.identify_rtl` (its sources' content).  *paths*: further named
-    path groups to report the worst slack of, beside :data:`RING_PATHS`.  A few minutes a run."""
+    :func:`~waveflow.calib.module_key.identify_rtl` (its sources' content, and each IP's ``.xci``).
+    *paths*: further named path groups to report the worst slack of, beside :data:`RING_PATHS`.
+    *ips*: generated IP directories (``<name>/<name>.xci``, e.g. ``AxiXbarIp.root``) the DUT
+    instantiates, each run from a copy (``generate_target`` rewrites files under it).  A few minutes a
+    run."""
     from waveflow import events
     from waveflow.calib.module_key import identify_rtl
     from waveflow.utils.vivado_report import parse_markers, parse_utilization_hierarchical
 
     sources = [Path(s) for s in sources]
-    ident = identify_rtl(dut, {}, sources)
+    ips = [Path(d) for d in ips]
+    xcis = [d / f"{d.name}.xci" for d in ips]
+    ident = identify_rtl(dut, {}, [*sources, *xcis])
     work = Path(out_dir) / f"{ident.key}_{part}_{period_ns:g}ns_ring"
     stamp = work / "result.json"
     groups = {**RING_PATHS, **(paths or {})}
     if stamp.exists() and not force:
         cached = OocImpl(**json.loads(stamp.read_text(encoding="utf-8")))
-        if set(groups) <= set(cached.paths) and cached.bram_out_regs:
+        if set(groups) <= set(cached.paths) and cached.bram_out_regs and cached.clocks:
             return cached                       # else: it reported less than is asked -- run again
     if vivado is None:
         from waveflow.toolchain.toolchain import find_vivado_path
@@ -419,9 +449,14 @@ def impl_registered_ooc(dut: str, sources, *, part: str, period_ns: float, out_d
                                      f"[get_ports {clk}]\n", encoding="utf-8")
     ring = work / "ring.v"
     ring.write_text(registered_wrapper(dut, sources[0], clock=clk), encoding="utf-8")
+    copies = []
+    for d in ips:
+        shutil.copytree(d, work / "ip" / d.name)
+        copies.append((work / "ip" / d.name / f"{d.name}.xci").resolve().as_posix())
     tcl = work / "impl_ring.tcl"
     tcl.write_text(ring_tcl(f"{dut}_ring", [s.resolve().as_posix() for s in [*sources, ring]],
-                            part=part, paths=groups), encoding="utf-8")
+                            part=part, paths=groups, ips=copies, clock=clk, period_ns=period_ns),
+                   encoding="utf-8")
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", tcl.name], cwd=str(work), capture_output=True, text=True,
@@ -451,6 +486,8 @@ def impl_registered_ooc(dut: str, sources, *, part: str, period_ns: float, out_d
                   paths={n: num(f"SLACKOF_{n}") for n in groups},
                   bram_out_regs=dict(zip(("cells", "doa_reg", "dob_reg"),
                                          (int(x) for x in mk.get("BRAMREGS", "0 0 0").split()))),
+                  clocks={n: float(p) for n, _s, p in
+                          (c.rpartition(":") for c in mk.get("CLOCKS", "").split(",") if c)},
                   tool=f"vivado {mk.get('VERSION', '')}".strip(), seconds=num("SECONDS") or 0.0)
     stamp.write_text(json.dumps(res.to_json(), indent=2), encoding="utf-8")
     return res

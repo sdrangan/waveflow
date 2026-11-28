@@ -183,8 +183,10 @@ class BramView:
 @dataclass(frozen=True)
 class BramViewP1(BramView):
     """A BRAM window whose leaf is ``mm_bram_port_p1.v``: a read word every cycle, its response the
-    memory's own output register.  For a memory that is simulated, not synthesized
-    (:class:`~waveflow.hw.memory.PipelinedMemoryMod`); everything else is :class:`BramView`'s."""
+    memory's own output register, unregistered on its way to the read channel
+    (:class:`~waveflow.hw.memory.PipelinedMemoryMod`).  Measured to close at 4 ns on ``xczu48dr``
+    alone and behind the crossbar (the leaf's header has the numbers); everything else is
+    :class:`BramView`'s."""
 
     module = "mm_bram_port_p1"
 
@@ -192,8 +194,8 @@ class BramViewP1(BramView):
 @dataclass(frozen=True)
 class BramViewPipe(BramView):
     """A BRAM window whose leaf is ``mm_bram_port_pipe.v``: a read word every cycle **and** a registered
-    response (the memory's output register, then a response register), so it closes timing -- the
-    synthesizable full-rate window (``plans/bram_fullrate_port.md``).  Its answer comes ``LAT + 1``
+    response (the memory's output register, then a response register), so no timing path runs from the
+    memory to the read data (``plans/bram_fullrate_port.md``).  Its answer comes ``LAT + 1``
     cycles after a request, so the front keeps that many reads outstanding (:attr:`rd_outst`, the
     front's ``RD_OUTST``); everything else is :class:`BramView`'s."""
 
