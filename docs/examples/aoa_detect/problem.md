@@ -94,12 +94,18 @@ Its distribution, mean and tail, is the timing metric.
 
 **Accuracy**, by matching each emitter's on-period to the decisions in its channel:
 
-- **Missed detection:** an emitter for which no arrival decision is made while it is on.
+- **Missed detection:** an emitter for which no arrival decision is made while it is on. The workload
+  spans SNRs below the detection limit, so misses cannot be zero. Detection is reported as a **curve**,
+  the fraction detected against the per-element SNR, and one number from it, **the SNR at 90%
+  detection** (a logistic fit): a loss is a shift of the curve in dB. Each miss is also attributed to
+  its cause by runs on the same samples: **inherent** (missed by the float golden), **format** (detected
+  in float, missed in fixed point), **timing** (detected by the fixed-point golden, missed by the timed
+  system). A design is judged on its excess misses, format and timing.
 - **False alarm:** an arrival decision in a channel with no emitter on at that block, per channel per
   second.
 - **Early stop:** a departure decision while the emitter is still on, per channel per second.
-- **Angular error:** $|\hat{\theta} - \theta|$ at each correct arrival decision; also the SNR error
-  $\hat{\gamma} - \gamma$.
+- **Angular error:** $|\hat{\theta} - \theta|$ at each correct arrival decision, also against SNR; and
+  the SNR error $\hat{\gamma} - \gamma$.
 
 **The metrics are kept separate for now.** How to combine them into one objective for optimization (for
 example, missed detections counting an arrival later than a delay bound $D_{max}$ as missed) is decided
@@ -143,6 +149,42 @@ Three models score a design, and [The parameters](param.md) says which each para
 
 Several parameters need more than one, and those make the problem
 ([where the models meet](param.md#where-the-models-meet)).
+
+## Two phases
+
+A design is explored in two phases, each settling what it can:
+
+**Phase 1, untimed**: the bit-exact golden on the **statistical** workload (SNR uniform in dB over
+$[-20, 30]$ per element, [The workload](workload.md)), with the cost model.
+
+- It **settles alone** what affects only accuracy: the overflow modes, the accumulators, the detection
+  and stop thresholds.
+- For the **coupled** parameters (the block length, the grid, the search gate, the input bits, the
+  stored widths) it produces **curves, not choices**: for each value, the accuracy (the detection
+  curve's shift, false alarms, early stops, the angular error) and the cost of a job (operations, bytes
+  read, resources).
+
+**Phase 2, timed**: the timed simulation on the **geometric** workload, which has the realistic mix of
+strong emitters and weak ones near the threshold, scored again by the fixed-point golden on the same
+samples so that its extra misses count as timing loss.
+
+- It chooses the **hardware** (units, array shape, port width, ring depth, credits, policies) and the
+  **coupled parameters** together with it: the search gate (sensitivity against false searches that
+  load every channel), the block length (accuracy against block period and job length), the grid (the
+  scan is two thirds of a search), the input bits (samples a beat, so the read time), the stored widths
+  (DSPs, so how many units fit the budget).
+
+**What the study measures: decoupled against joint.** The two-phase flow is how a design is made
+without a fast timed simulator: optimize accuracy untimed, freeze those choices, then size the
+hardware with a few RTL runs. Its weakness is the coupled parameters, chosen as if computing were free.
+So two designs are compared at the same targets:
+
+- **decoupled:** phase 1's choices frozen, phase 2 sizes only the hardware;
+- **joint:** phase 2 reopens the coupled parameters, with the timed simulation in the loop.
+
+The gap between them, in resources at equal targets or in misses and delay at an equal budget, is
+what a fast timed simulation is worth on this problem. A gap near zero would be an honest result: the
+problem would need more coupling.
 
 ## What can be designed
 

@@ -2,7 +2,7 @@
 title: The workload
 parent: Emitter detection and AoA
 nav_order: 4
-summary: "How the receiver is driven in a test. Emitters are placed on the ground, uniformly over the area of one sector, and their SNR follows from free-space path loss (Friis), their transmit power, a 3GPP sector element pattern and the receiver's noise; their direction (azimuth, elevation) from the geometry. Each channel's emitter switches on and off as a Gilbert–Elliott process with an optional burst trigger. A statistical mode (SNR uniform in dB, direction uniform in the sector) is kept as a check. The source generates every channel's samples block by block from a seed, with a truth log of every emitter's on/off blocks, direction and SNR; the same samples drive pysim and, replayed from a file, the RTL. Named scenarios cover idle noise, one emitter, crossings of the thresholds, bursts and long random runs. Ray-traced channels are the later step."
+summary: "How the receiver is driven in a test. Emitters are placed on the ground, uniformly over the area of one sector, and their SNR follows from free-space path loss (Friis), their transmit power, a 3GPP sector element pattern and the receiver's noise; their direction (azimuth, elevation) from the geometry. Each channel's emitter switches on and off as a Gilbert–Elliott process with an optional burst trigger. A statistical mode (SNR uniform in dB over [-20, 30], direction uniform in the sector) drives the untimed phase; the geometric mode drives the timed one. The source generates every channel's samples block by block from a seed, with a truth log of every emitter's on/off blocks, direction and SNR; the same samples drive pysim and, replayed from a file, the RTL. Named scenarios cover idle noise, one emitter, crossings of the thresholds, bursts and long random runs. Ray-traced channels are the later step."
 ---
 
 # The workload
@@ -49,25 +49,35 @@ $$
 
 The **array SNR** of the model is $\gamma = n_{rx}\, \gamma_{el}$ (in linear terms).
 
-**Proposed values**, at a carrier of 3.5 GHz and $f_s = 10$ MHz per channel ($N = -97$ dBm with
+**Proposed values**, at a carrier of 3.5 GHz and $f_s = 30.72$ MHz per channel ($N = -92$ dBm with
 $F = 7$ dB):
 
 | | Value |
 |---|---|
 | $h_{rx}$, $\delta$ | 25 m, 6° down |
-| $r_{min}$, $r_{max}$ | 100 m, 2 km |
+| $r_{min}$, $r_{max}$ | 100 m, 5 km |
 | $\phi_{max}$ | 60° |
 | $h_e$ | 1.5 m |
-| $P_t$ | uniform in 0 to 20 dBm |
+| $P_t$ | uniform in 5 to 30 dBm |
 
-With these, the per-element SNR is between about **−6 and 19 dB for 90% of emitters** (median 6 dB),
-with a few near the receiver up to about 40 dB; the elevation is between about 0.7° and 13° below the
-horizon. (From $2 \times 10^5$ draws of the model above.) The strong tail matters: it sets the input
-format's headroom ([below](#the-samples)).
+With these, the per-element SNR spans about **−13 to 16 dB for 90% of emitters** (median 1 dB), with
+the weakest 5% below −13 dB, near the detection limit, and a few near the receiver up to about 42 dB;
+the elevation is between about 0.3° and 13° below the horizon (from $2 \times 10^4$ draws of the model
+above). Both ends matter: the weak end puts emitters across the detection threshold, and the strong
+tail sets the input format's headroom ([below](#the-samples)).
 
-**A statistical mode** is kept as a check and for sweeps: the per-element SNR uniform in dB over
-$[-6, 30]$, the azimuth uniform in $[-\phi_{max}, \phi_{max}]$, the elevation uniform over the sector's
-range. It decouples SNR from direction, which the geometric mode does not.
+**A statistical mode**: the per-element SNR uniform in dB over $[-20, 30]$, the azimuth uniform in
+$[-\phi_{max}, \phi_{max}]$, the elevation uniform over the sector's range. It puts the same number of
+emitters in every dB of SNR, from well below the detection limit to the top of the dynamic range, and
+it decouples SNR from direction, which the geometric mode does not.
+
+**Which mode for which phase** ([the two phases](problem.md#two-phases)):
+
+- **Phase 1, untimed: the statistical mode** (`accuracy_workload()` in `workload.py`). The detection
+  curve needs emitters evenly across the threshold region, and the formats need the whole dynamic
+  range.
+- **Phase 2, timed: the geometric mode** (`timing_workload()`). The load depends on the realistic mix:
+  how many emitters are strong, and how many are weak enough to fire the gate without being detected.
 
 ## When emitters are on
 
@@ -82,14 +92,15 @@ trigger**: with probability $p_{burst}$ per block, $k_{burst}$ channels chosen a
 turn on together. It is the worst case for the shared hardware, as after an event many emitters
 appear at once.
 
-**Proposed values**, at $B = 256$ and $f_s = 10$ MHz (a block every 25.6 µs):
+**Proposed values**, at $B = 256$ and $f_s = 30.72$ MHz (a block every 8.33 µs), chosen for about 1.5
+activations a block over $C = 8$ channels ([the load](param.md#what-they-imply)):
 
 | | Value | Meaning |
 |---|---|---|
-| $p_{off}$ | $1/400$ | emitters last about 10 ms |
-| $p_{on}$ | $1/1600$ | a channel is busy about 20% of the time |
-| $p_{burst}$ | $1/4000$ | a burst about every 100 ms |
-| $k_{burst}$ | 8 | half the channels |
+| $p_{off}$ | $3/16$ | emitters last about 5 blocks, 44 µs |
+| $p_{on}$ | $3/16$ | a channel is busy half the time |
+| $p_{burst}$ | $1/50$ | a burst about every 50 blocks, 0.4 ms |
+| $k_{burst}$ | 4 | half the channels |
 
 ## The samples
 
@@ -102,11 +113,30 @@ $$
 with $a(\theta) = \sqrt{n_{rx}}\, u(\theta)$ the unit-modulus steering vector, and the first term absent
 while the channel's emitter is off. This is exactly the covariance of [the signal](problem.md#the-signal).
 
-**Quantization.** The samples are scaled so that the noise sits at a fixed level below full scale,
-then rounded and saturated to the input format, $W_{in}$ bits per real and imaginary part
-([parameters](param.md)). The scale is a parameter: lower leaves more headroom for strong emitters
-(a 40 dB emitter clips unless the noise is far below full scale) at the cost of resolution on weak
-ones. Clipped samples are counted, per channel.
+**Quantization: the input gain.** The input gain is fixed (calibrated, not an automatic gain
+control): it scales the samples so that the thermal noise has a complex standard deviation of
+$\sigma$ LSBs, then they are rounded and saturated to $b$ bits per real and imaginary part. With
+1 LSB steps, rounding adds noise of power $1/6$ LSB² per complex sample, and an emitter of
+per-element SNR $\gamma_{el}$ has a per-part standard deviation of $\sigma \sqrt{(1 + \gamma_{el})/2}$
+LSBs. So $\sigma$ trades two things:
+
+- **Rounding noise against thermal noise:** $10 \log_{10}\big(1 / (6 \sigma^2)\big)$ dB. At
+  $\sigma = 4$ LSBs it is −19.8 dB: it raises the noise floor by under 0.05 dB.
+- **Headroom:** the largest per-element SNR whose per-part standard deviation stays within a quarter of
+  full scale (clipping only beyond four standard deviations), about $6.02\, b - 20 \log_{10} \sigma - 9$
+  dB.
+
+| $b$ | $\sigma = 1$ | $\sigma = 2$ | $\sigma = 4$ | $\sigma = 8$ |
+|---|---|---|---|---|
+| rounding vs thermal | −7.8 dB | −13.8 dB | −19.8 dB | −25.8 dB |
+| headroom at 16 bits | 81 dB | 75 dB | 69 dB | 63 dB |
+| headroom at 12 bits | 57 dB | 51 dB | 45 dB | 39 dB |
+| headroom at 8 bits | 33 dB | 27 dB | 21 dB | 15 dB |
+
+**Proposed: $\sigma = 4$ LSBs**, the noise at −81 dBFS at 16 bits. Rounding is then negligible, and
+the headroom covers the workload's strong tail (about 40 dB per element) at 16 and 12 bits; at 8 bits
+it does not, which is part of what the input format trades. The golden's thresholds use the calibrated
+noise power $N_0 = \sigma^2 + 1/6$ LSB². Clipped samples are counted, per channel.
 
 **Word layout.** Each word of the sample stream holds one channel's antennas for one sample, the
 layout [the ring](arch.md#the-ring) needs; a block is $C \cdot B$ of them, channel after channel within
@@ -148,5 +178,4 @@ free-space runs.
 ## Open
 
 - The values above, and the carrier and bandwidth they assume.
-- The input scale: where the noise sits below full scale.
 - Whether an emitter's power or position may change while it is on.

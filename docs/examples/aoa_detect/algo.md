@@ -91,16 +91,16 @@ with $2B$ degrees of freedom, which sets the probability of declaring a stop too
 
 In complex multiply-accumulates, for one channel and one block:
 
-| Stage | When | Cost | At $n_{rx} = 8$, $B = 256$, $L = 64$ |
+| Stage | When | Cost | At $n_{rx} = 16$, $B = 256$, $L = 256$ |
 |---|---|---|---|
-| a.1 energy | every searching block | $B\, n_{rx}$ (magnitudes only) | 2,048 |
-| a.2 Gram | gate fired | $B\, n_{rx}(n_{rx}+1)/2$ | 9,216 |
-| a.3 scan | gate fired | $L\, n_{rx}^2 + L\, n_{rx}$ | 4,608 ($L = 16 \times 4$) |
+| a.1 energy | every searching block | $B\, n_{rx}$ (magnitudes only) | 4,096 |
+| a.2 Gram | gate fired | $B\, n_{rx}(n_{rx}+1)/2$ | 34,816 |
+| a.3 scan | gate fired | $L\, n_{rx}^2 + L\, n_{rx}$ | 69,632 ($L = 32 \times 8$) |
 | a.4 test | gate fired | a compare and a subtraction | -- |
-| b.1 energy | every tracking block | $B\, n_{rx}$ (magnitudes only) | 2,048 |
-| b.2 direction power | b.1 dropped | $B\, n_{rx}$ | 2,048 |
+| b.1 energy | every tracking block | $B\, n_{rx}$ (magnitudes only) | 4,096 |
+| b.2 direction power | b.1 dropped | $B\, n_{rx}$ | 4,096 |
 
-So **a search (a.2 and a.3) costs about seven times a tracking check** at these sizes, and it reads the
+So **a search (a.2 and a.3) costs about 25 times a tracking check** at these sizes, and it reads the
 whole block. Which blocks need a search depends on the data: emitters' onsets, weak emitters that fire
 the gate repeatedly without being detected, and the gate's false alarms. a.2 and a.3 are regular
 matrix products, suited to a systolic unit; a.1 and b.1 are streaming sums that can run beside the

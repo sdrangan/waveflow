@@ -41,4 +41,15 @@ against RTL simulation alone.
 | [The workload](workload.md) | How a test drives the receiver: emitters placed on the ground in a sector with free-space path loss, switched on and off by a Gilbert–Elliott process with bursts, the samples and their truth log, and the scenarios. |
 | [The parameters](param.md) | Every parameter with a proposed value and whether it is explored: algorithm, number formats, memory and queues, credits, units, policies, and the load they imply. |
 
-The first sketch of the idea is `examples/aoa_detect/idea.md`.
+## Code
+
+In `examples/aoa_detect/`, so far the untimed half:
+
+- `workload.py`: the synthetic workload (emitters, their on/off process, the quantized samples, the
+  truth log) and the input-gain trade-off;
+- `golden.py`: the bit-exact golden, a class whose fields are every programmable parameter;
+- `score.py`: the accuracy metrics, result messages against the truth log;
+- `array.py`: the URA's steering vector and the sector element, shared by both.
+
+Tests in `tests/examples/test_aoa_detect.py`. The first sketch of the idea is `idea.md` in the same
+folder.
