@@ -99,119 +99,102 @@ def block(s: Svg, x, y, w, h, title, rows, fill, stroke, tcolor):
 
 
 def arch_overview() -> Svg:
-    s = Svg(1300, 800)
-    s.text(24, 34, "Emitter detection and AoA: the architecture", size=20, weight="bold")
-    s.text(24, 56, "the sample path never stalls; every read of the samples goes through the "
-           "ring's port A, where the jobs compete", size=13.5, color=INK2)
+    s = Svg(1360, 900)
+    s.text(24, 34, "Emitter detection and AoA: the DUT, its devices and the testbench", size=20,
+           weight="bold")
+    s.text(24, 56, "the sample path never stalls; every read of the samples goes through the ring's "
+           "port A, over the crossbar, where the units compete", size=13.5, color=INK2)
 
-    # --- host --------------------------------------------------------------------------------
-    block(s, 400, 80, 280, 74, "Host (A53)",
-          ["sets thresholds; reads results,", "counters; one IRQ every P blocks"],
-          "#ffffff", INK2, INK)
+    # --- the testbench: host and sample source ------------------------------------------------
+    block(s, 430, 78, 290, 70, "Host (A53): testbench",
+          ["sets thresholds; reads results, counters;", "one IRQ every P blocks"], "#ffffff", INK2, INK)
+    s.rect(10, 300, 92, 76, fill="#ffffff", stroke=INK2)
+    s.lines(18, 322, ["Sample", "source:", "testbench"], size=12, color=INK)
 
-    # --- capture + power detector -----------------------------------------------------------
-    block(s, 70, 200, 260, 190, "Capture + power detector",
-          ["writes every sample to the ring",
-           "C energy sums, in the same pass",
-           "per channel: absent / active /",
-           "    pending",
-           "notify past a threshold;",
-           "no credit: drop, never wait"],
+    # --- the DUT -------------------------------------------------------------------------------
+    s.rect(112, 172, 1236, 660, fill="none", stroke=INK, rx=16, sw=2.0)
+    s.text(1334, 194, "DUT", size=15, weight="bold", anchor="end", color=INK)
+
+    # front-end device
+    s.rect(125, 196, 245, 520, fill="none", stroke=BLUE, rx=12, dash="6 4")
+    s.text(137, 214, "front-end device", size=12, weight="bold", color=BLUE_D)
+    block(s, 140, 228, 215, 196, "Capture + power detector",
+          ["writes every sample to the ring", "C energy sums, same pass",
+           "absent / active / pending", "notify past a threshold;", "no credit: drop, never wait"],
           BLUE_T, BLUE, BLUE_D)
-    s.arrow([(14, 300), (68, 300)], color=BLUE, sw=2.4)
-    s.text(14, 284, "samples", size=12, color=BLUE_D)
-    s.text(14, 322, "B·C·nrx", size=11.5, color=INK2)
-    s.text(14, 337, "a block", size=11.5, color=INK2)
-
-    # --- ring ---------------------------------------------------------------------------------
-    block(s, 70, 520, 260, 150, "Ring: R slots, dual-port BRAM",
-          ["slot[channel][sample][antenna]",
-           "header (block index) written first,",
-           "checked last by each reader:",
-           "overwritten while read → late"],
+    block(s, 140, 548, 215, 150, "Ring: dual-port BRAM",
+          ["slot[channel][sample][antenna]", "header first, checked last",
+           "slave adaptor: ring window", "(port A), registers, counters"],
           AMBER_T, AMBER, AMBER)
-    s.arrow([(200, 392), (200, 518)], color=BLUE, sw=2.4)
-    s.label(200, 462, "port B: write only", color=BLUE_D)
+    s.arrow([(102, 338), (138, 338)], color=BLUE, sw=2.4)
+    s.arrow([(247, 426), (247, 546)], color=BLUE, sw=2.4)
+    s.label(247, 490, "port B: write", color=BLUE_D)
 
-    # --- controller ---------------------------------------------------------------------------
-    block(s, 400, 200, 280, 230, "Controller (hardware)",
-          ["per channel: state, ℓ̂ (θ̂), γ̂,",
-           "    last block",
-           "dispatches jobs to free units",
-           "final tests: a.4 detect, b.2 stop",
-           "answers each notification:",
-           "    state message + credit",
-           "a result message per decision"],
+    # controller device: controller, two dispatchers, two arbiters
+    s.rect(398, 196, 372, 404, fill="none", stroke=VIOLET, rx=12, dash="6 4")
+    s.text(410, 214, "controller device", size=12, weight="bold", color=VIOLET)
+    block(s, 412, 226, 222, 362, "Controller",
+          ["per channel: state, ℓ̂, γ̂", "dispatches jobs to free units",
+           "waits on both pools' results", "final tests: a.4, b.2",
+           "answers each notification:", "  state message + credit", "a result message per decision"],
           VIOLET_T, VIOLET, VIOLET)
-    # detector <-> controller
-    s.arrow([(332, 250), (398, 250)], color=VIOLET, sw=2)
-    s.label(365, 240, "notifications", color=VIOLET)
-    s.label(365, 270, "(credit stream)", color=INK2, size=10.5)
-    s.arrow([(398, 350), (332, 350)], color=VIOLET, sw=2, dash="6 4")
-    s.label(365, 340, "state messages", color=VIOLET)
-    s.label(365, 370, "(a queue)", color=INK2, size=10.5)
-    # host links
-    s.arrow([(400, 117), (200, 117), (200, 198)], color=INK2, dash="3 4")
-    s.label(290, 110, "registers: thresholds, counters", color=INK2)
-    s.arrow([(520, 198), (520, 156)], color=INK2, dash="3 4")
-    s.label(520, 182, "results, summary", color=INK2)
+    s.arrow([(357, 270), (410, 270)], color=VIOLET, sw=2)
+    s.label(384, 258, "notifications", color=VIOLET, size=10.5)
+    s.arrow([(410, 380), (357, 380)], color=VIOLET, sw=2, dash="6 4")
+    s.label(384, 368, "state msgs", color=VIOLET, size=10.5)
 
-    # --- dispatchers, pools, arbiter ----------------------------------------------------------
-    s.rect(740, 222, 120, 54, fill="#ffffff", stroke=INK2)
-    s.text(800, 245, "StreamDispatch", size=12, weight="bold", anchor="middle")
-    s.text(800, 264, "first free", size=11.5, anchor="middle", color=INK2)
-    s.rect(740, 478, 120, 54, fill="#ffffff", stroke=INK2)
-    s.text(800, 501, "StreamDispatch", size=12, weight="bold", anchor="middle")
-    s.text(800, 520, "first free", size=11.5, anchor="middle", color=INK2)
-    s.arrow([(682, 249), (738, 249)], color=VIOLET, sw=2)
-    s.label(710, 240, "arrival", color=VIOLET, size=10.5)
-    s.arrow([(682, 400), (710, 400), (710, 505), (738, 505)], color=VIOLET, sw=2)
-    s.label(710, 455, "departure", color=VIOLET, size=10.5)
+    def pool(y0, title, unit_rows, color_t, label):
+        """A dispatcher, two units (each a device: unit + reader), and an arbiter, at rows from y0."""
+        yd, ya = y0 + 14, y0 + 96                     # dispatcher and arbiter centres
+        s.rect(664, yd - 20, 94, 40, fill="#ffffff", stroke=INK2)
+        s.text(711, yd + 4, "Dispatch", size=12, weight="bold", anchor="middle")
+        s.rect(664, ya - 20, 94, 40, fill="#ffffff", stroke=INK2)
+        s.text(711, ya + 4, "Arbiter", size=12, weight="bold", anchor="middle")
+        s.arrow([(636, yd), (662, yd)], color=VIOLET, sw=2)
+        s.arrow([(662, ya), (636, ya)], color=VIOLET, sw=2)
+        s.arrow([(711, ya - 22), (711, yd + 22)], color=VIOLET, dash="3 3")
+        s.text(704, (ya + yd) / 2 + 4, "m_sel = credit", size=10.5, anchor="end", color=VIOLET)
+        s.text(826, y0 - 16, title, size=12, weight="bold", color=INK2)
+        for i, yu in enumerate(unit_rows):
+            s.rect(822, yu - 8, 300, 62, fill="none", stroke=BLUE, rx=10, dash="5 4")
+            s.rect(832, yu, 200, 46, fill=color_t, stroke=BLUE)
+            s.text(842, yu + 19, f"{label} {['0', 'k'][i]}", size=12.5, weight="bold", color=BLUE_D)
+            s.text(842, yu + 37, "unit device", size=11, color=INK2)
+            s.rect(1040, yu, 74, 46, fill="#ffffff", stroke=BLUE)
+            s.text(1077, yu + 20, "reader", size=11.5, weight="bold", anchor="middle", color=BLUE_D)
+            s.text(1077, yu + 36, "MemRStream", size=9.5, anchor="middle", color=INK2)
+        ya_in = [unit_rows[0] + 34, unit_rows[1] + 34]
+        # jobs: dispatcher -> fan at x 805 -> each unit
+        s.arrow([(760, yd), (805, yd), (805, unit_rows[0] + 12), (830, unit_rows[0] + 12)], color=VIOLET)
+        s.arrow([(805, unit_rows[0] + 12), (805, unit_rows[1] + 12), (830, unit_rows[1] + 12)],
+                color=VIOLET)
+        # results: each unit -> collector at x 785 -> arbiter
+        for y in ya_in:
+            s.arrow([(830, y), (785, y), (785, ya), (760, ya)], color=VIOLET, halo=True)
 
-    # systolic pool
-    s.rect(900, 176, 250, 150, fill="#ffffff", stroke=LINE, rx=12, dash="5 4")
-    s.text(912, 196, "systolic pool", size=12, weight="bold", color=INK2)
-    for i, (y, name) in enumerate([(206, "Systolic unit 0"), (262, "Systolic unit k")]):
-        s.rect(912, y, 226, 48, fill=BLUE_T, stroke=BLUE)
-        s.text(924, y + 20, name, size=12.5, weight="bold", color=BLUE_D)
-        s.text(924, y + 38, "a.2 Gram + a.3 scan, Q̂ inside", size=11.5, color=INK2)
-    s.arrow([(862, 249), (880, 249), (880, 230), (910, 230)], color=VIOLET)
-    s.arrow([(880, 249), (880, 286), (910, 286)], color=VIOLET)
+    pool(240, "systolic pool: a.2 Gram + a.3 scan, Q̂ inside", [240, 312], BLUE_T, "Systolic unit")
+    pool(478, "vector pool: b.2, ‖uᴴX‖²", [478, 550], BLUE_T, "Vector unit")
 
-    # vector pool
-    s.rect(900, 432, 250, 150, fill="#ffffff", stroke=LINE, rx=12, dash="5 4")
-    s.text(912, 452, "vector pool", size=12, weight="bold", color=INK2)
-    for i, (y, name) in enumerate([(462, "Vector unit 0"), (518, "Vector unit m")]):
-        s.rect(912, y, 226, 48, fill=BLUE_T, stroke=BLUE)
-        s.text(924, y + 20, name, size=12.5, weight="bold", color=BLUE_D)
-        s.text(924, y + 38, "b.2: ‖uᴴX‖², nrx MACs a cycle", size=11.5, color=INK2)
-    s.arrow([(862, 505), (880, 505), (880, 486), (910, 486)], color=VIOLET)
-    s.arrow([(880, 505), (880, 542), (910, 542)], color=VIOLET)
+    # host links (over the crossbar, drawn direct)
+    s.arrow([(430, 113), (247, 113), (247, 226)], color=INK2, dash="3 4")
+    s.label(330, 106, "registers", color=INK2)
+    s.arrow([(520, 224), (520, 150)], color=INK2, dash="3 4")
+    s.label(520, 185, "results, summary", color=INK2)
+    s.text(728, 112, "(over the crossbar)", size=11, color=INK2, italic=True)
 
-    # the systolic pool's reads, drawn first so the result lines bridge over them
-    s.arrow([(1190, 688), (1190, 316), (1152, 316)], color=BLUE, sw=1.8)
-    s.label(1190, 640, "reads", color=BLUE_D)
+    # crossbar and the reads
+    s.rect(398, 760, 790, 40, fill=NEUTRAL, stroke=INK2)
+    s.text(793, 785, "AXI crossbar: every unit reads its channel's block here, in competition",
+           size=12.5, weight="bold", anchor="middle")
+    s.arrow([(357, 650), (380, 650), (380, 780), (396, 780)], color=BLUE, sw=2.4, head=False)
+    s.label(380, 720, "port A", color=BLUE_D)
+    s.arrow([(1150, 758), (1150, 263), (1116, 263)], color=BLUE, sw=1.8)
+    for yu in (335, 501, 573):
+        s.arrow([(1150, yu), (1116, yu)], color=BLUE, sw=1.8)
+    s.label(1150, 690, "reads", color=BLUE_D)
 
-    # results: each unit to the arbiter, the arbiter back to the controller
-    s.rect(1186, 146, 100, 48, fill="#ffffff", stroke=INK2)
-    s.text(1236, 166, "StreamArbiter", size=11.5, weight="bold", anchor="middle")
-    s.text(1236, 184, "results", size=11.5, anchor="middle", color=INK2)
-    for y in (230, 286, 486, 542):
-        s.arrow([(1140, y), (1236, y), (1236, 196)], color=VIOLET, halo=True)
-    s.arrow([(1184, 168), (640, 168), (640, 198)], color=VIOLET, sw=2)
-    s.label(920, 161, "results: ℓ* and p, or p_b; a late flag", color=VIOLET)
-
-    # --- crossbar and reads -------------------------------------------------------------------
-    s.rect(400, 690, 810, 42, fill=NEUTRAL, stroke=INK2)
-    s.text(805, 716, "AXI crossbar: every job reads its channel's block here, in competition",
-           size=12.5, weight="bold", anchor="middle", color=INK)
-    s.arrow([(398, 711), (365, 711), (365, 600), (332, 600)], color=BLUE, sw=2.4, head=False)
-    s.label(365, 655, "port A", color=BLUE_D)
-    s.arrow([(1025, 688), (1025, 568)], color=BLUE, sw=1.8)
-    s.label(1025, 632, "reads", color=BLUE_D)
-
-    # --- legend --------------------------------------------------------------------------------
-    y = 770
+    # legend
+    y = 868
     s.arrow([(24, y), (64, y)], color=BLUE, sw=2.4)
     s.text(72, y + 4, "samples", size=12, color=INK2)
     s.arrow([(160, y), (200, y)], color=VIOLET, sw=2)
@@ -220,6 +203,8 @@ def arch_overview() -> Svg:
     s.text(448, y + 4, "state messages", size=12, color=INK2)
     s.arrow([(570, y), (610, y)], color=INK2, dash="3 4")
     s.text(618, y + 4, "host, memory-mapped", size=12, color=INK2)
+    s.rect(800, y - 9, 30, 16, fill="none", stroke=BLUE, rx=4, dash="5 4")
+    s.text(838, y + 4, "a device", size=12, color=INK2)
     return s
 
 
