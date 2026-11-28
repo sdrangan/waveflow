@@ -50,7 +50,8 @@ $$
 \hat{Q} = \frac{1}{B}\, X X^H \qquad (n_{rx} \times n_{rx},\ \text{Hermitian}) .
 $$
 
-**a.3 Direction scan** over a fixed grid of $L$ directions $\theta_0, \dots, \theta_{L-1}$, with
+**a.3 Direction scan** over a fixed grid of $L = L_\phi L_\varepsilon$ directions $\theta_0, \dots, \theta_{L-1}$
+($L_\phi$ azimuths by $L_\varepsilon$ elevations covering the sector), with
 $U = [u(\theta_0), \dots, u(\theta_{L-1})]$ a constant $n_{rx} \times L$ matrix:
 
 $$
@@ -94,7 +95,7 @@ In complex multiply-accumulates, for one channel and one block:
 |---|---|---|---|
 | a.1 energy | every searching block | $B\, n_{rx}$ (magnitudes only) | 2,048 |
 | a.2 Gram | gate fired | $B\, n_{rx}(n_{rx}+1)/2$ | 9,216 |
-| a.3 scan | gate fired | $L\, n_{rx}^2 + L\, n_{rx}$ | 4,608 |
+| a.3 scan | gate fired | $L\, n_{rx}^2 + L\, n_{rx}$ | 4,608 ($L = 16 \times 4$) |
 | a.4 test | gate fired | a compare and a subtraction | -- |
 | b.1 energy | every tracking block | $B\, n_{rx}$ (magnitudes only) | 2,048 |
 | b.2 direction power | b.1 dropped | $B\, n_{rx}$ | 2,048 |

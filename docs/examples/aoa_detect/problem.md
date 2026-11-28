@@ -39,13 +39,17 @@ $$
   beforehand.
 - $u(\theta)$ is the array's spatial signature, normalized to $\lVert u(\theta) \rVert = 1$, so
   $\gamma$ is the **array SNR** (the per-antenna SNR is $\gamma / n_{rx}$) and
-  $u(\theta)^H Q\, u(\theta) = 1 + \gamma$ in the emitter's direction. For a uniform linear array at
-  half-wavelength spacing,
+  $u(\theta)^H Q\, u(\theta) = 1 + \gamma$ in the emitter's direction.
+- **The array is a uniform rectangular array (URA)** of $n_{rx} = n_h \times n_v$ elements at
+  half-wavelength spacing, in a vertical plane facing the sector's boresight. A direction is a pair
+  $\theta = (\phi, \varepsilon)$, azimuth and elevation, and the element in column $m$ and row $n$ has
 
   $$
-  u_i(\theta) = \frac{1}{\sqrt{n_{rx}}}\, e^{\,j \pi i \sin\theta} .
+  u_{m,n}(\theta) = \frac{1}{\sqrt{n_{rx}}}\, e^{\,j \pi \left( m \cos\varepsilon \sin\phi \,+\, n \sin\varepsilon \right)} .
   $$
 
+  The elements are directional (a sector pattern), which enters through the SNR
+  ([The workload](workload.md)).
 - The emitter's signal is complex Gaussian and flat across the channel, so the samples of a block are
   independent given $Q$.
 
@@ -54,9 +58,9 @@ $$
 Each channel's emitter switches **on and off as a two-state Markov (Gilbert–Elliott) process**, stepped
 once per block:
 
-- **Off → on** with probability $p_{on}$. At each onset a new angle $\theta$ is drawn uniformly in
-  $[-\theta_{max}, \theta_{max}]$ and a new SNR $\gamma$ from a range in dB. Both stay **constant while
-  the emitter is on**.
+- **Off → on** with probability $p_{on}$. At each onset a new emitter is placed: its direction $\theta$
+  and SNR $\gamma$ come from its position and power ([The workload](workload.md)). Both stay
+  **constant while the emitter is on**.
 - **On → off** with probability $p_{off}$, so an emitter lasts $1 / p_{off}$ blocks on average.
 
 The channels are independent by default. A **burst** option turns several channels on at the same
@@ -141,9 +145,6 @@ search load, which adds queueing delay and, under overload, skipped blocks.
 
 ## Open
 
-- **Sizes** (proposed): $n_{rx} = 8$, $C = 16$, $B = 256$, $L = 64$, $f_s$ per channel to be chosen so
-  that the systolic unit is loaded but not saturated on average.
-- **The emitter process:** $p_{on}$, $p_{off}$, the SNR range, $\theta_{max}$, and how often bursts
-  occur.
+- **Sizes and formats:** proposed on [The parameters](param.md).
+- **The emitter process and the geometry:** proposed on [The workload](workload.md).
 - **How to combine the metrics** into one objective (a delay bound $D_{max}$, an AoA tolerance, weights), after the first simulations.
-- **Fixed point:** the sample, covariance and scan formats.
