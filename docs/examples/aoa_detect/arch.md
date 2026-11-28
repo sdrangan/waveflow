@@ -43,8 +43,10 @@ through the crossbar.
 
 **One gap remains:** the capture kernel writes the ring through port B, and a generated kernel cannot
 yet bind a BRAM window's port B as a declared endpoint (`MemSlaveBramWindow` is not yet joined to
-`BramIF`, `waveflow/hw/mm_bram.py`). That is the next extension after the full-rate read port
-(`plans/bram_fullrate_port.md`, *Out of scope, next*).
+`BramIF`, `waveflow/hw/mm_bram.py`). Only the RTL waits on it: in pysim the kernel writes
+port B through the window's methods, untimed as a BRAM port should be, and its own model charges the
+cycles. The extension is planned in `plans/bram_window_port_b.md`, after the full-rate read port
+(`plans/bram_fullrate_port.md`).
 
 Two rules shape the design:
 
