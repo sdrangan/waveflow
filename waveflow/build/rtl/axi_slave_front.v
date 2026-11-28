@@ -13,9 +13,18 @@
 //   req_valid/req_ready, req_we, req_addr[LAW-1:0] (local BYTE address of the beat), req_wdata
 //   rsp_valid/rsp_ready, rsp_rdata, rsp_err         (reads only; a write is done at req handshake)
 // A leaf must hold rsp_* until rsp_ready, and may accept the next read request in the same cycle its
-// response is taken (req_ready = !rsp_valid || rsp_ready).  The front keeps at most one read request
-// outstanding and issues the next one in the cycle the previous response is taken, so a leaf with a
-// one-cycle registered response sustains one beat per cycle.
+// response is taken (req_ready = !rsp_valid || rsp_ready).
+//
+// OUTSTANDING READS (RD_OUTST, plans/bram_fullrate_port.md).  Within one read transaction the front
+// issues a beat's request whenever fewer than RD_OUTST would remain outstanding after this cycle's
+// response is taken, and counts the responses back; responses come back in request order.  At the
+// default RD_OUTST = 1 that is one request outstanding, the next issued in the cycle the previous
+// response is taken, so a leaf with a one-cycle registered response sustains one beat per cycle.  A
+// leaf whose response comes L cycles after its request needs RD_OUTST = L for one beat per cycle
+// (mm_bram_port_pipe.v: L = 2); the generator sets it from the views (mm_adaptor_gen.rd_outst_of).  It
+// is still one AXI transaction in service at a time -- the transaction ends when its last response is
+// taken -- so the ordering guarantee above is unchanged.  Behind several leaves the decoder keeps the
+// leaf of each outstanding read, oldest first, so a response is taken only from the leaf it is owed by.
 //
 // ERRORS -> SLVERR, and the beat never reaches a leaf:
 //   * AWSIZE/ARSIZE narrower or wider than the bus (a stream cannot carry a partial word);
@@ -28,7 +37,8 @@ module axi_slave_front #(
     parameter integer DW  = 64,   // data width (bits); also the request bus width
     parameter integer AW  = 32,   // AXI address width
     parameter integer IDW = 1,    // AXI ID width
-    parameter integer LAW = 12    // local address bits passed to the leaves (window = 2**LAW bytes)
+    parameter integer LAW = 12,   // local address bits passed to the leaves (window = 2**LAW bytes)
+    parameter integer RD_OUTST = 1 // read requests outstanding at the leaves, at most (>= 1)
 ) (
     input  wire                 ap_clk,
     input  wire                 ap_rst_n,
@@ -80,6 +90,7 @@ module axi_slave_front #(
                             (NB == 64) ? 3'd6 : 3'd7;
     localparam [1:0] S_IDLE = 2'd0, S_WR = 2'd1, S_B = 2'd2, S_RD = 2'd3;
     localparam [1:0] OKAY = 2'b00, SLVERR = 2'b10;
+    localparam integer OW = $clog2(RD_OUTST + 1);   // bits of the outstanding count, 0..RD_OUTST
 
     reg [1:0]     state;
     reg           prefer_rd;        // alternation: who wins when AW and AR are both waiting
@@ -89,7 +100,7 @@ module axi_slave_front #(
     reg           bad_q;            // the whole transaction is refused (size / burst type)
     reg           err_q;            // some beat failed: the response will be SLVERR
     reg [8:0]     left_q;           // read beats still to request
-    reg           outst_q;          // a read request is outstanding at the leaf
+    reg [OW-1:0]  outst_q;          // read requests outstanding at the leaves, 0..RD_OUTST
     reg           rerr_q;           // refused read: beats are synthesized here, not requested
 
     wire pick_wr = s_axi_AWVALID && (!s_axi_ARVALID || !prefer_rd);
@@ -103,9 +114,11 @@ module axi_slave_front #(
     assign s_axi_WREADY = (state == S_WR) && (beat_ok ? req_ready : 1'b1);
     wire w_hs      = s_axi_WVALID && s_axi_WREADY;
 
-    // --- read: request the next beat when nothing is outstanding, or as the outstanding one is taken
+    // --- read: request the next beat while fewer than RD_OUTST are outstanding, counting a response
+    // taken this cycle as no longer outstanding (at RD_OUTST = 1: nothing outstanding, or as it is taken)
+    wire outst_any = (outst_q != 0);
     wire r_take    = (state == S_RD) && s_axi_RVALID && s_axi_RREADY;
-    wire rd_issue  = (state == S_RD) && !rerr_q && (left_q != 0) && (!outst_q || r_take);
+    wire rd_issue  = (state == S_RD) && !rerr_q && (left_q != 0) && ((outst_q < RD_OUTST) || r_take);
 
     assign req_valid = ((state == S_WR) && s_axi_WVALID && beat_ok) || rd_issue;
     assign req_we    = (state == S_WR);
@@ -115,12 +128,12 @@ module axi_slave_front #(
 
     // A refused read still owes the master its beats: present them here, SLVERR, never asking a leaf
     // (a queue-out leaf would pop on every one of them).
-    assign s_axi_RVALID = (state == S_RD) && (rerr_q ? (left_q != 0) : (outst_q && rsp_valid));
+    assign s_axi_RVALID = (state == S_RD) && (rerr_q ? (left_q != 0) : (outst_any && rsp_valid));
     assign s_axi_RDATA  = rerr_q ? {DW{1'b0}} : rsp_rdata;
     assign s_axi_RRESP  = (rerr_q || rsp_err) ? SLVERR : OKAY;
-    assign s_axi_RLAST  = rerr_q ? (left_q == 1) : (outst_q && left_q == 0);
+    assign s_axi_RLAST  = rerr_q ? (left_q == 1) : (outst_q == 1 && left_q == 0);
     assign s_axi_RID    = id_q;
-    assign rsp_ready    = (state == S_RD) && !rerr_q && outst_q && s_axi_RREADY;
+    assign rsp_ready    = (state == S_RD) && !rerr_q && outst_any && s_axi_RREADY;
 
     assign s_axi_BVALID = (state == S_B);
     assign s_axi_BRESP  = err_q ? SLVERR : OKAY;
@@ -131,7 +144,7 @@ module axi_slave_front #(
     always @(posedge ap_clk) begin
         if (!ap_rst_n) begin
             state <= S_IDLE; prefer_rd <= 1'b0; id_q <= 0; addr_q <= 0; fixed_q <= 1'b0;
-            bad_q <= 1'b0; err_q <= 1'b0; left_q <= 0; outst_q <= 1'b0; rerr_q <= 1'b0;
+            bad_q <= 1'b0; err_q <= 1'b0; left_q <= 0; outst_q <= 0; rerr_q <= 1'b0;
         end else begin
             case (state)
             S_IDLE: begin
@@ -150,7 +163,7 @@ module axi_slave_front #(
                     fixed_q <= (s_axi_ARBURST == 2'b00);
                     rerr_q  <= (s_axi_ARSIZE != SIZE) || (s_axi_ARBURST == 2'b10) || (s_axi_ARBURST == 2'b11);
                     left_q  <= {1'b0, s_axi_ARLEN} + 9'd1;
-                    outst_q <= 1'b0;
+                    outst_q <= 0;
                     prefer_rd <= 1'b0;
                 end
             end
@@ -175,13 +188,18 @@ module axi_slave_front #(
                         addr_q <= next_addr;
                         left_q <= left_q - 9'd1;
                     end
-                    // outstanding: set by an issue, cleared by a take that is not replaced
-                    if (req_hs) outst_q <= 1'b1;
-                    else if (r_take) outst_q <= 1'b0;
-                    if (r_take && left_q == 0 && !req_hs) state <= S_IDLE;
+                    // outstanding: one more for an issue, one fewer for a take
+                    if (req_hs && !r_take) outst_q <= outst_q + 1'b1;
+                    else if (r_take && !req_hs) outst_q <= outst_q - 1'b1;
+                    // done when the last response is taken (nothing left to issue, one outstanding)
+                    if (r_take && left_q == 0 && outst_q == 1) state <= S_IDLE;
                 end
             end
             endcase
         end
     end
+
+    // synthesis translate_off
+    initial if (RD_OUTST < 1) $error("axi_slave_front: RD_OUTST must be at least 1, got %0d", RD_OUTST);
+    // synthesis translate_on
 endmodule

@@ -54,6 +54,10 @@ class QueueView:
             raise ValueError("a queue window is at least 4 KB (law >= 12): one AXI burst may not "
                              "cross a 4 KB boundary, and the window must hold a maximal burst")
 
+    #: Read requests the front keeps outstanding for this view to stream a beat a cycle
+    #: (:func:`rd_outst_of`): its leaf answers the cycle after a request.
+    rd_outst = 1
+
     @property
     def module(self) -> str:
         return "mm_queue_in" if self.kind == "in" else "mm_queue_out"
@@ -88,6 +92,7 @@ class RegBankView:
             raise ValueError("a register bank needs at least one config and one status word")
 
     module = "mm_regbank"
+    rd_outst = 1
 
     @property
     def inst(self) -> str:
@@ -119,6 +124,7 @@ class CreditInView:
             raise ValueError("a credit window is at least 4 KB (law >= 12)")
 
     module = "mm_credit_in"
+    rd_outst = 1
 
     @property
     def inst(self) -> str:
@@ -150,6 +156,9 @@ class BramView:
 
     module = "mm_bram_port"
     mem_module = "bram_t2p"
+    #: One read in flight at the leaf itself (``LAT + 1`` cycles a word): more outstanding at the
+    #: front would not make it faster.
+    rd_outst = 1
     #: The memory's port B -- the kernel's -- tied off, when no kernel holds it (an on-chip memory
     #: reached only over the bus): its inputs low, its read data left open.  What the system top
     #: renders, stated here so the memory's identity can carry it (``RtlInstance.ties``).
@@ -224,8 +233,42 @@ def front_inst(n: str) -> str:
     return f"u_{n}_front"
 
 
-def front_params(dw: int, addr_width: int, id_width: int, law: int) -> dict[str, int]:
-    return {"DW": dw, "AW": addr_width, "IDW": id_width, "LAW": law}
+def rd_outst_of(views) -> int:
+    """The front's ``RD_OUTST`` for a slot holding *views*: the most read requests any of them needs
+    outstanding to stream a beat a cycle (each view's ``rd_outst``).  The one place it is decided:
+    the renderers and the instance inventory (``system_top``) all ask here."""
+    return max((int(getattr(v, "rd_outst", 1)) for v in views), default=1)
+
+
+def front_params(dw: int, addr_width: int, id_width: int, law: int,
+                 rd_outst: int = 1) -> dict[str, int]:
+    """The front's parameters.  ``RD_OUTST`` appears only when it is not the default 1, so every
+    adaptor without a pipelined leaf renders -- and keys -- exactly as before it existed."""
+    out = {"DW": dw, "AW": addr_width, "IDW": id_width, "LAW": law}
+    if int(rd_outst) != 1:
+        if int(rd_outst) < 1:
+            raise ValueError(f"RD_OUTST must be at least 1, got {rd_outst}")
+        out["RD_OUTST"] = int(rd_outst)
+    return out
+
+
+def order_fifo_inst(n: str) -> str:
+    """The instance name of the order FIFO in the decoder of adaptor *n* (``RD_OUTST > 1``)."""
+    return f"u_{n}_order"
+
+
+def order_fifo_params(views) -> dict[str, int] | None:
+    """The order FIFO's ``mm_sync_fifo`` parameters for an adaptor holding *views*, or ``None`` when it
+    needs none (``RD_OUTST = 1``: a select latched at the request is enough).  Each entry is the view
+    index and a hole bit; the depth holds every outstanding read (a power of two, as the FIFO needs)."""
+    rd = rd_outst_of(views)
+    if rd == 1:
+        return None
+    sb = adaptor_law(len(views)) - VIEW_LAW
+    depth = 2
+    while depth < rd:
+        depth *= 2
+    return {"W": max(sb, 1) + 1, "DEPTH": depth}
 
 
 def verilog_params(params: dict[str, int]) -> str:
@@ -263,9 +306,11 @@ def _req_wires(n: str, law: int, dw: int) -> list[str]:
     ]
 
 
-def _front_inst(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int) -> list[str]:
+def _front_inst(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int,
+                rd_outst: int = 1) -> list[str]:
     """``axi_slave_front`` behind the AXI4 nets ``<axi>_<SIG>``, driving the request bus ``<n>_req_*``."""
-    lines = [f"  axi_slave_front {verilog_params(front_params(dw, addr_width, id_width, law))} "
+    params = front_params(dw, addr_width, id_width, law, rd_outst)
+    lines = [f"  axi_slave_front {verilog_params(params)} "
              f"{front_inst(n)} (", "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),"]
     lines += [f"    .s_axi_{s}({axi}_{s})," for s in _FRONT_SIGS]
     lines += _req_conns(n)
@@ -332,7 +377,8 @@ def render_view_slot(view, axi: str, data_width: int, addr_width: int, id_width:
     exist).  The leaf's stream side lands on nets the enclosing module provides as ports or wires."""
     lines = [f"  // --- {_title(view)} ---"]
     lines += _req_wires(view.name, view.law, data_width)
-    lines += _front_inst(view.name, view.law, axi, data_width, addr_width, id_width)
+    lines += _front_inst(view.name, view.law, axi, data_width, addr_width, id_width,
+                         rd_outst_of([view]))
     lines += _leaf_inst(view, data_width)
     return "\n".join(lines) + "\n"
 
@@ -378,7 +424,12 @@ def render_adaptor_slot(name: str, views, axi: str, data_width: int, addr_width:
     * routes a request to the view its address selects (``req_addr[LAW-1:12]``), passing the low 12
       bits as the view-local address;
     * takes the read response from the view that accepted the read, selected by a register latched at
-      the request handshake -- correct because the front has at most one read outstanding;
+      the request handshake -- correct because the front has at most one read outstanding.  When a
+      view needs more (``RD_OUTST > 1``, :func:`rd_outst_of`), the select is an **order FIFO**
+      instead (``mm_sync_fifo``, :func:`order_fifo_params`): the view -- or the hole -- of every
+      outstanding read, oldest first, pushed at the request and popped as its response is taken, so
+      each response is taken from the view it is owed by, in request order, and every read of the
+      hole is answered;
     * accepts an address in the span's unused tail (when the view count is not a power of two) and
       answers a read there SLVERR with data 0, so a stray read cannot hang the bus.
 
@@ -399,15 +450,32 @@ def render_adaptor_slot(name: str, views, axi: str, data_width: int, addr_width:
     sb = law - VIEW_LAW
     sel, rsel, hole, hole_rsp = f"{n}_sel", f"{n}_rsel", f"{n}_hole", f"{n}_hole_rsp"
     zero_dw = "{" + str(dw) + "{1'b0}}"
+    rd = rd_outst_of(views)
+    order = order_fifo_params(views)
 
     lines = [f"  // --- adaptor '{n}': {len(views)} views behind one front (LAW {law}) ---"]
     lines += _req_wires(n, law, dw)
-    lines += _front_inst(n, law, axi, dw, addr_width, id_width)
+    lines += _front_inst(n, law, axi, dw, addr_width, id_width, rd)
     rng = f"[{sb - 1}:0] " if sb else ""
     lines.append(f"  wire {rng}{sel} = " + (f"{n}_req_addr[{law - 1}:{VIEW_LAW}];" if sb else "1'b0;"))
-    lines.append(f"  reg  {rng}{rsel};")
+    lines.append(f"  {'reg ' if order is None else 'wire'} {rng}{rsel};")
     lines.append(f"  wire {hole} = " + (f"({sel} >= {len(views)});" if (1 << sb) > len(views) else "1'b0;"))
-    lines.append(f"  reg  {hole_rsp};")
+    if order is None:
+        lines.append(f"  reg  {hole_rsp};")
+    else:
+        oh, oe = f"{n}_ohole", f"{n}_oempty"
+        lines += [
+            f"  // order FIFO (RD_OUTST {rd}): the view -- or the hole -- of each outstanding read, oldest",
+            "  // first, pushed at the request and popped as its response is taken",
+            f"  wire {oh}, {oe};",
+            f"  mm_sync_fifo {verilog_params(order)} {order_fifo_inst(n)} (",
+            "    .clk(ap_clk), .rst_n(ap_rst_n),",
+            f"    .push({n}_req_valid && {n}_req_ready && !{n}_req_we), .din({{{hole}, {sel}}}),",
+            f"    .pop({n}_rsp_valid && {n}_rsp_ready), .dout({{{oh}, {rsel}}}),",
+            f"    .full(), .empty({oe}), .count()",
+            "  );",
+            f"  wire {hole_rsp} = !{oe} && {oh};",
+        ]
     for k, v in enumerate(views):
         vn = v.name
         lines.append(f"  // view {k}: {_title(v)} at local 0x{k << VIEW_LAW:x}")
@@ -425,6 +493,10 @@ def render_adaptor_slot(name: str, views, axi: str, data_width: int, addr_width:
         f"  assign {n}_rsp_valid = {hole_rsp} ? 1'b1 : ({_mux(views, 'rsp_valid', rsel, _ZERO1)});",
         f"  assign {n}_rsp_rdata = {hole_rsp} ? {zero_dw} : ({_mux(views, 'rsp_rdata', rsel, zero_dw)});",
         f"  assign {n}_rsp_err   = {hole_rsp} ? 1'b1 : ({_mux(views, 'rsp_err', rsel, _ZERO1)});",
+    ]
+    if order is not None:
+        return "\n".join(lines) + "\n"
+    lines += [
         "  always @(posedge ap_clk) begin",
         f"    if (!ap_rst_n) begin {rsel} <= 0; {hole_rsp} <= 1'b0; end",
         "    else begin",

@@ -72,3 +72,57 @@ def test_bram_view_renders_memory_and_reads_latency_from_the_verilog():
     assert ".LAT(1)" in v and ".b_dout(kb_dout)" in v
     with pytest.raises(ValueError, match="4 KB"):
         BramView("w", kport="k", law=11)
+
+
+# --- the front's RD_OUTST and the decoder's order FIFO (plans/bram_fullrate_port.md, Stage 1) ---------
+
+def _needs(n: int):
+    """A view whose leaf needs *n* reads outstanding: a stand-in for the rendering alone."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class _Needs(QueueView):
+        rd_outst = n
+
+    return _Needs
+
+
+def test_rd_outst_is_the_most_any_view_needs_and_appears_only_above_one():
+    from waveflow.build.mm_adaptor_gen import front_params, rd_outst_of
+    two = _needs(2)("w", "out", axis="k")
+    assert rd_outst_of([]) == 1
+    assert rd_outst_of([QueueView("q", "in", axis="a")]) == 1
+    assert rd_outst_of([QueueView("q", "in", axis="a"), two]) == 2
+    assert front_params(64, 32, 1, 12) == {"DW": 64, "AW": 32, "IDW": 1, "LAW": 12}
+    assert front_params(64, 32, 1, 12, 1) == front_params(64, 32, 1, 12)
+    assert front_params(64, 32, 1, 12, 2)["RD_OUTST"] == 2
+    with pytest.raises(ValueError, match="at least 1"):
+        front_params(64, 32, 1, 12, 0)
+
+
+def test_a_single_view_slot_sets_the_front_and_needs_no_order_fifo():
+    from waveflow.build.mm_adaptor_gen import render_view_slot
+    v = render_view_slot(_needs(2)("w", "out", axis="k"), "mi0_axi", 64, 32, 1)
+    assert "axi_slave_front #(.DW(64), .AW(32), .IDW(1), .LAW(12), .RD_OUTST(2)) u_w_front" in v
+    assert "_order" not in v
+
+
+def test_the_order_fifo_replaces_the_latched_select_above_one_outstanding_read():
+    from waveflow.build.mm_adaptor_gen import order_fifo_params, render_adaptor_slot
+    views = [QueueView("qin", "in", axis="k_in"), QueueView("qout", "out", axis="k_out"),
+             _needs(2)("win", "out", axis="k_w")]                  # three views: a hole at 3
+    assert order_fifo_params(views[:2]) is None
+    assert order_fifo_params(views) == {"W": 3, "DEPTH": 2}          # 2 select bits + the hole bit
+    v = render_adaptor_slot("ad", views, "mi0_axi", 64, 32, 1)
+    assert "axi_slave_front #(.DW(64), .AW(32), .IDW(1), .LAW(14), .RD_OUTST(2)) u_ad_front" in v
+    assert "mm_sync_fifo #(.W(3), .DEPTH(2)) u_ad_order (" in v
+    assert ".push(ad_req_valid && ad_req_ready && !ad_req_we), .din({ad_hole, ad_sel})," in v
+    assert ".pop(ad_rsp_valid && ad_rsp_ready), .dout({ad_ohole, ad_rsel})," in v
+    assert "wire ad_hole_rsp = !ad_oempty && ad_ohole;" in v
+    assert "wire [1:0] ad_rsel;" in v and "always" not in v
+    assert "assign win_rsp_ready = ad_rsp_ready && !ad_hole_rsp && (ad_rsel == 2);" in v
+    # one view behind the front: the select is a constant bit, the FIFO one bit wider than it
+    one = render_adaptor_slot("a1", views[2:], "mi0_axi", 64, 32, 1)
+    assert "mm_sync_fifo #(.W(2), .DEPTH(2)) u_a1_order (" in one
+    # deeper: a power of two that holds every outstanding read
+    assert order_fifo_params([_needs(3)("t", "out", axis="k")]) == {"W": 2, "DEPTH": 4}

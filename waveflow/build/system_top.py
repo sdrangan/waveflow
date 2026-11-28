@@ -93,6 +93,9 @@ from waveflow.build.mm_adaptor_gen import (
     front_params,
     leaf_module_sources,
     mi_wire_signals,
+    order_fifo_inst,
+    order_fifo_params,
+    rd_outst_of,
     render_adaptor_slot,
     render_view_slot,
     verilog_params,
@@ -390,7 +393,12 @@ class SystemTopSpec:
                 continue
             law = adaptor_law(len(slot.views)) if slot.kind == "adaptor" else slot.views[0].law
             out.append(leaf(front_inst(slot.name), "axi_slave_front",
-                            front_params(dw, aw, idw, law), slot.owner, slot.group))
+                            front_params(dw, aw, idw, law, rd_outst_of(slot.views)), slot.owner,
+                            slot.group))
+            order = order_fifo_params(slot.views) if slot.kind == "adaptor" else None
+            if order is not None:
+                out.append(leaf(order_fifo_inst(slot.name), "mm_sync_fifo", order, slot.owner,
+                                slot.group))
             for v in slot.views:
                 if isinstance(v, BramView):
                     ties = v.IDLE_TIES if v.kport in self.idle_memory_ports else ()

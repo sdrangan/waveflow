@@ -199,3 +199,55 @@ The cycle numbers the gates pin, all xsim 2025.1, unchanged from their recorded 
 - queue (durations / ends): `w4 612` / `695`, the sink's `first 601, last 787`;
 - register bank: `c2 87`, the packets at `p1 104, p2 109`;
 - MemWStream into the queue: `first 25, p1 32, p2 103, p3 128`.
+
+### Stage 1 (2026-11-28): the front's `RD_OUTST`, the decoder's order FIFO
+
+**The front** (`axi_slave_front.v`): a parameter `RD_OUTST` (default 1). Within a read transaction it
+issues a beat's request whenever fewer than `RD_OUTST` would remain outstanding after this cycle's take,
+`(outst - take) < RD_OUTST`, i.e. `outst < RD_OUTST || take`, and counts the responses back; RLAST is the
+response taken with nothing left to issue and one outstanding, and the transaction ends there. At 1
+that is, term by term, the old `!outst_q || r_take` with `outst_q` one bit, so the old behaviour is the
+default by construction. Refused reads never reach a leaf (unchanged), so outstanding requests do not
+touch them. A leaf whose response comes `L` cycles after its request needs `RD_OUTST = L` for a beat a
+cycle.
+
+**The generator** (`mm_adaptor_gen.py`): each view declares `rd_outst` (1 for every existing view;
+`mm_bram_port` too, since it keeps one read in flight itself), and `rd_outst_of(views)` -- the most any
+view needs -- is the one place the front's `RD_OUTST` is decided, asked by both renderers and by the
+instance inventory (`SystemTopSpec.instances`). `front_params` emits `RD_OUTST` only when it is not 1.
+
+**The order FIFO lives in the decoder**, not the front:
+
+- the leaf index is the decoder's (its `sel`, and the hole); the front sees only local addresses and
+  would have to learn the window layout to tag a request;
+- a single-view slot has no decoder and needs no FIFO (one leaf answers in order), so in the front it
+  would cost flops in every slot;
+- the front's ports and the request-bus contract stay as they are, and no leaf changes;
+- at `RD_OUTST = 1` the decoder renders byte for byte as before: the latched select is the depth-1
+  case;
+- it is the hand-written `mm_sync_fifo` (`W` = the select bits + a hole bit, `DEPTH` = `RD_OUTST`
+  rounded up to a power of two), instanced by the decoder, so the generated logic is still a table and
+  instances. The inventory lists it (`u_<adaptor>_order`).
+
+Why a FIFO at all, when legal AXI keeps one transaction's beats in one view (a burst may not cross 4 KB,
+and each view is a 4 KB window)? Two cases: **the hole** -- with two reads of the span's unused tail
+outstanding and RREADY low, the old latched `hole_rsp` answers one and the front waits forever for the
+second; and a burst that crosses a window boundary anyway (illegal, but it must not hang or take a
+response from the wrong leaf). Both are in Stage 2's order gate.
+
+**Gates.** The byte-identical gate (`tests/build/test_adaptor_rtl_unchanged.py`): 69 renders --
+`render_view_slot` and `render_adaptor_slot` over every view type at 32, 64, 128 and 512 bits and over
+adaptors of 1 to 5 views (holes at 3 and 5), the tops of the four mm XSI gates, and the system tops and
+inventory parameters of mm_fir (both shapes), markov, and the memory harness with `mm_bram_port` and
+`mm_bram_port_p1` -- digested on the unchanged generator (committed first, `96ce7e6c`) and unchanged
+after. New fast tests of the `RD_OUTST > 1` rendering in `test_mm_adaptor_gen.py` (10 pass).
+
+| Run (xsim 2025.1) | Result |
+|---|---|
+| the 8 mm XSI gates of Stage 0 | 8 passed, every pinned cycle number unchanged (38.6 s; xvlog and xelab re-ran on the new front, only the unchanged testbench binaries were reused) |
+| `tests/examples/test_mm_fir_xsi.py` (csynth first: `mm_fir_build --through csynth`, Vitis HLS 2025.1) | 10 passed, 611 cycles (one front) and 618 (per view), as pinned |
+| `tests/build` + `tests/hw`, `-m "not vitis and not xsi and not gem5 and not sionna"` | 2,670 passed, 45 skipped, 1 failed |
+
+The one failure is `test_xsi_workspace_copies.py::test_there_are_workspaces_to_check`, which wants at
+least three example `xsi/` directories holding a BFM copy; those are build outputs, and this fresh
+worktree has two (`interleaver`, `mem_copy`). Not this change's.
