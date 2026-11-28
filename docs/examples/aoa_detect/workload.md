@@ -49,7 +49,7 @@ $$
 
 The **array SNR** of the model is $\gamma = n_{rx}\, \gamma_{el}$ (in linear terms).
 
-**Proposed values**, at a carrier of 3.5 GHz and $f_s = 10$ MHz per channel ($N = -97$ dBm with
+**Proposed values**, at a carrier of 3.5 GHz and $f_s = 30.72$ MHz per channel ($N = -92$ dBm with
 $F = 7$ dB):
 
 | | Value |
@@ -58,9 +58,10 @@ $F = 7$ dB):
 | $r_{min}$, $r_{max}$ | 100 m, 2 km |
 | $\phi_{max}$ | 60° |
 | $h_e$ | 1.5 m |
-| $P_t$ | uniform in 0 to 20 dBm |
+| $P_t$ | uniform in 5 to 25 dBm |
 
-With these, the per-element SNR is between about **−6 and 19 dB for 90% of emitters** (median 6 dB),
+With these (the 5 dB of extra power offsets the wider channel's 5 dB of extra noise), the per-element
+SNR is between about **−6 and 19 dB for 90% of emitters** (median 6 dB),
 with a few near the receiver up to about 40 dB; the elevation is between about 0.7° and 13° below the
 horizon. (From $2 \times 10^5$ draws of the model above.) The strong tail matters: it sets the input
 format's headroom ([below](#the-samples)).
@@ -82,14 +83,15 @@ trigger**: with probability $p_{burst}$ per block, $k_{burst}$ channels chosen a
 turn on together. It is the worst case for the shared hardware, as after an event many emitters
 appear at once.
 
-**Proposed values**, at $B = 256$ and $f_s = 10$ MHz (a block every 25.6 µs):
+**Proposed values**, at $B = 256$ and $f_s = 30.72$ MHz (a block every 8.33 µs), chosen for about 1.5
+activations a block over $C = 8$ channels ([the load](param.md#what-they-imply)):
 
 | | Value | Meaning |
 |---|---|---|
-| $p_{off}$ | $1/400$ | emitters last about 10 ms |
-| $p_{on}$ | $1/1600$ | a channel is busy about 20% of the time |
-| $p_{burst}$ | $1/4000$ | a burst about every 100 ms |
-| $k_{burst}$ | 8 | half the channels |
+| $p_{off}$ | $3/16$ | emitters last about 5 blocks, 44 µs |
+| $p_{on}$ | $3/16$ | a channel is busy half the time |
+| $p_{burst}$ | $1/50$ | a burst about every 50 blocks, 0.4 ms |
+| $k_{burst}$ | 4 | half the channels |
 
 ## The samples
 

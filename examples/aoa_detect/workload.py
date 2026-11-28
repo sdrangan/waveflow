@@ -18,10 +18,12 @@ them so that the noise has complex standard deviation ``noise_lsb`` LSBs, then t
 saturated to ``in_bits`` bits per real and imaginary part.  See :func:`input_gain_tradeoff` for what
 ``noise_lsb`` trades.
 
-**Timing of the process.**  At block ``n``: first the off-transitions (an emitter on at ``n - 1`` ends
-with probability ``p_off``; its last block is ``n - 1``), then the on-transitions (an idle channel starts
-with probability ``p_on``, and with probability ``p_burst`` up to ``k_burst`` idle channels start
-together), then block ``n``'s samples.  An emitter is on for blocks ``[start, end)``.
+**Timing of the process.**  At block ``n``, each channel moves from its state at ``n - 1``: an emitter on
+at ``n - 1`` ends with probability ``p_off`` (its last block is ``n - 1``); a channel idle at ``n - 1``
+starts one with probability ``p_on``, and with probability ``p_burst`` up to ``k_burst`` channels idle at
+``n - 1`` start together.  A channel whose emitter ends at ``n`` stays idle at ``n``, so a channel is busy
+``p_on / (p_on + p_off)`` of the time.  Then block ``n``'s samples.  An emitter is on for blocks
+``[start, end)``.
 """
 from __future__ import annotations
 
@@ -40,10 +42,10 @@ class WorkloadConfig:
 
     # the receiver and the stream
     n_h: int = 4
-    n_v: int = 2
-    C: int = 16
+    n_v: int = 4
+    C: int = 8
     B: int = 256
-    fs: float = 10e6
+    fs: float = 30.72e6
     fc: float = 3.5e9
     nf_db: float = 7.0
     in_bits: int = 16
@@ -56,14 +58,15 @@ class WorkloadConfig:
     r_max: float = 2000.0
     phi_max_deg: float = 60.0
     h_e: float = 1.5
-    pt_dbm: tuple[float, float] = (0.0, 20.0)
+    pt_dbm: tuple[float, float] = (5.0, 25.0)
     snr_db_range: tuple[float, float] = (-6.0, 30.0)   # statistical mode: per-element SNR
     eps_range_deg: tuple[float, float] = (-13.0, -0.5)  # statistical mode: elevation
     # the on/off process
-    p_on: float = 1 / 1600
-    p_off: float = 1 / 400
-    p_burst: float = 1 / 4000
-    k_burst: int = 8
+    # about 1.5 activations a block over C = 8 channels: emitters of about 5 blocks, half the time on
+    p_on: float = 3 / 16
+    p_off: float = 3 / 16
+    p_burst: float = 1 / 50
+    k_burst: int = 4
     seed: int = 0
 
     @property
@@ -161,15 +164,16 @@ class Workload:
                         raise ValueError(f"script: two emitters in channel {e.channel} at block {n}")
                     on[e.channel] = e
             return on
+        was_off = [e is None for e in self._active]   # each transition from block n - 1's state
         for j, e in enumerate(self._active):          # off-transitions
             if e is not None and self.rng.random() < cfg.p_off:
                 e.end = n
                 self._active[j] = None
         for j in range(cfg.C):                        # on-transitions
-            if self._active[j] is None and self.rng.random() < cfg.p_on:
+            if was_off[j] and self.rng.random() < cfg.p_on:
                 self._active[j] = self._new(j, n)
         if self.rng.random() < cfg.p_burst:           # the burst trigger
-            idle = [j for j in range(cfg.C) if self._active[j] is None]
+            idle = [j for j in range(cfg.C) if was_off[j] and self._active[j] is None]
             for j in self.rng.permutation(idle)[: cfg.k_burst]:
                 self._active[int(j)] = self._new(int(j), n)
         return list(self._active)

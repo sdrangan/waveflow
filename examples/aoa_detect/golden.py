@@ -120,12 +120,12 @@ class GoldenConfig:
     """The detector's programmable parameters (``param.md``: *Algorithm*, *Number formats*)."""
 
     n_h: int = 4
-    n_v: int = 2
-    C: int = 16
+    n_v: int = 4
+    C: int = 8
     B: int = 256
     # the direction grid: L_phi azimuths x L_eps elevations, at the centres of equal cells
-    L_phi: int = 16
-    L_eps: int = 4
+    L_phi: int = 32
+    L_eps: int = 8
     phi_max_deg: float = 60.0
     eps_range_deg: tuple[float, float] = (-15.0, 0.0)
     # the input and its calibrated noise level

@@ -157,7 +157,7 @@ port B, and the reader's header read is issued after its data reads have finishe
 **The ring's depth sets how late a read may be.** A slot is overwritten $R$ block periods after it was
 written, so a job must finish reading within about $R - 1$ block periods of its block's end. $R$ is a
 design parameter: a deeper ring costs BRAM and tolerates more queueing. At the proposed sizes a slot
-is about 32k samples, 128 KB at 32 bits a sample, so $R = 8$ is about 1 MB, which fits in the
+is $C\, B\, n_{rx} = 32{,}768$ samples, 128 KB at 32 bits a sample, so $R = 8$ is about 1 MB, which fits in the
 xczu48dr's URAM.
 
 **Lateness is a measured outcome, not an error.** It is how overload shows up in the ring, alongside
@@ -260,7 +260,7 @@ One arrival job is the whole search for one block, [a.2 and a.3](algo.md):
 5. return $\ell^*$, $p_{\ell^*}$ and whether the read was late.
 
 $U$, the $n_{rx} \times L$ steering vectors, is a constant table inside each unit. **$\hat{Q}$ never leaves
-the unit**: it is $n_{rx} \times n_{rx}$ (64 values at $n_{rx} = 8$), produced by step 2 and used by step 3
+the unit**: it is $n_{rx} \times n_{rx}$ (256 values at $n_{rx} = 16$), produced by step 2 and used by step 3
 of the same job, so it sits in the unit's own registers or a small BRAM. No shared memory holds it.
 
 ### Vector units: departure jobs
