@@ -201,6 +201,11 @@ The access is untimed in pysim on purpose: a BRAM answer is deterministic, unarb
 one cycle, so a discrete-event model of it would add a timestep and no fidelity. Contrast
 [AXI-MM](../axi_mm/modeling.md), where the bus, the arbitration and the burst *are* the point of having a model.
 
+When port A faces a bus instead of a kernel -- a [BRAM window](../axi_mm/slave_views.md#bram-window) the
+host or other kernels read by address -- it is driven by a slave-adaptor leaf, and that leaf sets how fast
+the bus reads it: `mm_bram_port.v` a word every two cycles, `mm_bram_port_pipe.v` a word a cycle with a
+registered response ([which leaf](../axi_mm/slave_views.md#which-leaf)).
+
 **The correctness argument is yours.** `bram_t2p.v` `$error`s when port B reads the address port A is
 writing that cycle — for a circular buffer, *rd trails wr*. Nothing else would check it: if it fails,
 the data is whatever the BRAM's read-during-write mode happens to be, and no tool says a word.

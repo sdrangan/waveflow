@@ -483,3 +483,23 @@ The window's own identity holds no records: its records are its memory's, by des
 and markov's memory-alone gate (a 64-bit `MmScript`, its cycles exact): 27 passed. Fast:
 `tests/build`, `hw`, `simulation`, `calib`, `docs`: 3,174 passed, 47 skipped, 1 failed (the
 environmental `test_there_are_workspaces_to_check`).
+
+### Stage 5 (2026-11-28): the docs
+
+| Page | What changed |
+|---|---|
+| `docs/guide/interface/axi_mm/slave_views.md` | the window's `bram_leaf` and `calib_dir`; *Which leaf* (the three leaves, their cycles a word, the closure table alone and behind the crossbar, when to choose which); *The bus side's timing* (the record of `window_memory`, the measured costs and turnaround) |
+| `docs/guide/interface/axi_mm/slave_howitworks.md` | the front's `RD_OUTST` and who decides it (`rd_outst_of`), the byte-identical gate; the decoder's order FIFO, its depth and why it lives in the decoder; the three BRAM leaves; the gates table |
+| `docs/guide/interface/axi_mm/modeling.md` | *A BRAM window's bus side*: timed from its memory's record, one loading path |
+| `docs/guide/interface/axi_mm/crossbar.md` | *At 250 MHz on `xczu48dr`*: 2 / 2 / 1, how measured, how they compare with mm_fir's; no record type, one proposed |
+| `docs/guide/memory/memorymod.md` | *An on-chip memory: its leaf and its calibrated timing*: `MemoryMod`, `PipelinedMemoryMod`, `FullRateMemoryMod`, the platform's records |
+| `docs/guide/interface/primitive/bram.md` | where port A faces a bus: the leaf sets the read rate |
+| `docs/guide/build/bfm.md` | the wide-word convention's models: `AxiMmMaster` and `MmScript` carry `k` chunks a beat |
+| `docs/examples/aoa_detect/timing.md` | the ring's read port calibrated (1,233 cycles a block, 88% busy at 1.5 jobs a block; the half-rate leaf 2,193, 157%); the search (~3,110 on 8 x 8, ~1,830 on 16 x 16), the check (~1,250) and the decision time (~3,150) recomputed; the open item closed |
+| `plans/mm_slave_adaptor.md` | a line in its record pointing here |
+| `docs/evaluation/timing_fidelity/index.md` | ledger row 22: the missing turnaround (pysim 5.2-5.4% fast, then within 0.41%) |
+
+`pytest tests/docs`: every test passes. In the same session `tests/mcp` had 6 failures, all of this
+machine's setup, none in code this plan touched: the `init` tests pick the system `python3.12`
+(no `mcp` package), and the usage-index tests need untracked `gen/` outputs of examples that a fresh
+worktree does not have.

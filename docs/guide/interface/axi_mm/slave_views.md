@@ -4,8 +4,8 @@ parent: AXI-MM
 grand_parent: Interfaces
 nav_order: 4
 audience: python
-api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveCreditIn, QueueView, RegBankView, BramView, CreditInView]
-summary: "The views of the memory-mapped slave adaptor — queue in, queue out, register bank, BRAM window, and credit in (the producer end of a credit stream routed over the bus). For each: what it is for, its constructor, what the kernel does with it, and what a bus master does with it. Also: register bank versus register map."
+api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveCreditIn, QueueView, RegBankView, BramView, BramViewP1, BramViewPipe, CreditInView, window_memory]
+summary: "The views of the memory-mapped slave adaptor — queue in, queue out, register bank, BRAM window, and credit in (the producer end of a credit stream routed over the bus). For each: what it is for, its constructor, what the kernel does with it, and what a bus master does with it. Also: register bank versus register map, and the BRAM window's three RTL leaves (two cycles a read word, or one with the response unregistered or registered) and the bus side's calibrated timing."
 ---
 # Slave adaptor views
 
@@ -222,6 +222,8 @@ bram = MemSlaveBramWindow(name="bram", sim=sim, nelem=256, clk=clk)
 | parameter | default | meaning |
 |---|---|---|
 | `nelem` | `512` | the memory's size in bus words; a power of two, and `nelem × bytes-per-word` must fit in the window |
+| `bram_leaf` | `"mm_bram_port"` | port A's RTL leaf: `"mm_bram_port"` or `"mm_bram_port_pipe"` ([which](#which-leaf)) |
+| `calib_dir` | `None` | where the bus side's timing record is looked up ([timing](#the-bus-sides-timing)); `None`: the bus side costs nothing |
 
 **The kernel side** is the memory's port B. In pysim it is two plain method calls, which take no
 simulated time (the kernel's own model accounts for the BRAM's one-word-per-cycle access):
@@ -248,7 +250,51 @@ a queue in, or a commit to a register bank. For that order to hold, the BRAM win
 view must be **in the same adaptor**; see [Ordering](./slave.md#ordering).
 
 **RTL:** `BramView(name, kport, baw=9, law=12)`, where `baw` is log2 of the memory's size in words and
-`kport` names the kernel's port B nets; modules `mm_bram_port.v` and `bram_t2p.v`.
+`kport` names the kernel's port B nets; modules `mm_bram_port.v` and `bram_t2p.v`.  `BramViewP1` and
+`BramViewPipe` are the same with the other two leaves.
+
+### Which leaf
+
+Port A is one of three hand-written leaves on the same front and the same `bram_t2p`. They differ in
+how a read word gets out:
+
+| leaf | read words a cycle | the response | the front's reads outstanding | chosen by |
+|---|---|---|---|---|
+| `mm_bram_port.v` | ½: one read in flight, `LAT + 1 = 2` cycles each | a register (synthesis moves it into the BRAM's own output register) | 1 | the default; `MemoryMod`; `BramView` |
+| `mm_bram_port_p1.v` | 1 | the BRAM's output, unregistered, straight to the read channel | 1 | `PipelinedMemoryMod`; `BramViewP1` |
+| `mm_bram_port_pipe.v` | 1 | a register: no timing path from the memory to the read data | 2 (`RD_OUTST`) | `bram_leaf="mm_bram_port_pipe"`; `FullRateMemoryMod`; `BramViewPipe` |
+
+An N-beat read, the slot straight on an AXI port, takes `2N + 2` cycles with `mm_bram_port` and `N + 3`
+with the pipelined leaf, from the address presented to the last beat (xsim 2025.1,
+`tests/build/test_mm_bram_pipe_xsi.py`). All three close timing at 4 ns on `xczu48dr` (Vivado 2025.1,
+16 KB window, placed and routed with a register on every port; `tests/build/test_mm_bram_timing_vitis.py`):
+
+| leaf | bits | alone: WNS (ns) | LUT | FF | behind a 4-master `axi_crossbar`: WNS (ns) |
+|---|---|---|---|---|---|
+| `mm_bram_port` | 128 / 512 | +1.878 / +1.219 | 141 / 343 | 38 / 41 | -- |
+| `mm_bram_port_p1` | 128 / 512 | +2.013 / +0.994 | 130 / 334 | 29 / 31 | +1.035 / +0.319 |
+| `mm_bram_port_pipe` | 128 / 512 | +1.818 / +1.052 | 402 / 1,379 | 423 / 1,596 | +1.077 / +0.520 |
+
+**When to choose which.** A window read in bursts by streaming readers -- a ring several units read
+block by block -- wants a word a cycle: `mm_bram_port` halves its port's bandwidth. Of the two full-rate
+leaves, `mm_bram_port_pipe` is the one that keeps the memory's output off the read data's path
+altogether, so it holds wherever the read data goes next; `mm_bram_port_p1` closes as measured above,
+where the next stop (a flop of the crossbar's read channel, here) registers it, and costs about three
+words of flip-flops less. A window written and read a word at a time (a table, a mailbox) gains nothing
+from either: keep `mm_bram_port`.
+
+### The bus side's timing
+
+In pysim the bus side costs what its RTL does once the window has a record: with `calib_dir` set (a
+platform such as `xczu48dr_250mhz_vitis2025_1`), the window loads the timing record of
+`window_memory(bram_leaf, mem_dwidth)` -- the `MemoryMod` (`mm_bram_port`) or `FullRateMemoryMod`
+(`mm_bram_port_pipe`) of the same width, whose RTL slot is the window's port A. A read or write then
+costs `init + per_word × n` cycles of the window's clock beyond the bus's own cycle a word, the window
+serves one transaction at a time, and it stays busy the record's turnaround after each (1 cycle, both leaves, fitted from HLS readers that request ahead). Measured
+(xsim 2025.1, 128 and 512 bits alike): a read `1 + 1·n` with `mm_bram_port`, `2 + 0·n` with
+`mm_bram_port_pipe`; a write `1 + 0·n` with either. See [Modeling](./modeling.md#a-bram-windows-bus-side)
+for how the record is made. Without a record the bus side costs nothing, and the crossbar's settings
+are all a read takes.
 
 ## Credit in
 

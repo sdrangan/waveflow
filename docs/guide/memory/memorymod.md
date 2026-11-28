@@ -65,6 +65,31 @@ bus_request + memory_access + bus_return
 to this memory mutually exclude — a single-port memory, or a DDR model that shares R/W bandwidth. The
 default is full duplex, with independent AR/R and AW/W channels, which is what real AXI gives you.
 
+## An on-chip memory: its leaf and its calibrated timing
+
+Inside a system's cut, an on-chip memory on the bus is, at RTL, the slave adaptor's front
+(`axi_slave_front.v`), a BRAM leaf and a `bram_t2p`. Which leaf is the memory's class:
+
+| class | RTL leaf | read words a cycle |
+|---|---|---|
+| `MemoryMod` | `mm_bram_port.v` | ½: one read in flight, two cycles each |
+| `PipelinedMemoryMod` | `mm_bram_port_p1.v` | 1, the BRAM's output unregistered to the read channel |
+| `FullRateMemoryMod` | `mm_bram_port_pipe.v` | 1, a registered response (the front keeps two reads outstanding) |
+
+All three close timing at 4 ns on `xczu48dr`; the
+[slave views page](../interface/axi_mm/slave_views.md#which-leaf) has the measurements and when to choose
+which. pysim learns the difference from a record, not from the class: with `calib_dir` set, the memory
+loads the timing record filed under its identity (`waveflow.calib.mem_timing.load_mem_timing`), measured
+in its own harness (`waveflow.hw.harness.memory_harness`), and the record's per-direction
+`init + per_word * n` replaces `latency_init` / `latency_per_word`, its `serialize` makes the slave serve
+one transaction at a time, and its turnaround spaces back-to-back transactions. The
+`xczu48dr_250mhz_vitis2025_1` platform holds the records of `MemoryMod` and `FullRateMemoryMod` at 128 and
+512 bits, 1,024 words at 250 MHz (`waveflow.hw.mm_bram.window_memory`; the fixture is
+`python -m waveflow.calib.fixtures.bram_window`): a read costs `1 + 1·n` cycles beyond the bus's cycle a
+word with `mm_bram_port`, `2 + 0·n` with `mm_bram_port_pipe`, and a write `1 + 0·n` with either (xsim
+2025.1). A [BRAM window](../interface/axi_mm/slave_views.md#the-bus-sides-timing) of the same leaf and
+width loads the same record.
+
 ## In a generated testbench
 
 A `MemoryMod` maps to a `FlatMemory` in the generated XSI testbench: the arena the AXI-MM slave

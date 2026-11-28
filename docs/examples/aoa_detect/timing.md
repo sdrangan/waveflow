@@ -2,7 +2,7 @@
 title: The timing
 parent: Emitter detection and AoA
 nav_order: 6
-summary: "The cycle model of every block for the timed simulation, and where each number comes from: calibrated on the xczu48dr platform (only the dispatcher and the arbiter), measured on another design or part (the crossbar, a BRAM read over it), or analytic from loop counts (the new kernels), to be refitted to RTL. The finding that shapes the design: the BRAM window's bus port reads at half rate (two cycles a word), so one channel's block takes about 2,100 cycles to read, a whole block period, and at 1.5 jobs a block a single read port is about 150% busy. Then the decision time with no contention, and the order in which the timed models are built."
+summary: "The cycle model of every block for the timed simulation, and where each number comes from: calibrated on the xczu48dr platform (the dispatcher and the arbiter, the ring's read port and the crossbar), or analytic from loop counts (the new kernels), to be refitted to RTL. The ring's read port was the finding that shaped the design -- the BRAM window's bus port read at half rate, a block's read taking a whole block period -- and is resolved by a full-rate leaf, measured: a channel's block in 1,233 cycles, the port 88% busy at 1.5 jobs a block. Then the decision time with no contention, and the order in which the timed models are built."
 ---
 
 # The timing
@@ -31,37 +31,36 @@ cycle ([why it matters](arch.md#two-checks-for-the-timing-model)).
 
 ### The ring's read port, over the crossbar
 
-**Measured elsewhere.** This is the block that decides the design.
+**Calibrated** on `xczu48dr_250mhz_vitis2025_1` (xsim 2025.1, `plans/bram_fullrate_port.md`). This
+was the block that decided the design.
 
-- **The BRAM window's bus port reads at half rate.** Its RTL (`waveflow/build/rtl/mm_bram_port.v`)
-  costs $LAT + 1 = 2$ cycles a read word at the leaf, one transaction in flight. In pysim its port A
-  costs nothing (`mm_bram.py`), so the rate has to come from the crossbar model's settings.
-- **The crossbar**: request latency 4 cycles and travel 2 (measured on `examples/mm_fir`, within 4.4%,
-  at 100 MHz; `examples/xbar_profile` found the same at 250 MHz on an xczu7ev: a 16-beat read 20
-  cycles). Several masters reading one slave are served whole burst by whole burst, first come first
-  served.
-- **Modelled as** in `examples/ltbf_cg_mem_dse`, whose shared memory read at the BRAM rate came within
-  1.5% of RTL: a serialized slave, 16-beat bursts, a burst at $2n + 2 = 34$ cycles, a 1-cycle turnaround.
+- **The half-rate problem, and its fix.** The BRAM window's original bus leaf
+  (`waveflow/build/rtl/mm_bram_port.v`) keeps one read in flight and costs two cycles a read word.
+  The ring now uses the full-rate leaf, `mm_bram_port_pipe.v` (`MemSlaveBramWindow(...,
+  bram_leaf="mm_bram_port_pipe")`): a word a cycle with a registered response, the slave adaptor's
+  front keeping two reads outstanding. It closes timing at 4 ns on this part behind a 4-master
+  crossbar at 128 and 512 bits ([which leaf](../../guide/interface/axi_mm/slave_views.md#which-leaf)).
+- **pysim times it from records.** With the platform as its `calib_dir`, the window loads its leaf's
+  measured timing -- a read costs 2 cycles plus a cycle a word, a write 1 plus a cycle a word, one at a
+  time, and 1 cycle of turnaround after each -- and the crossbar runs at its measured settings at
+  250 MHz (a request 2 cycles to the window, all before it contends; a read beat 1 cycle back;
+  [the crossbar page](../../guide/interface/axi_mm/crossbar.md#at-250-mhz-on-xczu48dr)).
+- **Measured with the units' readers**: `MemRStream`s at 128 bits, 16-beat bursts, csynth'd for this
+  part, each reading a 1,024-word block of the window over the crossbar
+  (`tests/build/test_bram_window_contention_xsi.py`). A 16-beat burst repeats every 19 cycles at the
+  port: 16 beats, 2 of latency and the 1-cycle turnaround, since the front serves one burst at a time.
 
-**One channel's block** is $B\, n_{rx} = 4096$ samples, 1,024 words of 128 bits, 64 bursts: about
-$64 \times 34 \approx 2{,}180$ cycles. **One read takes a whole block period**, twice the 1,024 cycles
-assumed on [The parameters](param.md#what-they-imply).
+| | one channel's block, one reader | port busy at 1.5 jobs a block |
+|---|---|---|
+| the half-rate leaf, `mm_bram_port` | 2,193 cycles | about 157% |
+| the full-rate leaf, `mm_bram_port_pipe` | **1,233 cycles** (pysim 1,228) | **about 88%** |
 
-**At 1.5 jobs a block, one read port is about 150% busy**, whatever the number of units. Every job
-reads its block, so the units would wait on the port, and the ring would fill with late reads. The
-read path has to change, which is a real design axis rather than a detail:
-
-| Option | Read of one block | Port busy at 1.5 jobs a block | What it costs |
-|---|---|---|---|
-| as is: half-rate port, 128 bits | ~2,180 cycles | ~150% | -- |
-| a 256-bit port A | ~1,090 | ~80% | a wider crossbar path |
-| a full-rate port (one word a cycle, pipelined reads) | ~1,100 | ~80% | **an extension of `mm_bram_port.v`** |
-| both | ~550 | ~40% | both |
-| the ring in two banks, one read port each | ~2,180 per bank | ~75% each | a second memory and a routing rule |
-
-A full-rate bus port for the BRAM window is something Waveflow does not have: it would be an
-extension, with a pipelined read in `mm_bram_port.v`, the window's pysim timing, and an RTL gate, built
-like the existing window.
+(From the reader's command to the block's last word; the port's own share is 64 bursts of 19 cycles,
+1,216 a block.) **One read takes 0.6 of a block period**, and the port keeps up with 1.5 jobs a block
+with some room, where the half-rate leaf could not. With several readers at once the port is shared
+burst by burst: two readers starting together finish their blocks at 2,430 and 2,449 cycles, four at
+4,824 to 4,881, every one within 0.21% of pysim. The other options considered (a 256-bit port A, the
+ring in two banks) are not needed for the read rate; a wider port would still halve the read.
 
 ### The units' readers
 
@@ -76,21 +75,20 @@ until it is measured.
 
 | Step | 8 × 8 array | 16 × 16 array |
 |---|---|---|
-| Read (above, half-rate port) | ~2,180 | ~2,180 |
+| Read (above, full-rate port, measured) | ~1,230 | ~1,230 |
 | $\hat{Q}$: the upper tiles of the 16 × 16 Gram, 256 cycles each plus fill | 3 tiles: ~820 | 1 tile: ~290 |
 | Scan $W = \hat{Q} U$: 16 × 256 outputs, 16 cycles a tile | 64 tiles: ~1,040 | 16 tiles: ~290 |
 | $p_\ell$ and the largest, pipelined behind the scan | ~20 | ~20 |
-| **A search** | **~4,060 (1.9 blocks)** | **~2,780 (1.3 blocks)** |
+| **A search** | **~3,110 (1.5 blocks)** | **~1,830 (0.9 block)** |
 
-At 0.75 searches a block, one 8 × 8 unit would be 146% busy and one 16 × 16 unit 100%: **two units
-are needed either way**, unless the read gets faster. With a full-rate or wider port, a search is about
-2,960 cycles on 8 × 8 and 1,680 on 16 × 16.
+At 0.75 searches a block, one 8 × 8 unit would be 112% busy and one 16 × 16 unit 66%: **two 8 × 8
+units or one 16 × 16**. (At the half-rate port, ~2,180 cycles a read, they were 146% and 100%.)
 
 ### Vector unit: one departure check
 
 **Analytic.** Read-bound: each sample's 16 antennas arrive in 4 words, and $u^H x$ with its square takes
 the 16 lanes one cycle a sample, so the computation hides behind the read. A check is about the read
-plus 20 cycles: **~2,200 cycles** at the half-rate port, ~1,120 at full rate.
+plus 20 cycles: **~1,250 cycles** at the full-rate port (~2,210 at the half-rate one).
 
 ### Controller
 
@@ -118,12 +116,12 @@ A search, from the block's arrival to the result message, at the proposed values
 |---|---|
 | The block's end: comparisons and the notification | ~20 |
 | Controller and dispatcher | ~10 |
-| The unit: read and compute (8 × 8, half-rate port) | ~4,060 |
+| The unit: read and compute (8 × 8, full-rate port) | ~3,110 |
 | The arbiter and the controller's test | ~10 |
-| **Total** | **~4,100 cycles, 16 µs, about 2 blocks** |
+| **Total** | **~3,150 cycles, 12.6 µs, about 1.5 blocks** |
 
-About 2,960 cycles (1.4 blocks) with a full-rate port, and 1,700 (0.8 block) with that port and a
-16 × 16 array. An emitter lasts about 5 blocks, so with contention the decision time is a large part
+About 1,870 cycles (0.9 block) with a 16 × 16 array; at the half-rate port it was about 4,100 (2
+blocks). An emitter lasts about 5 blocks, so with contention the decision time is a large part
 of its life: the timing changes what is detected.
 
 ## What the timed simulation needs, in order
@@ -142,8 +140,8 @@ of its life: the timing changes what is detected.
 
 ## Open, before building
 
-- **The read path: a full-rate port**, decided 2026-11-28. A Waveflow extension, planned in
-  `plans/bram_fullrate_port.md` for the lab machine: a pipelined, timing-closed leaf, the front's
-  outstanding reads, the window's calibrated timing in pysim, and its records on the platform.
+- ~~**The read path: a full-rate port.**~~ Built and measured (`plans/bram_fullrate_port.md`): the
+  full-rate leaf, the front's outstanding reads, the window's calibrated timing in pysim, its records
+  and the crossbar's settings on the platform (above).
 - **The dispatcher's and arbiter's points at 128 bits**, to calibrate on the lab machine.
 - The crossbar's settings measured at 250 MHz on this part, once a design is on it.

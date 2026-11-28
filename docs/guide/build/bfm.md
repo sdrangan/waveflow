@@ -215,6 +215,11 @@ the low 64 bits, in every layer -- the same convention the pysim uses for a wide
   generator passes `chunks` from the endpoint's width (`StreamDriver` / `StreamSink.bfm_model()`), and
   only when it is not 1, so every narrower harness is emitted exactly as before. An `AxisMaster` refuses
   a bundle whose `word_bytes` disagrees with its port.
+- **A memory-mapped master.** `AxiMmMaster` takes its `k` from its bytes per word: a write's words and a
+  read's data are `k` chunks a beat, word after word (1 up to 64 bits, as always). `MmScript`, the
+  scripted master over it, carries a wide write's data the same way in its script (an op's words, chunk
+  by chunk) and records its reads as `(n, k)` bursts, as its pysim twin does
+  (`waveflow.simulation.mm_tb`).
 - **Pins.** `Dut::putChunks` / `getChunks` move a port of any width up to 2048 bits; the buffers are
   sized for that, because XSI reads or writes as many 32-bit words as the *port* has.
 

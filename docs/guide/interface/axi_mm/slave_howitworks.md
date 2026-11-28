@@ -18,8 +18,9 @@ All of it is in [`waveflow/build/rtl/`](../../../../waveflow/build/rtl/):
 
 - **`axi_slave_front.v`** is the only module that speaks AXI. It turns each beat into one request on
   a simple **request bus** and is the source of the ordering guarantee.
-- **One module per view** (`mm_queue_in.v`, `mm_queue_out.v`, `mm_regbank.v`, `mm_bram_port.v`)
-  implements that view's semantics on the request bus. Widths, depths and sizes ride on Verilog
+- **One module per view** (`mm_queue_in.v`, `mm_queue_out.v`, `mm_regbank.v`, `mm_credit_in.v`, and
+  for a BRAM window one of `mm_bram_port.v`, `mm_bram_port_p1.v`, `mm_bram_port_pipe.v`) implements
+  that view's semantics on the request bus. Widths, depths and sizes ride on Verilog
   parameters; the files are never rewritten.
 - **The wiring** — instances, nets, and the decoder when several views share a front — is generated
   by [`mm_adaptor_gen.py`](../../../../waveflow/build/mm_adaptor_gen.py). The decoder is the only
@@ -36,8 +37,20 @@ Each module has a pysim twin with the same semantics: `MemSlaveWStream`, `MemSla
   cannot carry a partial word — a WRAP burst, and any W beat whose `WSTRB` is not all ones (consumed
   and dropped, so the burst still completes).
 - INCR bursts advance one word per beat; FIXED bursts repeat one address.
-- Keeps at most one read outstanding at a view and issues the next in the cycle the previous response
-  is taken, so a view with a one-cycle registered response sustains **one beat per cycle**.
+- Keeps up to `RD_OUTST` reads outstanding at the views (a parameter, default 1): it issues a beat's
+  request whenever fewer than `RD_OUTST` would remain outstanding after this cycle's response is
+  taken, and counts the responses back, in order. At 1 that is the next request in the cycle the
+  previous response is taken, so a view with a one-cycle registered response sustains **one beat per
+  cycle**; a view whose response comes `L` cycles after its request needs `RD_OUTST = L`. It is still
+  one AXI transaction in service at a time -- the transaction ends when its last response is taken --
+  so the ordering guarantee is unchanged.
+
+**`RD_OUTST` is the views' to decide.** Each RTL view declares the reads it needs outstanding
+(`rd_outst`: 1 for every view but the pipelined BRAM window's, which needs 2), and
+`mm_adaptor_gen.rd_outst_of(views)` -- the most any view of the slot needs -- is the one place the
+front's parameter is set, asked by both renderers and by the instance inventory. At 1 the parameter is
+not emitted, so every adaptor without a pipelined window renders byte for byte as before
+(`tests/build/test_adaptor_rtl_unchanged.py`: 69 digests taken before the parameter existed).
 
 Measured through the crossbar: both directions sustain one beat per cycle after a fixed 4–5 cycles,
 and a refused burst completes at full speed with SLVERR.
@@ -49,6 +62,19 @@ With several views behind one front (`render_adaptor_slot`), view *k* answers lo
 response from the view that accepted the read (one read outstanding, so a latched select is enough),
 and answers an address in the span's unused tail with SLVERR so a stray read cannot hang the bus. The
 span is the view count rounded up to a power of two, because the select field is whole bits.
+
+**The order FIFO.** At `RD_OUTST > 1` a latched select is not enough, and the decoder keeps instead a
+FIFO of the view -- or the unused tail -- each outstanding read went to, oldest first: pushed at the
+request, popped as its response is taken, its head choosing whose response the front takes. It is the
+hand-written `mm_sync_fifo.v` (one bit wider than the select, for the tail), so the generated logic is
+still a table and instances. Its depth is `RD_OUTST + 1` rounded up to a power of two: the front issues
+in the same cycle it takes a response, and the FIFO refuses a push while full even when it pops in that
+cycle, so a FIFO of `RD_OUTST` entries dropped that push and stopped answering the tail (found by the
+first run of `tests/build/test_mm_bram_pipe_xsi.py`). Legal AXI keeps a transaction's beats in one view
+(a burst may not cross 4 KB), so the FIFO is what keeps every read of the tail answered with several
+outstanding, and what takes each response from the view that owes it if a burst runs past a window's
+end anyway. It lives in the decoder rather than the front because the view index is the decoder's, a
+single-view slot needs none, and the front's ports stay as they are.
 
 ## The address map behind the endpoints
 
@@ -152,8 +178,16 @@ the view's module drives port A, the kernel keeps port B.
 
 - A write is **done at its request handshake** — the word is in the memory at the next clock edge,
   before the front can decode the next transaction. That is this view's part in the ordering guarantee.
-- One read in flight; the module's read latency is a parameter the generator reads from `bram_t2p.v`'s
-  published `READ_LATENCY`, so the two have one source.
+- Its read latency is a parameter the generator reads from `bram_t2p.v`'s published `READ_LATENCY`, so
+  the two have one source.
+- **Three leaves** ([the views page](./slave_views.md#which-leaf) has when to choose which):
+  `mm_bram_port.v` keeps one read in flight and costs `LAT + 1 = 2` cycles a read word;
+  `mm_bram_port_p1.v` answers from the BRAM's output register, unregistered, a word a cycle with one
+  outstanding; `mm_bram_port_pipe.v` answers from a response register a word a cycle, which takes
+  two reads outstanding at the front. The pipelined leaf's response FIFO is three deep: the BRAM's
+  output holds a word one cycle only, so a read is accepted only when the FIFO could take every read in
+  flight, and with one word held and one on the BRAM's output in the steady state, the third place is
+  what accepts the next read without looking at `rsp_ready`. Its header has the cycle diagram.
 
 ## pysim: `serialize_transactions`
 
@@ -199,6 +233,8 @@ RTL. See [the crossbar page](crossbar.md#matching-pysim-to-it).
 |---|---|---|
 | queues | `tests/hw/test_mm_queue.py` | `tests/build/test_mm_queue_xsi.py`, `test_mm_queue_memw_xsi.py` |
 | register bank | `tests/hw/test_mm_regbank.py` | `tests/build/test_mm_regbank_xsi.py` |
-| BRAM window, ordering | `tests/hw/test_mm_bram.py` | `tests/build/test_mm_bram_order_xsi.py` |
+| BRAM window, ordering | `tests/hw/test_mm_bram.py` | `tests/build/test_mm_bram_order_xsi.py` (each leaf) |
+| BRAM window leaves, `RD_OUTST`, the order FIFO | `tests/build/test_mm_adaptor_gen.py` | `tests/build/test_mm_bram_pipe_xsi.py`; timing closure `tests/build/test_mm_bram_timing_vitis.py` (`-m vitis`) |
+| adaptors unchanged at `RD_OUTST = 1` | `tests/build/test_adaptor_rtl_unchanged.py` | -- |
 | several views, one front | `tests/hw/test_mm_adaptor.py` | `tests/examples/test_mm_fir_xsi.py` (both shapes) |
 | crossbar | — | `tests/build/test_axi_xbar_xsi.py` |

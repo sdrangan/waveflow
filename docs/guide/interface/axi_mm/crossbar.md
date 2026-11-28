@@ -149,6 +149,35 @@ The first two describe the crossbar. The third describes the master — and so d
 them set, mm_fir's pysim lands within 4.4% of RTL in both shapes. Every default reproduces the model
 from before these existed, so a design that sets none of them is unchanged.
 
+### At 250 MHz on `xczu48dr`
+
+Measured with HLS masters rather than the testbench host (`plans/bram_fullrate_port.md`, Stage 4):
+`MemRStream` readers -- csynth'd for `xczu48dr` at 4 ns, each requesting its next 16-beat burst ahead
+-- on a crossbar as `AxiXbarConfig.from_crossbar` generates it (SAMD, five masters: a writer and up
+to four readers), reading a BRAM window behind the slave adaptor's front. From the one-reader trace,
+on the handshake lines themselves (xsim 2025.1;
+`waveflow.calib.fixtures.bram_window_contention.crossbar_latency`):
+
+| setting | measured | how |
+|---|---|---|
+| `latency_init` | 2 | a request reaches the front's AR 2 cycles after the reader presents it, uncontended |
+| `latency_travel` | 2 | all of it: the request waits at the front's port, not in the crossbar, while the front serves another |
+| `latency_read_return` | 1 | every read beat reaches the reader 1 cycle after the front sends it (64 of 64 bursts) |
+
+With these and the window memory's records (its timing and its 1-cycle turnaround), pysim reads each
+reader's 1,024-word block within 0.41% of RTL with one reader and within 0.21% with two, three and four
+(`tests/build/test_bram_window_contention_xsi.py`). They differ from mm_fir's (4, 2, 0): another
+crossbar shape (1 x 2 and 1 x 3), another master (the C++ host, one transaction at a time) and 100 MHz,
+and mm_fir's `latency_init` carries the round trip its host sees.
+
+**No record type holds them yet.** The crossbar's own records are its area and closure (`xbar_profile`,
+under `AxiXbarConfig.identity()`); its latency is set per design, here as
+`bram_window_contention.XBAR_SETTINGS`. The record this calls for, proposed rather than built: a
+`target="timing"` record under the crossbar's identity, `kind: "xbar_latency"`, its payload
+`{latency_init, latency_travel, latency_read_return}` with the masters it was measured with
+(`"hls_m_axi"`, `"testbench_host"`) as its workload, which `AXIMMCrossBarIF` would load from a
+`calib_dir` as `MemoryMod` loads its timing (`plans/interconnect_platform_model.md`).
+
 ## The part, and the platform
 
 **Do the numbers depend on the FPGA part?** Not directly. The cycle counts above are the crossbar's own

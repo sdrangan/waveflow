@@ -333,6 +333,12 @@ front has one read outstanding), the span's unused tail answered SLVERR.  pysim 
 - **Not built:** the host header and the crossbar config are not yet generated from one layout
   declaration; each gate states its address map.
 
+**Extended (2026-11-28), `plans/bram_fullrate_port.md`:** a full-rate BRAM window leaf,
+`mm_bram_port_pipe.v` (a word a cycle, a registered response), and the front's `RD_OUTST` (reads
+outstanding at the views, default 1, every existing adaptor byte-identical), with the decoder's order
+FIFO when it is above 1.  Ordering guarantee 1 holds with the new leaf to the cycle
+(`test_mm_bram_order_xsi.py`, `*_pipe`).
+
 ## Witness example: `examples/mm_fir`
 
 Developed in parallel. Its pysim half needs only `AXIMMCrossBarIF` plus the Python adaptor model, so

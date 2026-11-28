@@ -274,6 +274,25 @@ Endpoint names: `master_0` … `master_{n-1}` and `slave_0` … `slave_{m-1}`.
 slave serves the current one. AMD's `axi_crossbar` measures 2 of its 4 cycles of travel. The
 [crossbar page](crossbar.md#matching-pysim-to-it) has the measured values and how they were found.
 
+### A BRAM window's bus side
+
+A slave's own access time comes from its callbacks (`rx_read_proc` / `rx_write_proc`), and for an
+on-chip memory those are timed by a **record**, measured on its RTL in its own harness
+(`waveflow.hw.harness.memory_harness`, `waveflow.calib.mem_timing`): per direction `init + per_word * n`
+cycles beyond the bus's cycle a word, whether the slave serves one transaction at a time
+(`serialize`, which sets `serialize_transactions` and makes the read and write channels one), and the
+turnaround between back-to-back transactions (`MMIFSlave.turnaround`). `MemoryMod` loads the record
+filed under its own identity (`calib_dir`).
+
+A `MemSlaveBramWindow` loads the **same** record: that of `window_memory(bram_leaf, mem_dwidth)`, the
+`MemoryMod` or `FullRateMemoryMod` of its leaf and width, whose RTL slot -- the front, the leaf, the
+`bram_t2p` -- is the window's port A. One loading path (`load_mem_timing`, `apply_mem_timing`), one
+measurement (`python -m waveflow.calib.fixtures.bram_window`), one record a leaf and width on the
+platform; the window prices the record's cycles on its own clock. With the window in the memory's
+place, two readers contending over the crossbar read their blocks in exactly the memory's times
+(`tests/hw/test_mm_bram.py`). The window's port B stays untimed: the kernel's model charges its
+accesses.
+
 ---
 
 ## DirectMMIF
