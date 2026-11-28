@@ -119,12 +119,39 @@ Two kinds of quantity come out of these, and they need different simulations:
   hardware: queueing behind other channels' jobs and contention for the memory. **Only a timed
   simulation** gives it.
 
+## The objective
+
+The metrics are **reported separately** (above). For the design-space exploration they are brought
+together **under a resource budget**, in one of two forms:
+
+- **the cheapest design that meets targets:** minimize resources (DSPs, LUTs, BRAM and URAM, weighted
+  or each capped) subject to a percentile of the decision time, the missed-detection rate, the false
+  alarm and early-stop rates, and the angular error;
+- **the best design within a budget:** with the resources capped, the best of the metrics, in an order
+  or weighting to be chosen.
+
+The targets, the budget and which form are set **after the first simulations**, once it is clear how
+the metrics trade. What matters now is that no design knob can simply be maxed out: every unit, every
+bit of a stored format and every slot of a buffer comes out of the same budget.
+
+Three models score a design, and [The parameters](param.md) says which each parameter needs:
+
+- the **bit-exact golden**, untimed, for the accuracy metrics;
+- the **cost model**, for the resources;
+- the **timed simulation**, for the decision time, and for the drops and late reads that turn into
+  misses and delays.
+
+Several parameters need more than one, and those make the problem
+([where the models meet](param.md#where-the-models-meet)).
+
 ## What can be designed
 
 - **The algorithm's parameters:** the block size $B$, the thresholds, and the direction grid's size
   $L$ ([The algorithm](algo.md)).
-- **The hardware:** the systolic unit's size and how many there are, the memory's width and banks,
-  where the covariance matrices are kept (shared memory or inside the unit).
+- **The hardware:** the systolic unit's size and how many there are, the vector units, the memory's
+  width and depth, the credits, where the covariance matrices are kept.
+- **The number formats:** the input's width, and each stored value's width and overflow mode
+  ([The parameters](param.md#number-formats)).
 - **Where each stage runs:** the energy checks and the tracking check in hardware or on the CPU; the
   control on the CPU.
 - **The policies:**

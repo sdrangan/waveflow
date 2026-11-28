@@ -106,6 +106,14 @@ the gate repeatedly without being detected, and the gate's false alarms. a.2 and
 matrix products, suited to a systolic unit; a.1 and b.1 are streaming sums that can run beside the
 capture.
 
+## In fixed point
+
+The stages above are written in exact arithmetic. In the hardware, sums are accumulated exactly, but
+the values kept between stages ($\hat{Q}$, the scan's powers $p_\ell$, $u^H X$ and $p_b$) are stored
+narrower, with saturation: a strong emitter can saturate $\hat{Q}$, which flattens the scan's peak. The
+bit-exact golden reproduces this exactly, so its accuracy metrics are those of the hardware. The widths
+and modes are on [The parameters](param.md#number-formats).
+
 ## The thresholds
 
 | Threshold | Sets | Raising it |
@@ -123,4 +131,3 @@ on the load they create on the shared hardware, which is the point of the study.
 - Whether b.2 runs only when b.1 drops (as above) or on every tracking block.
 - A finer angle than the grid (for example a parabolic fit around $\ell^*$).
 - Using more than one block for a weak emitter (averaging $\hat{Q}$ over consecutive gated blocks).
-- The fixed-point formats.
