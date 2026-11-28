@@ -142,6 +142,8 @@ of its life: the timing changes what is detected.
 
 ## Open, before building
 
-- **The read path**: which option above. A full-rate port is a Waveflow extension.
+- **The read path: a full-rate port**, decided 2026-11-28. A Waveflow extension, planned in
+  `plans/bram_fullrate_port.md` for the lab machine: a pipelined, timing-closed leaf, the front's
+  outstanding reads, the window's calibrated timing in pysim, and its records on the platform.
 - **The dispatcher's and arbiter's points at 128 bits**, to calibrate on the lab machine.
 - The crossbar's settings measured at 250 MHz on this part, once a design is on it.
