@@ -46,6 +46,7 @@ On [The workload](workload.md).
 | Emitter height, power | $h_e$, $P_t$ | 1.5 m, uniform 0 to 20 dBm | no |
 | On and off probabilities per block | $p_{on}$, $p_{off}$ | 1/1600, 1/400 | as a load sweep |
 | Burst probability per block, size | $p_{burst}$, $k_{burst}$ | 1/4000, 8 | as a load sweep |
+| Input gain: the noise's complex std | $\sigma$ | 4 LSBs ([the input gain](workload.md#the-samples)) | yes |
 | Seed, length | | per scenario | no |
 
 ## Algorithm
@@ -89,6 +90,11 @@ a wider $\hat{Q}$, $U$ or $u^H X$ costs a second DSP per multiply; 24 bits keeps
 range over the workload's 45 dB of SNR. Where the strong tail of the workload ([up to 40 dB per
 element](workload.md#the-geometry-emitters-on-the-ground)) saturates $\hat{Q}$, the scan's peak
 flattens and the angular error grows. That is the trade the golden measures.
+
+In the golden (`examples/aoa_detect/golden.py`) each stored value's shift is set from the noise
+level by a **headroom** in bits: how far below full scale the noise-only value sits. The headroom is
+the parameter; at the proposed $\hat{Q}$ headroom of 10 bits, $\hat{Q}$ saturates for emitters above
+about 30 dB per element, inside the workload's tail.
 
 **The input format reaches the timing.** A ring word read at port A holds 4 samples at 16 bits, 5 at
 12 bits packed, 8 at 8 bits. Jobs are read-bound ([below](#what-they-imply)), so a narrower input

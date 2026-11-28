@@ -102,11 +102,30 @@ $$
 with $a(\theta) = \sqrt{n_{rx}}\, u(\theta)$ the unit-modulus steering vector, and the first term absent
 while the channel's emitter is off. This is exactly the covariance of [the signal](problem.md#the-signal).
 
-**Quantization.** The samples are scaled so that the noise sits at a fixed level below full scale,
-then rounded and saturated to the input format, $W_{in}$ bits per real and imaginary part
-([parameters](param.md)). The scale is a parameter: lower leaves more headroom for strong emitters
-(a 40 dB emitter clips unless the noise is far below full scale) at the cost of resolution on weak
-ones. Clipped samples are counted, per channel.
+**Quantization: the input gain.** The input gain is fixed (calibrated, not an automatic gain
+control): it scales the samples so that the thermal noise has a complex standard deviation of
+$\sigma$ LSBs, then they are rounded and saturated to $b$ bits per real and imaginary part. With
+1 LSB steps, rounding adds noise of power $1/6$ LSB² per complex sample, and an emitter of
+per-element SNR $\gamma_{el}$ has a per-part standard deviation of $\sigma \sqrt{(1 + \gamma_{el})/2}$
+LSBs. So $\sigma$ trades two things:
+
+- **Rounding noise against thermal noise:** $10 \log_{10}\big(1 / (6 \sigma^2)\big)$ dB. At
+  $\sigma = 4$ LSBs it is −19.8 dB: it raises the noise floor by under 0.05 dB.
+- **Headroom:** the largest per-element SNR whose per-part standard deviation stays within a quarter of
+  full scale (clipping only beyond four standard deviations), about $6.02\, b - 20 \log_{10} \sigma - 9$
+  dB.
+
+| $b$ | $\sigma = 1$ | $\sigma = 2$ | $\sigma = 4$ | $\sigma = 8$ |
+|---|---|---|---|---|
+| rounding vs thermal | −7.8 dB | −13.8 dB | −19.8 dB | −25.8 dB |
+| headroom at 16 bits | 81 dB | 75 dB | 69 dB | 63 dB |
+| headroom at 12 bits | 57 dB | 51 dB | 45 dB | 39 dB |
+| headroom at 8 bits | 33 dB | 27 dB | 21 dB | 15 dB |
+
+**Proposed: $\sigma = 4$ LSBs**, the noise at −81 dBFS at 16 bits. Rounding is then negligible, and
+the headroom covers the workload's strong tail (about 40 dB per element) at 16 and 12 bits; at 8 bits
+it does not, which is part of what the input format trades. The golden's thresholds use the calibrated
+noise power $N_0 = \sigma^2 + 1/6$ LSB². Clipped samples are counted, per channel.
 
 **Word layout.** Each word of the sample stream holds one channel's antennas for one sample, the
 layout [the ring](arch.md#the-ring) needs; a block is $C \cdot B$ of them, channel after channel within
@@ -148,5 +167,4 @@ free-space runs.
 ## Open
 
 - The values above, and the carrier and bandwidth they assume.
-- The input scale: where the noise sits below full scale.
 - Whether an emitter's power or position may change while it is on.
