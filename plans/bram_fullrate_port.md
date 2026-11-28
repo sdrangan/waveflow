@@ -1,8 +1,8 @@
 # Plan: a full-rate, timing-closed read port for a BRAM window on the bus
 
-**Status: READY for the lab machine, 2026-11-28.** Written in the cloud planning session for
-`docs/examples/aoa_detect` (its [timing page](../docs/examples/aoa_detect/timing.md), *The ring's read
-port*). Nothing here is built yet.
+**Status: BUILT, 2026-11-28** (branch `lab/bram-fullrate`; the *Record* at the end has every number).
+Written in the cloud planning session for `docs/examples/aoa_detect` (its
+[timing page](../docs/examples/aoa_detect/timing.md), *The ring's read port*).
 
 **For the agent picking this up:** read this whole file, then the files of *Read first*. Work on a new
 branch from `origin/main`, commit after each stage, push, and do not merge or open a PR unless asked.
@@ -503,3 +503,73 @@ environmental `test_there_are_workspaces_to_check`).
 machine's setup, none in code this plan touched: the `init` tests pick the system `python3.12`
 (no `mcp` package), and the usage-index tests need untracked `gen/` outputs of examples that a fresh
 worktree does not have.
+
+### Stage 6 (2026-11-28): the summary
+
+**What was built.** `axi_slave_front.v`'s `RD_OUTST` (default 1, every existing adaptor byte-identical)
+and the decoder's order FIFO; `mm_bram_port_pipe.v`, `BramViewPipe`, `MemSlaveBramWindow.bram_leaf` and
+`calib_dir`, `FullRateMemoryMod`, `window_memory`; the shared memory-timing loading; wide words in
+`AxiMmMaster` / `MmScript` (the documented chunk convention); `rtl_ooc.registered_wrapper` /
+`impl_registered_ooc` (place and route inside a ring of registers, with IPs); the fixtures
+`waveflow.calib.fixtures.bram_window` and `bram_window_contention`; twelve platform records (timing,
+turnaround and routed resources of four window memories).
+
+**The numbers** (Vivado / Vitis HLS / xsim 2025.1, `xczu48dr`, 250 MHz):
+
+| what | `mm_bram_port` | `mm_bram_port_p1` | `mm_bram_port_pipe` |
+|---|---|---|---|
+| a lone N-beat read, the slot on an AXI port (cycles) | 2N + 2 | -- | N + 3 |
+| WNS, 16 KB window alone, 128 / 512 bits (ns) | +1.878 / +1.219 | +2.013 / +0.994 | +1.818 / +1.052 |
+| WNS behind a 4-master crossbar, 128 / 512 (ns) | -- | +1.035 / +0.319 | +1.077 / +0.520 |
+| LUT / FF, alone, 128 bits | 141 / 38 | 130 / 29 | 402 / 423 |
+| LUT / FF, alone, 512 bits | 343 / 41 | 334 / 31 | 1,379 / 1,596 |
+| read cost beyond the bus's cycle a word (record) | 1 + 1 n | -- | 2 + 0 n |
+| write cost (record) | 1 + 0 n | -- | 1 + 0 n |
+| turnaround (record) | 1 | -- | 1 |
+| a 1,024-word block, one MemRStream reader over the crossbar (cycles) | 2,193 | -- | 1,233 |
+
+The crossbar at 250 MHz: a request 2 cycles (all travel), a read beat 1. pysim against RTL: every op of
+the one-master check within a cycle; each block within 0.41% (one reader) and 0.21% (2-4), the window
+reading exactly as its memory does. For the emitter example: one channel's block 1,233 cycles, the port
+88% busy at 1.5 jobs a block (157% with the half-rate leaf).
+
+**Gates.** XSI: 33 new (Stage 2: 8; Stage 4: 25), `WANT_XSI_GATES` 293 -> 326 (the floor test passes
+on collection); every new one passed, and the older gates run again after each BFM change passed (27 in
+the last round). Vitis: `test_mm_bram_timing_vitis.py`, 14. Fast, last full round (`tests/build`, `hw`,
+`simulation`, `calib`, `docs`): 3,174 passed, 47 skipped, 1 failed (environmental, below). A whole-session
+`-m xsi` run was not made: most of its gates need examples' csynth outputs a fresh worktree does not
+have.
+
+**Found on the way** (each fixed or worked around, and said where):
+
+- the order FIFO one entry short (`mm_sync_fifo` refuses a push while full even as it pops): depth
+  `RD_OUTST + 1` (Stage 2);
+- p1's "simulated, not synthesized" claim: it closes, alone and behind the crossbar; corrected (Stage 3b);
+- the generated crossbar IP's own out-of-context XDC (a 100 ns clock): disabled in the ring runs, each
+  run's clocks recorded and asserted (Stage 3b);
+- the front's turnaround missing from pysim (5.2-5.4% fast): fitted from a traced reader (ledger row 22);
+- `MemCalibStep`'s freshness does not include the store it files into: the fixture's `--force`;
+- with a scripted host in a system, the flow gives the scenario to the host alone, so other testbench
+  drivers find no bundles at RTL: the contention fill is a `MemWStream` inside the cut instead;
+- the pysim `MemWStream` takes one input burst a command where the RTL counts words across bursts
+  (a 4-burst fill wrote 256 of 1,024 words in pysim): the fill is one burst;
+- `MemSlaveBramWindow` held one `uint64` a word, so a 128-bit window could not hold its data: now
+  `(n, k)` chunks; `AxiMmMaster` drove 64 bits a beat: now `k` chunks.
+
+**What is left.**
+
+- The window's port B as a declared endpoint, and an XSI gate on the window itself (`system_top`
+  wiring a shared window): `plans/bram_window_port_b.md`.
+- A record type for the crossbar's latency (proposed in `crossbar.md`), so `AXIMMCrossBarIF` loads it
+  rather than each design setting it.
+- The two flow gaps above (a host's scenario for every participant; `MemCalibStep`'s freshness) and
+  the pysim `MemWStream`'s burst-per-command behaviour: each its own fix.
+- `MemRStream`'s command schema at 128 and 512 bits is generated only in the contention fixture's
+  root; widening `mem_stream.WORD_BW_SUPPORTED` would regenerate every example's headers, so it waits
+  for a reason to rebuild them. The 128-bit reader's own residual is not calibrated on this platform.
+- A cheaper full-rate leaf: the pipelined leaf's response FIFO is about 3 x DW flip-flops; synthesis
+  moves `mm_bram_port`'s response register into the BRAM's own output register, and a leaf built on
+  that, with a smaller skid buffer, might keep the registered response for less.
+- On this machine, `test_xsi_workspace_copies.py::test_there_are_workspaces_to_check` (it wants three
+  example `xsi/` build directories; a fresh worktree has two) and six `tests/mcp` tests (the system
+  `python3.12` without `mcp`; untracked `gen/` outputs) fail for the worktree's setup, not this work.
