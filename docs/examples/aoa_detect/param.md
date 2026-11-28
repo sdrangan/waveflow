@@ -42,8 +42,9 @@ On [The workload](workload.md).
 | Sample rate per channel | $f_s$ | 30.72 MHz | no |
 | Noise figure | $F$ | 7 dB | no |
 | Receiver height, downtilt | $h_{rx}$, $\delta$ | 25 m, 6° | no |
-| Sector: ranges, half-width | $r_{min}$, $r_{max}$, $\phi_{max}$ | 100 m, 2 km, 60° | no |
-| Emitter height, power | $h_e$, $P_t$ | 1.5 m, uniform 5 to 25 dBm | no |
+| Sector: ranges, half-width | $r_{min}$, $r_{max}$, $\phi_{max}$ | 100 m, 5 km, 60° | no |
+| Emitter height, power | $h_e$, $P_t$ | 1.5 m, uniform 5 to 30 dBm | no |
+| Statistical mode: per-element SNR | | uniform in $[-20, 30]$ dB | no |
 | On and off probabilities per block | $p_{on}$, $p_{off}$ | 3/16, 3/16 | as a load sweep |
 | Burst probability per block, size | $p_{burst}$, $k_{burst}$ | 1/50, 4 | as a load sweep |
 | Input gain: the noise's complex std | $\sigma$ | 4 LSBs ([the input gain](workload.md#the-samples)) | yes |
@@ -184,9 +185,21 @@ blocks) push it past 100% for a while. Emitters last $1/p_{off} \approx 5$ block
 a block late is a large part of an emitter's life. The load sweep ($p_{on}$, $p_{off}$, $p_{burst}$)
 moves the design between idle and overloaded.
 
-**The golden at these values** (3,000 blocks, seed 21, 2,395 emitters): every emitter detected in its
-first block, no false alarm or early stop, a median angular error of 1.0° (90% within 1.8°), 1.6
-activations a block. With $\hat{Q}$ stored in 12 bits instead of 18, 8% of emitters are missed; in wrap
-mode at 4 bits of headroom the 90th-percentile angular error jumps to 19°. The formats bite; the
-workload's weakest emitters (−6 dB per element, 6 dB of array SNR over 256 samples) are still well
-above the detection limit.
+**The golden at these values**, on the statistical workload (3,000 blocks, seed 31, 2,313 emitters;
+SNR in dB per element, at 50% and 90% detection):
+
+| Variant | SNR at 50% | SNR at 90% | Missed | Of them, format loss | Early stops | Angular error, median | Searches |
+|---|---|---|---|---|---|---|---|
+| float | −14.8 | −12.8 | 244 | -- | 59 | 1.2° | 2,114 |
+| proposed formats | −14.8 | −12.8 | 243 | 0 | 59 | 1.2° | 2,113 |
+| $\hat{Q}$ in 12 bits | −4.4 | −4.0 | 748 | 504 | 0 | 1.2° | 3,962 |
+| 8-bit input | −14.8 | −12.8 | 243 | 0 | 59 | 1.2° | 2,113 |
+| grid 16 × 4 | −14.8 | −12.8 | 243 | 0 | 62 | 2.2° | 2,114 |
+| gate at $10^{-2}$ | −16.3 | −13.1 | 180 | 2 | 113 | 1.2° | 2,354 |
+
+What it shows: the proposed formats lose nothing against float; a 12-bit $\hat{Q}$ moves the detection
+curve up by about 9 dB and, by failing to detect, nearly doubles the searches; a coarser grid doubles
+the angular error but costs nothing in detection; and a gate ten times more sensitive gains 1.5 dB at
+50% detection for 11% more searches and twice the early stops (weak emitters detected, then lost). That
+last row is the accuracy–load coupling the timed phase has to resolve. No false detection in any run:
+the detection threshold is set for $10^{-4}$ per search.

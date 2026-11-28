@@ -55,11 +55,11 @@ class WorkloadConfig:
     h_rx: float = 25.0
     tilt_deg: float = 6.0
     r_min: float = 100.0
-    r_max: float = 2000.0
+    r_max: float = 5000.0
     phi_max_deg: float = 60.0
     h_e: float = 1.5
-    pt_dbm: tuple[float, float] = (5.0, 25.0)
-    snr_db_range: tuple[float, float] = (-6.0, 30.0)   # statistical mode: per-element SNR
+    pt_dbm: tuple[float, float] = (5.0, 30.0)
+    snr_db_range: tuple[float, float] = (-20.0, 30.0)  # statistical mode: per-element SNR
     eps_range_deg: tuple[float, float] = (-13.0, -0.5)  # statistical mode: elevation
     # the on/off process
     # about 1.5 activations a block over C = 8 channels: emitters of about 5 blocks, half the time on
@@ -93,6 +93,18 @@ class Emitter:
 
     def on_at(self, block: int) -> bool:
         return self.start <= block and (self.end is None or block < self.end)
+
+
+def accuracy_workload(**kw) -> WorkloadConfig:
+    """Phase 1, untimed: the statistical mode, SNR uniform in dB over [-20, 30] per element, so every
+    1 dB of the detection curve gets the same number of emitters (``workload.md``)."""
+    return WorkloadConfig(**{"mode": "statistical", **kw})
+
+
+def timing_workload(**kw) -> WorkloadConfig:
+    """Phase 2, timed: the geometric mode, emitters out to 5 km, so the realistic mix of SNRs and
+    directions includes emitters near the detection limit."""
+    return WorkloadConfig(**{"mode": "geometric", **kw})
 
 
 def place_emitter(rng: np.random.Generator, cfg: WorkloadConfig) -> dict:

@@ -46,14 +46,14 @@ def test_input_gain_tradeoff():
 
 
 def test_geometric_snr_spread_is_as_documented():
-    """workload.md: about -6 to 19 dB per element for 90% of emitters, median about 6 dB."""
+    """workload.md: about -13 to 16 dB per element for 90% of emitters, median about 1 dB."""
     rng = np.random.default_rng(0)
     cfg = WorkloadConfig()
     snr = [place_emitter(rng, cfg)["snr_db"] for _ in range(20_000)]
     p5, p50, p95 = np.percentile(snr, [5, 50, 95])
-    assert p5 == pytest.approx(-6.0, abs=1.0)
-    assert p50 == pytest.approx(6.0, abs=1.0)
-    assert p95 == pytest.approx(19.0, abs=1.0)
+    assert p5 == pytest.approx(-13.0, abs=1.0)
+    assert p50 == pytest.approx(1.0, abs=1.0)
+    assert p95 == pytest.approx(15.5, abs=1.0)
 
 
 def test_workload_is_reproducible_and_in_range():
@@ -159,3 +159,35 @@ def test_q_headroom_sets_where_a_strong_emitter_saturates():
     assert got == full
     got, full = _q_stored_max(25.0, q_headroom=2)
     assert got == full
+
+
+def test_snr_at_pd_recovers_a_known_logistic():
+    from examples.aoa_detect.score import Score, snr_at_pd
+    rng = np.random.default_rng(0)
+    x = rng.uniform(-20, 30, 20_000)
+    p = 1 / (1 + np.exp(-(x + 14.0) / 1.0))          # 50% at -14 dB, 90% at -14 + ln 9
+    s = Score(emitter_snr_db=list(x), emitter_detected=list(rng.random(x.size) < p))
+    assert snr_at_pd(s, 0.5) == pytest.approx(-14.0, abs=0.15)
+    assert snr_at_pd(s, 0.9) == pytest.approx(-14.0 + math.log(9), abs=0.2)
+
+
+def test_detection_curve_and_loss_split_on_the_accuracy_workload():
+    """The statistical workload crosses the detection limit: inherent misses, a curve rising through
+    about -15 dB per element; the proposed formats add no loss over float, a 12-bit Q-hat does."""
+    from examples.aoa_detect.score import detection_curve, loss_split, snr_at_pd
+    from examples.aoa_detect.workload import accuracy_workload
+
+    def run(**gk):
+        w = Workload(accuracy_workload(seed=31))
+        d = AoaGolden(GoldenConfig(**gk)).run(w.blocks(800))
+        return score(d, w.truth, 800, n_rx=16)
+
+    sf, sx, s12 = run(fixed=False), run(), run(q_bits=12)
+    split = loss_split(sf, sx)
+    assert split.inherent > 0
+    assert split.format <= 0.01 * split.emitters
+    assert -17.0 < snr_at_pd(sx, 0.5) < -12.0
+    assert loss_split(sf, s12).format > 0.05 * split.emitters
+    assert snr_at_pd(s12, 0.9) > snr_at_pd(sx, 0.9) + 5.0
+    c, pd, _ = detection_curve(sx)
+    assert np.nanmin(pd[c > -5]) == 1.0 and np.nanmax(pd[c < -18]) < 0.2

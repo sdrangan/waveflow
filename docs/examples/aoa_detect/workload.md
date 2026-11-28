@@ -2,7 +2,7 @@
 title: The workload
 parent: Emitter detection and AoA
 nav_order: 4
-summary: "How the receiver is driven in a test. Emitters are placed on the ground, uniformly over the area of one sector, and their SNR follows from free-space path loss (Friis), their transmit power, a 3GPP sector element pattern and the receiver's noise; their direction (azimuth, elevation) from the geometry. Each channel's emitter switches on and off as a Gilbert–Elliott process with an optional burst trigger. A statistical mode (SNR uniform in dB, direction uniform in the sector) is kept as a check. The source generates every channel's samples block by block from a seed, with a truth log of every emitter's on/off blocks, direction and SNR; the same samples drive pysim and, replayed from a file, the RTL. Named scenarios cover idle noise, one emitter, crossings of the thresholds, bursts and long random runs. Ray-traced channels are the later step."
+summary: "How the receiver is driven in a test. Emitters are placed on the ground, uniformly over the area of one sector, and their SNR follows from free-space path loss (Friis), their transmit power, a 3GPP sector element pattern and the receiver's noise; their direction (azimuth, elevation) from the geometry. Each channel's emitter switches on and off as a Gilbert–Elliott process with an optional burst trigger. A statistical mode (SNR uniform in dB over [-20, 30], direction uniform in the sector) drives the untimed phase; the geometric mode drives the timed one. The source generates every channel's samples block by block from a seed, with a truth log of every emitter's on/off blocks, direction and SNR; the same samples drive pysim and, replayed from a file, the RTL. Named scenarios cover idle noise, one emitter, crossings of the thresholds, bursts and long random runs. Ray-traced channels are the later step."
 ---
 
 # The workload
@@ -55,20 +55,29 @@ $F = 7$ dB):
 | | Value |
 |---|---|
 | $h_{rx}$, $\delta$ | 25 m, 6° down |
-| $r_{min}$, $r_{max}$ | 100 m, 2 km |
+| $r_{min}$, $r_{max}$ | 100 m, 5 km |
 | $\phi_{max}$ | 60° |
 | $h_e$ | 1.5 m |
-| $P_t$ | uniform in 5 to 25 dBm |
+| $P_t$ | uniform in 5 to 30 dBm |
 
-With these (the 5 dB of extra power offsets the wider channel's 5 dB of extra noise), the per-element
-SNR is between about **−6 and 19 dB for 90% of emitters** (median 6 dB),
-with a few near the receiver up to about 40 dB; the elevation is between about 0.7° and 13° below the
-horizon. (From $2 \times 10^5$ draws of the model above.) The strong tail matters: it sets the input
-format's headroom ([below](#the-samples)).
+With these, the per-element SNR spans about **−13 to 16 dB for 90% of emitters** (median 1 dB), with
+the weakest 5% below −13 dB, near the detection limit, and a few near the receiver up to about 42 dB;
+the elevation is between about 0.3° and 13° below the horizon (from $2 \times 10^4$ draws of the model
+above). Both ends matter: the weak end puts emitters across the detection threshold, and the strong
+tail sets the input format's headroom ([below](#the-samples)).
 
-**A statistical mode** is kept as a check and for sweeps: the per-element SNR uniform in dB over
-$[-6, 30]$, the azimuth uniform in $[-\phi_{max}, \phi_{max}]$, the elevation uniform over the sector's
-range. It decouples SNR from direction, which the geometric mode does not.
+**A statistical mode**: the per-element SNR uniform in dB over $[-20, 30]$, the azimuth uniform in
+$[-\phi_{max}, \phi_{max}]$, the elevation uniform over the sector's range. It puts the same number of
+emitters in every dB of SNR, from well below the detection limit to the top of the dynamic range, and
+it decouples SNR from direction, which the geometric mode does not.
+
+**Which mode for which phase** ([the two phases](problem.md#two-phases)):
+
+- **Phase 1, untimed: the statistical mode** (`accuracy_workload()` in `workload.py`). The detection
+  curve needs emitters evenly across the threshold region, and the formats need the whole dynamic
+  range.
+- **Phase 2, timed: the geometric mode** (`timing_workload()`). The load depends on the realistic mix:
+  how many emitters are strong, and how many are weak enough to fire the gate without being detected.
 
 ## When emitters are on
 
